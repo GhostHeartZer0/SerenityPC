@@ -1,0 +1,4 @@
+Pillow
+psutil
+jinja2
+nltk

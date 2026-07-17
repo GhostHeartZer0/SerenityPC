@@ -1,0 +1,34 @@
+# IDE, Virtualenvs, and Caches
+.vs/
+.idea/
+.vscode/
+.cache/
+.venv/
+env_1/
+Runtime/
+__pycache__/
+*.pyc
+
+# Logs and temp files
+gpu_diagnostics.log
+*.log
+tmp/
+.tmp/
+
+# Model weight and binary formats
+Models/
+*.gguf
+*.safetensors
+*.bin
+*.model
+*.onnx
+*.exe
+*.dll
+*.so
+*.dylib
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+desktop.ini
+[Dd]esktop.ini

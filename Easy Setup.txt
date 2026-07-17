@@ -1,0 +1,4 @@
+Step 1. run setup.py
+Step 2. click either the new desktop shortcut or main.py once setup finishes.
+Note: GPU usage is temporarily unavailable.
+better setup.py is directly from the Full SerenityPC. It works to enable GPU access on my system, but is optimized  for my own and may not work for your system. YMMV

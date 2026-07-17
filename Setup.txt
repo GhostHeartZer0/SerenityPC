@@ -1,0 +1,51 @@
+Serenity AI - Easy Setup Guide
+
+This guide will get your AI chatbot up and running with full GPU acceleration on Windows.
+
+Step 1: Install Required Software
+You only need two things to get started.
+
+Python 3.11 (64-bit):
+
+Go to: python.org/downloads/windows
+
+Download the "Windows installer (64-bit)".
+
+CRITICAL: When you run the installer, check the box that says "Add python.exe to PATH".
+
+Click "Install Now."
+
+NVIDIA Drivers (Current):
+
+Most users already have these. If you play games, you're likely set.
+
+If not, download the latest drivers for your RTX card at nvidia.com/drivers.
+
+Step 2: Run the Smart Setup
+We’ve automated the "bridge" to your GPU.
+
+Open your project folder (where main.py and your new setup.py are).
+
+Double-click setup.py.
+
+The script will automatically:
+
+Detect your NVIDIA GPU version.
+
+Download the pre-compiled "GPU Bridge" (llama-cpp-python) from the web.
+
+Install all other necessary libraries
+
+Once it says "Success! All required libraries are locked and loaded," you are done.
+
+Step 3: Launch Serenity AI
+Double-click run.bat in your project folder.
+
+Click Settings to select your model from the list.
+
+Click Begin! to load the model into your GPU.
+
+Troubleshooting for Consumers
+"No GPU found" during setup: Ensure your NVIDIA drivers are updated. The script uses nvidia-smi to find your card.
+
+App runs slowly: In the Settings, ensure the GPU Layers slider is turned up (usually to the max or around 33-40 for Gemma models) to ensure the work stays on your RTX card rather than your CPU.

@@ -1,0 +1,34 @@
+{
+  "main_window": "1149x649+175+141",
+  "model_paths": {
+    "low": "Models/gemma-3-4b-it-qat-UD-Q4_K_XL.gguf",
+    "mid": "Models/gemma-3-4b-it-qat-UD-Q4_K_XL.gguf",
+    "high": "Models/gemma-3-4b-it-qat-UD-Q4_K_XL.gguf",
+    "empath": "Models/gemma-3-4b-it-qat-UD-Q4_K_XL.gguf",
+    "deep_cook": "Models/gemma-3-4b-it-qat-UD-Q4_K_XL.gguf"
+  },
+  "gpu_layer_config": {
+    "low": -1,
+    "mid": -1,
+    "high": -1,
+    "empath": -1,
+    "deep_cook": -1
+  },
+  "context_window_config": {
+    "low": 2048,
+    "mid": 4096,
+    "high": 6144,
+    "empath": 8192,
+    "deep_cook": 8192
+  },
+  "max_tokens_config": {
+    "low": 256,
+    "mid": 1024,
+    "high": 2048,
+    "empath": 2048,
+    "deep_cook": 4096
+  },
+  "lite_mode": false,
+  "deep_thought_behavior": "oneshot",
+  "virtual_vram": 0
+}
