@@ -32,10 +32,22 @@ tmp/
 /Misc
 /Notepad.txt
 /removedcode.txt
-/scratch
+scratch/
 /SerenityPC.code-workspace
 /test_logs.py
 /TODO.txt
+
+# Benchmark & test reports, private notes, and crash logs
+benchmark_reports/
+debate_reports/
+wringer/old/
+wringer_highscores.json
+*.gguf_report.md
+gemma4_param_notes.md
+test01rough.md
+modeltest*.txt
+crash_*.txt
+*.lnk
 
 # Large external folders/binaries
 /temp_zip
