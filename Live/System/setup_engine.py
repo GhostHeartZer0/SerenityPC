@@ -343,13 +343,22 @@ if __name__ == "__main__":
     else:
         print("  > [V] GPU Acceleration verified for PyTorch.")
     
-    # sounddevice is used instead of PyAudio as a more compatible alternative
-    reqs = ["requests", "psutil", "speechrecognition", "pyttsx3", "pystray", "Pillow", "accelerate", "bitsandbytes", "fastapi", "uvicorn", "pydantic", "transformers", "sounddevice", "beautifulsoup4", "playwright", "chromadb", "sentence-transformers"]
+    # sounddevice is added as a more compatible alternative for modern Python versions
+    reqs = ["requests", "psutil", "speechrecognition", "pyttsx3", "pystray", "Pillow", "PyAudio", "accelerate", "bitsandbytes", "fastapi", "uvicorn", "pydantic", "transformers", "sounddevice", "beautifulsoup4", "playwright", "chromadb", "sentence-transformers"]
     
-    subprocess.call([sys.executable, "-m", "pip", "install", "--user"] + reqs)
+    # We install dependencies individually or in a way that allows us to catch the PyAudio failure on Python 3.14
+    core_reqs = [r for r in reqs if r != "PyAudio"]
+    subprocess.call([sys.executable, "-m", "pip", "install", "--user", "--upgrade"] + core_reqs)
 
     print("\n[!] PHASE: Web Automation Driver Setup (Playwright)...")
     subprocess.call([sys.executable, "-m", "playwright", "install", "chromium"])
+
+    print("\n[!] PHASE: Audio Driver Check (PyAudio)...")
+    pyaudio_res = subprocess.call([sys.executable, "-m", "pip", "install", "pyaudio"])
+    if pyaudio_res != 0:
+        print("\n[WARNING] PyAudio failed to install. This is expected on early Python 3.14 builds.")
+        print("          'sounddevice' has been installed as a fallback.")
+        print("          If audio recording fails, consider using Python 3.12 for maximum compatibility.")
 
     print("\n=== Setup Engine Complete ===")
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Version 1.4.0
+## Version 1.4.0 (Public Release)
 
 ### Features & Improvements
 - **Pre-Push Git Logging**: Added a git `pre-push` hook to automatically log commit statistics to `Logs/git_push_log.txt` before pushing.
@@ -24,4 +24,3 @@
 - **GPU Optimization**: Turbo Mode (+3 GPU layers) and Lite Mode (CPU-only execution).
 - **History Compression**: Integrated zlib compression for chat history logs.
 - **Widget Logging**: Redirected stderr/stdout logs to the UI control panel.
-

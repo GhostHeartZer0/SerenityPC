@@ -1,72 +1,61 @@
-### Welcome to SerenityAI, a locally independent smart chat interface! ###
+Welcome to SerenityAI, a locally independent smart chat interface!
 This is SerenityPC, with an android version still in development.
-Although most models can call web search, they function perfectly well offline once the setup completes.
+Although most models can call web search, they function perfectly well once the setup completes.
 
-#### Quick Start ####
-Select the models in settings at the top left.
-Move the Persona slider to desired level.
-To get started quickly, type a prompt and press enter.
-The Begin and Persona buttons Load a model.
-Once loaded, the Begin button turns to Offload.
-you can either offload and reload to swap personas, or click the Persona button.
-Deep cook starts a cycle that may take awhile, but gives a more thought out answer.  
-Check settings ; One-shot loads on click, toggle loads the selected Deep Cook model before it starts.
-
-#### System Requirements ####
-Required:  
-4GB VRAM  
-8GB RAM  
-a CPU with at least 4 cores.  
-At least GB storage.  
-
-Reccomended:  
-At least 6GB of VRAM, 12-24GB preferred.  
-16GB of RAM, 32 preferred.  
-A CPU with at least 8 logical cores  
-At Least GB storage  
+System Requirements:
+Reccomended:
+At least 6GB of VRAM, 12-24GB preferred.
+16GB of RAM, 32 preferred.
+A CPU with at least 8 logical cores
+At Least GB storage
+Required:
+4GB VRAM
+8GB RAM
+a CPU with at least 4 cores.
+At least GB storage.
 To decide which models to run, take the total size of the model with estimated cache size against your VRAM for speed and VRAM+RAM for possibility.
 Give 1GB VRAM to ensure system stability.
 Cache size calculation:
 KV cache chosen in settings goes like this:
 Q4_0 ia a quarter the full, uncompressed size.
 Q8_0 divides it by 8. FP16 is full size.
-This chart measures the amount of memory a few various models require, assuming Q4_0:
+Assuming Q4_0:
 
-#### Model Footprints ####
-| Model Tier | Variant | Weight Size (FS) | KV Cache (KV) | Total Footprint (FT) |
-| :--- | :--- | :--- | :---: | ---: |
-| Gemma-4 E2B | Recommended (IQ4) | 2.76 GiB | 56.54 MiB | 2.82 GiB |
+Model Tier
+Variant
+Weight Size (FS)
+KV Cache (KV)
+Total Footprint (FT)
 
-| Gemma-4 E4B | Recommended (Q4_K) | 4.74 GiB | 152.44 MiB | 4.89 GiB |
+Gemma-4 E2B
+Recommended (IQ4)
+2.76 GiB
+56.54 MiB
+2.82 GiB
 
-| Gemma-4 26B | Recommended 1 (MXFP4) | 15.47 GiB | 250.31 MiB | 15.72 GiB |
+Gemma-4 E4B
+Recommended (Q4_K)
+4.74 GiB
+152.44 MiB
+4.89 GiB
 
-| Gemma-4 26B | Recommended 2 (Q5_K) | 19.75 GiB | 250.31 MiB | 20.00 GiB |
+Gemma-4 26B
+Recommended 1 (MXFP4)
+15.47 GiB
+250.31 MiB
+15.72 GiB
 
-| Gemma-4 31B | Required (Q4_K) | 17.46 GiB | 1,001.25 MiB | 18.46 GiB |
+Gemma-4 26B
+Recommended 2 (Q5_K)
+19.75 GiB
+250.31 MiB
+20.00 GiB
 
-#### Tiers of SerenityPC ####
-| <h6> Tier |Required VRAM, RAM | reccomended<br>VRAM, RAM | optimal<br>VRAM, RAM | Suggested<br>Models <h6> |
-| :--- | :--- | :--- | :--- | :--- |
-| Compact | 4 | 8 | 4 | 12 | 6 | 16 | E2B, sm E4B |
-| Small | 4 | 16 | 6 | 24 | 6 | 32 | E2B, E4B, sm 26B  |
-| Medium | 4 | 20 | 6 | 32 | 8 | 48 | E2B, E4B, 26B, sm 31B |
-| Performance | 6 | 32 | 8 | 48 | 12+ | 48+ | E2B, E4B, 26B, 31B |
-^memory (VRAM, RAM) is measured in GB.   
-
-##### Notes #####
-If you only get thoughts. Just prompt it to keep going.  
-For best results, offload just enough layers to fit in VRAM, aiming for no Shared VRAM usage. 
-E2B can run on almost anything.  
-E4B models may vary, with 6GB of VRAM reccomended.  
-The smallest 26B model just barely runs on 16GB of RAM with a 6GB GPU, I'd steer clear of doing that.  
-The 26B models run faster cause only 4B is active at once.  
-31B models have higer requirements and run slower, as being dense models, the whole thing is active at once.  
-
-##### LAYER COUNTS #####
-Most smaller models can fit in 6GB of VRAM.  
-for 26B, 7-9 layers is a good start point. Reduce if you notice a spike in Shared VRAM usage. For 31B, YMMV.  
-The higher the B-count (parameters), the smarter the model. 
+Gemma-4 31B
+Required (Q4_K)
+17.46 GiB
+1,001.25 MiB
+18.46 GiB
 
 
 
@@ -146,14 +135,3 @@ t/s is tokens per second. You can see how many layers the model has, as well as 
 I believe that prerty much covers it. If you have any ideas, complaints, or notice something glaringly obvious that I should have caught, please reach out to me at ccrg69@gmail.com . I value input!
 Thanks for reading, 
 -GhostHeartZer0
-
-#### Licenses & Credits ####
-- **SerenityPC**: Released under the MIT License ([LICENSE](LICENSE)). Copyright (c) 2026 GhostHeartZer0 / SerenityAI Team.
-- **llama.cpp / llama-cpp-python**: MIT License (Georgi Gerganov, Andrei Betlen & contributors).
-- **Google Gemma Models (Gemma-4, Gemma 2, T5Gemma)**: Subject to Google Gemma Terms of Use (ai.google.dev/gemma/terms).
-- **Qwen Models**: Subject to Qwen License Agreement (Alibaba Cloud).
-- **TurboQuant Architecture**: Google DeepMind research team.
-- **TriAttention KV Pruning**: MIT, NVIDIA, & Zhejiang University research team.
-- **Sentence-Transformers & TurboVec**: Apache 2.0 / MIT.
-- **PyTorch, OpenCV & Pillow**: BSD 3-Clause / Apache 2.0 / HPND.
-- **MSI Mystic Light SDK**: Copyright (c) Micro-Star International Co., Ltd.

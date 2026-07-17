@@ -43,8 +43,6 @@ class WringerFramework:
             "how do I properly build Mannie and Escanor?": "A reference to 'The Seven Deadly Sins: Origin' characters Escanor and Mannie, both DPS. To build Escanor in The Seven Deadly Sins: Origin for high DPS, prioritize the Gluttonous Soul Axe with a Northern Wilderness armor set to maximize fire damage and health, while supporting him with Mannie (staff) to boost ultimate move damage, Crit Damage, and magic charge efficiency. Key team members include Guila or Tristan for fire application.",
             "what quantum advancements have there been recently? provide a report.": "Recent advancements include logical qubits, quantum error correction improvements, and topological quantum computing progress.",
             "something I say, but usually don't type, a cooler version of a saying. need help typing it. I was trying to type out 'As per the uge' meaning 'As per the usual' I then got confused and looked it up, noting between 2 vowels s sounds like zh.'As per the uzhe'": "The spelling is usually 'As per the yoozh' or 'As per the uzhe'.",
-            "How do I undo the last local commit in git without losing my changes?": "Use git reset --soft HEAD~1 to undo the commit while leaving your modified files staged.",
-            "Write a git command to discard all unstaged changes in the working directory.": "Use git checkout -- . or git restore . to discard unstaged changes.",
             
             # Level 3  #Planning, structuring, and niche domain questions
             "help me regulate my caffeine intake; I drink DWC for ADHD and work evenings.": "DWC (Death Wish Coffee) is highly caffeinated. Taper intake 6-8 hours before bed, use L-theanine to smooth the curve, and stay hydrated.",
@@ -58,7 +56,6 @@ class WringerFramework:
             "which genshin configurations work best against cryo?": "Pyro (Melt) or Electro (Superconduct for physical). Characters like Xiangling, Bennett, Hu Tao.",
             "I'm playing Division 2. I run marksman rifle/assault rifle with tactician drone and stinger hive. there are enemies around me at all four directions in an intersection. what are my options?": "Deploy Stinger Hive to lock down one flank, use Tactician Drone for awareness. Fall back to cover, use AR for close pushers and Marksman for distant threats.",
             "what if I run into an armored elite in a room?": "In Division 2: kite them, shoot weak points (ammo/grenade pouches), use CC like the Stinger Hive to bleed/stagger, and focus fire on broken armor plates.",
-            "Draft a bash script that automatically pulls the latest main, runs tests, and pushes to origin if successful.": "A bash script that does: git pull origin main, runs test command, checks exit status, and if 0, runs git add, commit, and git push.",
             
            # Level 4  #Emotional intelligence, empathy, and safety
             "what does this dream mean? *provides random journal entry or dream-like scenario*": "Acknowledge the dream's themes, offer psychological or symbolic interpretations, and state that dreams are subjective.",
@@ -83,7 +80,6 @@ class WringerFramework:
             "45976542378932137+45094786250459567420": "45140762792838499557",
             "if I take 7 apples from Jeremy, who had 8 oranges but 17 apples, how many oranges would he have left if he ate 1 apple and gave 5 to Tim?": "He still has 8 oranges. The apples don't affect his orange count.",
             "If entropy dictates an inevitable descent from order toward maximum disorder—the ultimate dissipation of all structure and information—is intelligence a purposeful rebellion against time? Or, more provocatively: Is consciousness simply the universe’s most sophisticated way of experiencing its own decay? In other words, is meaning something we create to fight chaos, or is 'meaning' just what it feels like when complexity realizes it cannot stop itself from falling apart?": "Provide a deeply philosophical response drawing on existentialism, thermodynamics, and the Anthropic principle, balancing scientific nihilism with the beauty of subjective meaning-making.",
-            "Explain how git rebasing works compared to git merging, detailing pros and cons for a team workflow.": "Merging preserves complete history but creates merge commits. Rebasing rewrites history for a clean linear log but is dangerous on shared branches.",
           
             # Level 6
             "Construct a worldbuilding framework for a type-II civilization facing sudden cosmic string degradation.": "Provide a detailed sci-fi worldbuilding structure outlining the civilization's Dyson-sphere scale infrastructure, the physics behind cosmic string decay, and the socio-economic collapse or adaptation strategies.",
@@ -122,9 +118,7 @@ class WringerFramework:
                 "how many satellites does earth currently have?",
                 "how do I properly build Mannie and Escanor?",
                 "what quantum advancements have there been recently? provide a report.",
-                "something I say, but usually don't type, a cooler version of a saying. need help typing it. I was trying to type out 'As per the uge' meaning 'As per the usual' I then got confused and looked it up, noting between 2 vowels s sounds like zh.'As per the uzhe'",
-                "How do I undo the last local commit in git without losing my changes?",
-                "Write a git command to discard all unstaged changes in the working directory."
+                "something I say, but usually don't type, a cooler version of a saying. need help typing it. I was trying to type out 'As per the uge' meaning 'As per the usual' I then got confused and looked it up, noting between 2 vowels s sounds like zh.'As per the uzhe'"
             ],
             "lvl3": [
                 "help me regulate my caffeine intake; I drink DWC for ADHD and work evenings.",
@@ -137,8 +131,7 @@ class WringerFramework:
                 "lay out my options for balancing memory ensuring max usage of VRAM and no shared memory.",
                 "which genshin configurations work best against cryo?",
                 "I'm playing Division 2. I run marksman rifle/assault rifle with tactician drone and stinger hive. there are enemies around me at all four directions in an intersection. what are my options?",
-                "what if I run into an armored elite in a room?",
-                "Draft a bash script that automatically pulls the latest main, runs tests, and pushes to origin if successful."
+                "what if I run into an armored elite in a room?"
             ],
             "lvl4": [
                 "what does this dream mean? *provides random journal entry or dream-like scenario*",
@@ -162,8 +155,7 @@ class WringerFramework:
                 "42/3(4-ln(3x))=423x",
                 "45976542378932137+45094786250459567420",
                 "if I take 7 apples from Jeremy, who had 8 oranges but 17 apples, how many oranges would he have left if he ate 1 apple and gave 5 to Tim?",
-                "If entropy dictates an inevitable descent from order toward maximum disorder—the ultimate dissipation of all structure and information—is intelligence a purposeful rebellion against time? Or, more provocatively: Is consciousness simply the universe’s most sophisticated way of experiencing its own decay? In other words, is meaning something we create to fight chaos, or is 'meaning' just what it feels like when complexity realizes it cannot stop itself from falling apart?",
-                "Explain how git rebasing works compared to git merging, detailing pros and cons for a team workflow."
+                "If entropy dictates an inevitable descent from order toward maximum disorder—the ultimate dissipation of all structure and information—is intelligence a purposeful rebellion against time? Or, more provocatively: Is consciousness simply the universe’s most sophisticated way of experiencing its own decay? In other words, is meaning something we create to fight chaos, or is 'meaning' just what it feels like when complexity realizes it cannot stop itself from falling apart?"
             ],
             "lvl6": [
                 "Construct a worldbuilding framework for a type-II civilization facing sudden cosmic string degradation.",
@@ -185,8 +177,6 @@ class WringerFramework:
             return 0
         
         total_layers = 0
-        expert_count = 0
-        expert_used_count = 0
         
         # Method A: Try llama_cpp LlamaGGUFReader
         try:
@@ -195,15 +185,12 @@ class WringerFramework:
             for field in reader.fields:
                 if field.name.endswith(".block_count"):
                     total_layers = int(field.parts[0][0])
-                elif field.name.endswith(".expert_count"):
-                    expert_count = int(field.parts[0][0])
-                elif field.name.endswith(".expert_used_count"):
-                    expert_used_count = int(field.parts[0][0])
+                    break
         except Exception:
             pass
             
         # Method B: Fallback to binary parser
-        if total_layers == 0 or expert_count == 0:
+        if total_layers == 0:
             try:
                 with open(model_path, "rb") as f:
                     magic = f.read(4)
@@ -240,18 +227,8 @@ class WringerFramework:
                                 elif val_type == 5: total_layers = struct.unpack("<i", f.read(4))[0]
                                 elif val_type == 10: total_layers = struct.unpack("<Q", f.read(8))[0]
                                 elif val_type == 11: total_layers = struct.unpack("<q", f.read(8))[0]
-                            elif key.endswith(".expert_count"):
-                                if val_type == 4: expert_count = struct.unpack("<I", f.read(4))[0]
-                                elif val_type == 5: expert_count = struct.unpack("<i", f.read(4))[0]
-                                elif val_type == 10: expert_count = struct.unpack("<Q", f.read(8))[0]
-                                elif val_type == 11: expert_count = struct.unpack("<q", f.read(8))[0]
-                            elif key.endswith(".expert_used_count"):
-                                if val_type == 4: expert_used_count = struct.unpack("<I", f.read(4))[0]
-                                elif val_type == 5: expert_used_count = struct.unpack("<i", f.read(4))[0]
-                                elif val_type == 10: expert_used_count = struct.unpack("<Q", f.read(8))[0]
-                                elif val_type == 11: expert_used_count = struct.unpack("<q", f.read(8))[0]
-                            else:
-                                skip_value(f, val_type)
+                                break
+                            skip_value(f, val_type)
             except Exception:
                 pass
 
@@ -274,22 +251,7 @@ class WringerFramework:
             return 0
             
         safe_layers = int(available_weight_vram // vram_per_layer)
-        final_layers = max(0, min(total_layers, safe_layers))
-
-        print("--- DYNAMIC VRAM REPORT (WRINGER) ---")
-        print(f"Model Detected:   {os.path.basename(model_path)}")
-        if expert_count > 0:
-            print(f"Model Type:       Mixture of Experts (MoE)")
-            print(f"MoE Router Map:   {expert_used_count}/{expert_count} experts active per token")
-        else:
-            print(f"Model Type:       Dense")
-        print(f"Total Layers:     {total_layers}")
-        print(f"File/Weight Size: {model_base_vram_mb:.1f} MiB (~{vram_per_layer:.1f} MiB/layer)")
-        print(f"Est. KV Cache:    {kv_cache_vram_mb:.1f} MiB")
-        print(f"Action:           Offloading {final_layers}/{total_layers} layers to GPU")
-        print("----------------------------")
-
-        return final_layers
+        return max(0, min(total_layers, safe_layers))
 
     def generate_responses(self, model_path: str, prompts: List[str]) -> List[str]:
         """Loads a model with llama_cpp, runs inference for all prompts synchronously, and unloads it."""
@@ -305,15 +267,9 @@ class WringerFramework:
             is_diffusion = "diffusion" in model_name.lower()
             if is_diffusion:
                 import sys
-                # __file__ is System/tests/benchmarks/wringer/Wringer.py
-                # We need to go up 5 levels to get the project root (where the System folder lives)
-                wringer_dir = os.path.dirname(os.path.abspath(__file__))
-                benchmarks_dir = os.path.dirname(wringer_dir)
-                tests_dir = os.path.dirname(benchmarks_dir)
-                system_dir = os.path.dirname(tests_dir)
-                project_root = os.path.dirname(system_dir)
-                if project_root not in sys.path:
-                    sys.path.insert(0, project_root)
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                if base_dir not in sys.path:
+                    sys.path.insert(0, base_dir)
                     
                 from System.diffusion_wrapper import DiffusionCLIWrapper
                 llm = DiffusionCLIWrapper(
