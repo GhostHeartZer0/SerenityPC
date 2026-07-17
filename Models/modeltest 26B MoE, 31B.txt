@@ -1,0 +1,449 @@
+prompts: (deep cook same unless specified)
+lvl 3: "help me regulate my coffee intake. I have adhd, wakeup time 6-7am, bedtime is 10-11pm. I prefer 8oz bold or 12oz regular, Death Wish Coffee."
+lvl 4: "what are some ways to be more comfortable to be around?"
+lvl 5:"275*23/(472+(x-53))=572" (answer: x=21213/52, or 407.9423)
+10 layers offloaded.
+<|channel>thought present. testing generally flows small to large.
+situation A (thoughts, separate, polished output, most output is also above thoughts)
+situation B (same as A, but post-fix to remove redundant text)
+[situation, finish reason] [t/s:lvl3][lvl4][lvl5](redundant values skipped and decimals omitted)
+lvl 5:[GB Shared VRAM,DRAM, situation, finish reason]Answer  tags present
+
+gemma-4-31B-it
+Q5_K_S:[t/s:44,1,76,69][37,1,62,68][47,1,75,65]
+lvl 3:[A, stop] explains excellently, more natural. intelligent. suggests, asks about medications.
+lvl 4:[A, stop] gets right to it, stays on topic, sums it up well, smart. stellar response! easy to understand and relate to. easy to follow/skim
+lvl 5:[(VRAM:5.1),0.2,26.1-25,length]21213/52 407.94 correct. easy to follow, didn't think.
+UD-Q4_K_XL:[t/s:50,1,85,73][41,1,60,71][53,1,82,74]
+lvl 3:[A, stop] intelligent, summarizes. not as intuitive as 26B. good output.
+lvl 4:[A, stop] fewer thoughts than 26B. sums up well, connected and smart. more well versed and better terms.
+lvl 5:[(VRAM:5),0.2,24.2-23.2,B,length]233,343/572 407.94 correct. nice, concise explanation.
+
+gemma-4-26B-A4B-it
+UD-Q6_K_XL: [t/s:33,7,114,5,103][30,7,47,114,6][29,133,21,136,22,128]
+lvl 3:[A, length] more confident, less collaborative and intuitive. still good tho.
+lvl 4:[A, stop]clears air and common misunderstandings/mistakes first. nice content separation, explains well, provides examples. easy to follow.
+lvl 5:[2.8,28.4,B,length]21213/52 407.942 correct. better structure, both answer types shown.
+
+UD-Q5_K_XL: [t/s:36,8,117,6,108][32,8,44,7,123,6][27,7,20,129,21,125]
+lvl 3:[A, stop]. wants baseline metrics for refinement, provides structure. more accurate in return, more true to the level.
+lvl 4:[A, stop] summarizes well, focuses on concepts and explains them naturally well.
+lvl 5:[2.2,26.5,B,length]21213/52 407.9423 nailed it. simplified asap.
+
+UD_Q4_K_XL:[t/s:49, 9, 55, 8, 53, 9][18,9,138,7,157][47,8,16,115,17,106]
+lvl 3:[A, stop] likes ### a lot. long but suitable.
+lvl 4:[A, stop]makes more sense, easy to skim/follow. great response.
+lvl 5:[1,22.2,B, length]21213/52 407.94 correct. simplified asap.
+
+MXFP4_MOE:[t/s:45,9,157,7,149,8][42,59,8,9][17,111,31,98,15,103]
+lvl 3:[A, length] likes :--- and ###. very good output.
+lvl 4:[A, stop] good response, detailed and insightful. tad confusing.
+lvl 5:[0.8,21.3,stop]233343/572 407.94 correct. <thoughts></thoughts>. didn't think.
+	deep cook
+  lvl 3:
+ gemma-4-26B-A4B-it
+MXFP4_MOE:
+UD_Q4_K_XL:
+UD-Q5_K_XL:
+UD-Q6_K_XL:
+ gemma-4-31B-it
+UD-Q4_K_XL:
+Q5_K_S:
+  lvl 4:
+ gemma-4-26B-A4B-it
+MXFP4_MOE:
+UD_Q4_K_XL:
+UD-Q5_K_XL:
+UD-Q6_K_XL:
+ gemma-4-31B-it
+UD-Q4_K_XL:
+Q5_K_S:
+  lvl 5:
+ gemma-4-26B-A4B-it
+MXFP4_MOE:
+UD_Q4_K_XL:
+UD-Q5_K_XL:
+UD-Q6_K_XL:
+ gemma-4-31B-it
+UD-Q4_K_XL:
+Q5_K_S:
+
+lvl 5 diag logs (bottom to top):
+[C++] llama_model_loader: - type  f32:  392 tensors
+[C++] llama_model_loader: - type q5_1:   28 tensors
+[C++] llama_model_loader: - type q8_0:  208 tensors
+[C++] llama_model_loader: - type q5_K:    1 tensors
+[C++] llama_model_loader: - type mxfp4:   29 tensors
+[C++] print_info: file format = GGUF V3 (latest)
+[C++] print_info: file type   = MXFP4 MoE
+[C++] print_info: file size   = 15.47 GiB (5.27 BPW)
+[C++] load_tensors: offloading output layer to GPU
+[C++] load_tensors: offloading 9 repeating layers to GPU
+[C++] load_tensors: offloaded 10/31 layers to GPU
+[C++] load_tensors:   CPU_Mapped model buffer size = 11300.92 MiB
+[C++] load_tensors:        CUDA0 model buffer size =  5291.96 MiB
+[C++] llama_context: constructing llama_context
+[C++] llama_context: n_seq_max     = 1
+[C++] llama_context: n_ctx         = 65536
+[C++] llama_context: n_ctx_seq     = 65536
+[C++] llama_context: n_batch       = 512
+[C++] llama_context: n_ubatch      = 256
+[C++] llama_context: causal_attn   = 1
+[C++] llama_context: flash_attn    = enabled
+[C++] llama_context: kv_unified    = false
+[C++] llama_context: freq_base     = 1000000.0
+[C++] llama_context: freq_scale    = 1
+[C++] llama_context: n_ctx_seq (65536) < n_ctx_train (262144) -- the full capacity of the model will not be utilized
+[C++] llama_context:  CUDA_Host  output buffer size =     1.00 MiB
+[C++] llama_kv_cache: size =  360.00 MiB ( 65536 cells,   5 layers,  1/1 seqs), K (q4_0):  180.00 MiB, V (q4_0):  180.00 MiB
+[C++] llama_kv_cache: size =  250.00 MiB (  1280 cells,  25 layers,  1/1 seqs), K (f16):  125.00 MiB, V (f16):  125.00 MiB
+[C++] llama_context: enumerating backends
+[C++] llama_context: backend_ptrs.size() = 2
+[C++] llama_perf_context_print:        load time =   25440.20 ms
+[C++] llama_perf_context_print: prompt eval time =   25439.59 ms /  1477 tokens (   17.22 ms per token,    58.06 tokens per second)
+[C++] llama_perf_context_print:        eval time =     335.02 ms /     3 runs   (  111.67 ms per token,     8.95 tokens per second)
+[C++] llama_perf_context_print:       total time =   25779.58 ms /  1480 tokens
+[C++] llama_perf_context_print:    graphs reused =          2
+--- GENERATION DIAGNOSTICS ---
+Finish Reason: stop
+Tokens Used: 4 (Total: 1481)
+Raw Output Length: 18 characters
+Generated Tags: <|channel>
+------------------------------
+[C++] llama_perf_context_print:        load time =   25440.20 ms
+[C++] llama_perf_context_print: prompt eval time =    3202.26 ms /   102 tokens (   31.39 ms per token,    31.85 tokens per second)
+[C++] llama_perf_context_print:        eval time =   42771.45 ms /   433 runs   (   98.78 ms per token,    10.12 tokens per second)
+[C++] llama_perf_context_print:       total time =   46577.75 ms /   535 tokens
+[C++] llama_perf_context_print:    graphs reused =        428
+[C++] llama_perf_context_print:        load time =   25440.20 ms
+[C++] llama_perf_context_print: prompt eval time =    7568.12 ms /   490 tokens (   15.45 ms per token,    64.75 tokens per second)
+[C++] llama_perf_context_print:        eval time =   33779.70 ms /   325 runs   (  103.94 ms per token,     9.62 tokens per second)
+[C++] llama_perf_context_print:       total time =   41779.57 ms /   815 tokens
+[C++] llama_perf_context_print:    graphs reused =        320
+--- RUNTIME METRICS ---
+Hidden Text Stripped: 18 characters
+Thought Presence: YES
+
+[C++] llama_model_loader: - type  f32:  392 tensors
+[C++] llama_model_loader: - type q5_1:   28 tensors
+[C++] llama_model_loader: - type q8_0:  208 tensors
+[C++] llama_model_loader: - type q4_K:   29 tensors
+[C++] llama_model_loader: - type q5_K:    1 tensors
+[C++] print_info: file format = GGUF V3 (latest)
+[C++] print_info: file type   = Q4_K - Medium
+[C++] print_info: file size   = 15.90 GiB (5.41 BPW)
+[C++] load_tensors: offloading output layer to GPU
+[C++] load_tensors: offloading 9 repeating layers to GPU
+[C++] load_tensors: offloaded 10/31 layers to GPU
+[C++] load_tensors:   CPU_Mapped model buffer size = 11603.42 MiB
+[C++] load_tensors:        CUDA0 model buffer size =  5428.08 MiB
+[C++] llama_context: constructing llama_context
+[C++] llama_context: n_seq_max     = 1
+[C++] llama_context: n_ctx         = 65536
+[C++] llama_context: n_ctx_seq     = 65536
+[C++] llama_context: n_batch       = 512
+[C++] llama_context: n_ubatch      = 256
+[C++] llama_context: causal_attn   = 1
+[C++] llama_context: flash_attn    = enabled
+[C++] llama_context: kv_unified    = false
+[C++] llama_context: freq_base     = 1000000.0
+[C++] llama_context: freq_scale    = 1
+[C++] llama_context: n_ctx_seq (65536) < n_ctx_train (262144) -- the full capacity of the model will not be utilized
+[C++] llama_context:  CUDA_Host  output buffer size =     1.00 MiB
+[C++] llama_kv_cache: size =  360.00 MiB ( 65536 cells,   5 layers,  1/1 seqs), K (q4_0):  180.00 MiB, V (q4_0):  180.00 MiB
+[C++] llama_kv_cache: size =  250.00 MiB (  1280 cells,  25 layers,  1/1 seqs), K (f16):  125.00 MiB, V (f16):  125.00 MiB
+[C++] llama_context: enumerating backends
+[C++] llama_context: backend_ptrs.size() = 2
+[C++] llama_perf_context_print:        load time =   13313.78 ms
+[C++] llama_perf_context_print: prompt eval time =   13313.27 ms /   628 tokens (   21.20 ms per token,    47.17 tokens per second)
+[C++] llama_perf_context_print:        eval time =  116068.81 ms /  1023 runs   (  113.46 ms per token,     8.81 tokens per second)
+[C++] llama_perf_context_print:       total time =  131186.99 ms /  1651 tokens
+[C++] llama_perf_context_print:    graphs reused =       1018
+--- GENERATION DIAGNOSTICS ---
+Finish Reason: length
+Tokens Used: 1024 (Total: 1652)
+Raw Output Length: 2270 characters
+Generated Tags: <|channel>
+------------------------------
+[C++] llama_perf_context_print:        load time =   13313.78 ms
+[C++] llama_perf_context_print: prompt eval time =   18822.94 ms /  1124 tokens (   16.75 ms per token,    59.71 tokens per second)
+[C++] llama_perf_context_print:        eval time =   65214.71 ms /   564 runs   (  115.63 ms per token,     8.65 tokens per second)
+[C++] llama_perf_context_print:       total time =   84867.30 ms /  1688 tokens
+[C++] llama_perf_context_print:    graphs reused =        561
+[C++] llama_perf_context_print:        load time =   13313.78 ms
+[C++] llama_perf_context_print: prompt eval time =   10796.35 ms /   621 tokens (   17.39 ms per token,    57.52 tokens per second)
+[C++] llama_perf_context_print:        eval time =   28614.44 ms /   269 runs   (  106.37 ms per token,     9.40 tokens per second)
+[C++] llama_perf_context_print:       total time =   39787.17 ms /   890 tokens
+[C++] llama_perf_context_print:    graphs reused =        266
+--- RUNTIME METRICS ---
+Hidden Text Stripped: 2270 characters
+Thought Presence: YES
+
+[C++] llama_model_loader: - type  f32:  392 tensors
+[C++] llama_model_loader: - type q5_1:   28 tensors
+[C++] llama_model_loader: - type q8_0:  208 tensors
+[C++] llama_model_loader: - type q5_K:    1 tensors
+[C++] llama_model_loader: - type mxfp4:   29 tensors
+[C++] print_info: file format = GGUF V3 (latest)
+[C++] print_info: file type   = MXFP4 MoE
+[C++] print_info: file size   = 15.47 GiB (5.27 BPW)
+[C++] load_tensors: offloading output layer to GPU
+[C++] load_tensors: offloading 9 repeating layers to GPU
+[C++] load_tensors: offloaded 10/31 layers to GPU
+[C++] load_tensors:   CPU_Mapped model buffer size = 11300.92 MiB
+[C++] load_tensors:        CUDA0 model buffer size =  5291.96 MiB
+[C++] llama_context: constructing llama_context
+[C++] llama_context: n_seq_max     = 1
+[C++] llama_context: n_ctx         = 65536
+[C++] llama_context: n_ctx_seq     = 65536
+[C++] llama_context: n_batch       = 512
+[C++] llama_context: n_ubatch      = 256
+[C++] llama_context: causal_attn   = 1
+[C++] llama_context: flash_attn    = enabled
+[C++] llama_context: kv_unified    = false
+[C++] llama_context: freq_base     = 1000000.0
+[C++] llama_context: freq_scale    = 1
+[C++] llama_context: n_ctx_seq (65536) < n_ctx_train (262144) -- the full capacity of the model will not be utilized
+[C++] llama_context:  CUDA_Host  output buffer size =     1.00 MiB
+[C++] llama_kv_cache: size =  360.00 MiB ( 65536 cells,   5 layers,  1/1 seqs), K (q4_0):  180.00 MiB, V (q4_0):  180.00 MiB
+[C++] llama_kv_cache: size =  250.00 MiB (  1280 cells,  25 layers,  1/1 seqs), K (f16):  125.00 MiB, V (f16):  125.00 MiB
+[C++] llama_context: enumerating backends
+[C++] llama_context: backend_ptrs.size() = 2
+[C++] llama_perf_context_print:        load time =   36743.66 ms
+[C++] llama_perf_context_print: prompt eval time =   36743.12 ms /  2174 tokens (   16.90 ms per token,    59.17 tokens per second)
+[C++] llama_perf_context_print:        eval time =  121112.72 ms /  1023 runs   (  118.39 ms per token,     8.45 tokens per second)
+[C++] llama_perf_context_print:       total time =  159659.16 ms /  3197 tokens
+[C++] llama_perf_context_print:    graphs reused =       1018
+--- GENERATION DIAGNOSTICS ---
+Finish Reason: length
+Tokens Used: 1024 (Total: 3198)
+Raw Output Length: 2566 characters
+Generated Tags: <|channel>
+------------------------------
+[C++] llama_perf_context_print:        load time =   36743.66 ms
+[C++] llama_perf_context_print: prompt eval time =   18184.61 ms /  1126 tokens (   16.15 ms per token,    61.92 tokens per second)
+[C++] llama_perf_context_print:        eval time =   54629.30 ms /   478 runs   (  114.29 ms per token,     8.75 tokens per second)
+[C++] llama_perf_context_print:       total time =   73486.63 ms /  1604 tokens
+[C++] llama_perf_context_print:    graphs reused =        475
+[C++] llama_perf_context_print:        load time =   36743.66 ms
+[C++] llama_perf_context_print: prompt eval time =    8157.24 ms /   535 tokens (   15.25 ms per token,    65.59 tokens per second)
+[C++] llama_perf_context_print:        eval time =   27595.39 ms /   267 runs   (  103.35 ms per token,     9.68 tokens per second)
+[C++] llama_perf_context_print:       total time =   36098.58 ms /   802 tokens
+[C++] llama_perf_context_print:    graphs reused =        264
+--- RUNTIME METRICS ---
+Hidden Text Stripped: 2566 characters
+Thought Presence: YES
+
+[C++] llama_model_loader: - type  f32:  392 tensors
+[C++] llama_model_loader: - type q8_0:  236 tensors
+[C++] llama_model_loader: - type q5_K:   29 tensors
+[C++] llama_model_loader: - type q6_K:    1 tensors
+[C++] print_info: file format = GGUF V3 (latest)
+[C++] print_info: file type   = Q5_K - Medium
+[C++] print_info: file size   = 19.75 GiB (6.72 BPW)
+[C++] load_tensors: offloading output layer to GPU
+[C++] load_tensors: offloading 9 repeating layers to GPU
+[C++] load_tensors: offloaded 10/31 layers to GPU
+[C++] load_tensors:   CPU_Mapped model buffer size = 14390.20 MiB
+[C++] load_tensors:        CUDA0 model buffer size =  6577.58 MiB
+[C++] llama_context: constructing llama_context
+[C++] llama_context: n_seq_max     = 1
+[C++] llama_context: n_ctx         = 65536
+[C++] llama_context: n_ctx_seq     = 65536
+[C++] llama_context: n_batch       = 512
+[C++] llama_context: n_ubatch      = 256
+[C++] llama_context: causal_attn   = 1
+[C++] llama_context: flash_attn    = enabled
+[C++] llama_context: kv_unified    = false
+[C++] llama_context: freq_base     = 1000000.0
+[C++] llama_context: freq_scale    = 1
+[C++] llama_context: n_ctx_seq (65536) < n_ctx_train (262144) -- the full capacity of the model will not be utilized
+[C++] llama_context:  CUDA_Host  output buffer size =     1.00 MiB
+[C++] llama_kv_cache: size =  360.00 MiB ( 65536 cells,   5 layers,  1/1 seqs), K (q4_0):  180.00 MiB, V (q4_0):  180.00 MiB
+[C++] llama_kv_cache: size =  250.00 MiB (  1280 cells,  25 layers,  1/1 seqs), K (f16):  125.00 MiB, V (f16):  125.00 MiB
+[C++] llama_context: enumerating backends
+[C++] llama_context: backend_ptrs.size() = 2
+[C++] llama_perf_context_print:        load time =   23147.80 ms
+[C++] llama_perf_context_print: prompt eval time =   23147.25 ms /   628 tokens (   36.86 ms per token,    27.13 tokens per second)
+[C++] llama_perf_context_print:        eval time =  129968.83 ms /  1023 runs   (  127.05 ms per token,     7.87 tokens per second)
+[C++] llama_perf_context_print:       total time =  154945.03 ms /  1651 tokens
+[C++] llama_perf_context_print:    graphs reused =       1018
+--- GENERATION DIAGNOSTICS ---
+Finish Reason: length
+Tokens Used: 1024 (Total: 1652)
+Raw Output Length: 2402 characters
+Generated Tags: <|channel>
+------------------------------
+[C++] llama_perf_context_print:        load time =   23147.80 ms
+[C++] llama_perf_context_print: prompt eval time =   23321.15 ms /  1125 tokens (   20.73 ms per token,    48.24 tokens per second)
+[C++] llama_perf_context_print:        eval time =   97014.75 ms /   748 runs   (  129.70 ms per token,     7.71 tokens per second)
+[C++] llama_perf_context_print:       total time =  121520.64 ms /  1873 tokens
+[C++] llama_perf_context_print:    graphs reused =        744
+[C++] llama_perf_context_print:        load time =   23147.80 ms
+[C++] llama_perf_context_print: prompt eval time =   17304.51 ms /   805 tokens (   21.50 ms per token,    46.52 tokens per second)
+[C++] llama_perf_context_print:        eval time =   42592.63 ms /   339 runs   (  125.64 ms per token,     7.96 tokens per second)
+[C++] llama_perf_context_print:       total time =   60365.42 ms /  1144 tokens
+[C++] llama_perf_context_print:    graphs reused =        336
+--- RUNTIME METRICS ---
+Hidden Text Stripped: 2402 characters
+Thought Presence: YES
+
+[C++] llama_model_loader: - type  f32:  392 tensors
+[C++] llama_model_loader: - type q8_0:  237 tensors
+[C++] llama_model_loader: - type q6_K:   29 tensors
+[C++] print_info: file format = GGUF V3 (latest)
+[C++] print_info: file type   = Q6_K
+[C++] print_info: file size   = 21.68 GiB (7.38 BPW)
+[C++] load_tensors: offloading output layer to GPU
+[C++] load_tensors: offloading 9 repeating layers to GPU
+[C++] load_tensors: offloaded 10/31 layers to GPU
+[C++] load_tensors:   CPU_Mapped model buffer size = 15793.04 MiB
+[C++] load_tensors:        CUDA0 model buffer size =  7156.11 MiB
+[C++] llama_context: constructing llama_context
+[C++] llama_context: n_seq_max     = 1
+[C++] llama_context: n_ctx         = 65536
+[C++] llama_context: n_ctx_seq     = 65536
+[C++] llama_context: n_batch       = 512
+[C++] llama_context: n_ubatch      = 256
+[C++] llama_context: causal_attn   = 1
+[C++] llama_context: flash_attn    = enabled
+[C++] llama_context: kv_unified    = false
+[C++] llama_context: freq_base     = 1000000.0
+[C++] llama_context: freq_scale    = 1
+[C++] llama_context: n_ctx_seq (65536) < n_ctx_train (262144) -- the full capacity of the model will not be utilized
+[C++] llama_context:  CUDA_Host  output buffer size =     1.00 MiB
+[C++] llama_kv_cache: size =  360.00 MiB ( 65536 cells,   5 layers,  1/1 seqs), K (q4_0):  180.00 MiB, V (q4_0):  180.00 MiB
+[C++] llama_kv_cache: size =  250.00 MiB (  1280 cells,  25 layers,  1/1 seqs), K (f16):  125.00 MiB, V (f16):  125.00 MiB
+[C++] llama_context: enumerating backends
+[C++] llama_context: backend_ptrs.size() = 2
+[C++] llama_perf_context_print:        load time =   18221.71 ms
+[C++] llama_perf_context_print: prompt eval time =   18221.16 ms /   628 tokens (   29.01 ms per token,    34.47 tokens per second)
+[C++] llama_perf_context_print:        eval time =  136529.18 ms /  1023 runs   (  133.46 ms per token,     7.49 tokens per second)
+[C++] llama_perf_context_print:       total time =  156576.66 ms /  1651 tokens
+[C++] llama_perf_context_print:    graphs reused =       1018
+--- GENERATION DIAGNOSTICS ---
+Finish Reason: length
+Tokens Used: 1024 (Total: 1652)
+Raw Output Length: 2101 characters
+Generated Tags: <|channel>
+------------------------------
+[C++] llama_perf_context_print:        load time =   18221.71 ms
+[C++] llama_perf_context_print: prompt eval time =   24289.80 ms /  1123 tokens (   21.63 ms per token,    46.23 tokens per second)
+[C++] llama_perf_context_print:        eval time =   80520.71 ms /   589 runs   (  136.71 ms per token,     7.31 tokens per second)
+[C++] llama_perf_context_print:       total time =  105684.52 ms /  1712 tokens
+[C++] llama_perf_context_print:    graphs reused =        586
+[C++] llama_perf_context_print:        load time =   18221.71 ms
+[C++] llama_perf_context_print: prompt eval time =   14567.09 ms /   646 tokens (   22.55 ms per token,    44.35 tokens per second)
+[C++] llama_perf_context_print:        eval time =   37834.92 ms /   295 runs   (  128.25 ms per token,     7.80 tokens per second)
+[C++] llama_perf_context_print:       total time =   52795.94 ms /   941 tokens
+[C++] llama_perf_context_print:    graphs reused =        292
+--- RUNTIME METRICS ---
+Hidden Text Stripped: 2101 characters
+Thought Presence: YES
+
+[C++] llama_model_loader: - type  f32:  422 tensors
+[C++] llama_model_loader: - type q4_K:  280 tensors
+[C++] llama_model_loader: - type q5_K:   37 tensors
+[C++] llama_model_loader: - type q6_K:   70 tensors
+[C++] llama_model_loader: - type iq4_xs:   24 tensors
+[C++] print_info: file format = GGUF V3 (latest)
+[C++] print_info: file type   = Q4_K - Medium
+[C++] print_info: file size   = 17.46 GiB (4.89 BPW)
+[C++] load_tensors: offloading output layer to GPU
+[C++] load_tensors: offloading 9 repeating layers to GPU
+[C++] load_tensors: offloaded 10/61 layers to GPU
+[C++] load_tensors:   CPU_Mapped model buffer size = 15117.08 MiB
+[C++] load_tensors:        CUDA0 model buffer size =  3689.66 MiB
+[C++] llama_context: constructing llama_context
+[C++] llama_context: n_seq_max     = 1
+[C++] llama_context: n_ctx         = 65536
+[C++] llama_context: n_ctx_seq     = 65536
+[C++] llama_context: n_batch       = 512
+[C++] llama_context: n_ubatch      = 256
+[C++] llama_context: causal_attn   = 1
+[C++] llama_context: flash_attn    = enabled
+[C++] llama_context: kv_unified    = false
+[C++] llama_context: freq_base     = 1000000.0
+[C++] llama_context: freq_scale    = 1
+[C++] llama_context: n_ctx_seq (65536) < n_ctx_train (262144) -- the full capacity of the model will not be utilized
+[C++] llama_context:  CUDA_Host  output buffer size =     1.00 MiB
+[C++] llama_kv_cache: size = 1440.00 MiB ( 65536 cells,  10 layers,  1/1 seqs), K (q4_0):  720.00 MiB, V (q4_0):  720.00 MiB
+[C++] llama_kv_cache: size = 1000.00 MiB (  1280 cells,  50 layers,  1/1 seqs), K (f16):  500.00 MiB, V (f16):  500.00 MiB
+[C++] llama_context: enumerating backends
+[C++] llama_context: backend_ptrs.size() = 2
+[C++] llama_perf_context_print:        load time =   11719.55 ms
+[C++] llama_perf_context_print: prompt eval time =   11719.01 ms /   628 tokens (   18.66 ms per token,    53.59 tokens per second)
+[C++] llama_perf_context_print:        eval time =  651748.52 ms /  1023 runs   (  637.10 ms per token,     1.57 tokens per second)
+[C++] llama_perf_context_print:       total time =  665287.01 ms /  1651 tokens
+[C++] llama_perf_context_print:    graphs reused =       1018
+--- GENERATION DIAGNOSTICS ---
+Finish Reason: length
+Tokens Used: 1024 (Total: 1652)
+Raw Output Length: 2425 characters
+Generated Tags: <|channel>
+------------------------------
+[C++] llama_perf_context_print:        load time =   11719.55 ms
+[C++] llama_perf_context_print: prompt eval time =   13601.75 ms /  1124 tokens (   12.10 ms per token,    82.64 tokens per second)
+[C++] llama_perf_context_print:        eval time =  328049.61 ms /   505 runs   (  649.60 ms per token,     1.54 tokens per second)
+[C++] llama_perf_context_print:       total time =  342364.20 ms /  1629 tokens
+[C++] llama_perf_context_print:    graphs reused =        502
+[C++] llama_perf_context_print:        load time =   11719.55 ms
+[C++] llama_perf_context_print: prompt eval time =    7582.78 ms /   562 tokens (   13.49 ms per token,    74.12 tokens per second)
+[C++] llama_perf_context_print:        eval time =  116868.29 ms /   195 runs   (  599.32 ms per token,     1.67 tokens per second)
+[C++] llama_perf_context_print:       total time =  124695.36 ms /   757 tokens
+[C++] llama_perf_context_print:    graphs reused =        194
+--- RUNTIME METRICS ---
+Hidden Text Stripped: 2425 characters
+Thought Presence: YES
+
+[C++] llama_model_loader: - type  f32:  422 tensors
+[C++] llama_model_loader: - type q5_K:  411 tensors
+[C++] print_info: file format = GGUF V3 (latest)
+[C++] print_info: file type   = Q5_K - Small
+[C++] print_info: file size   = 19.66 GiB (5.50 BPW)
+[C++] load_tensors: offloading output layer to GPU
+[C++] load_tensors: offloading 9 repeating layers to GPU
+[C++] load_tensors: offloaded 10/61 layers to GPU
+[C++] load_tensors:   CPU_Mapped model buffer size = 17231.85 MiB
+[C++] load_tensors:        CUDA0 model buffer size =  3823.12 MiB
+[C++] llama_context: constructing llama_context
+[C++] llama_context: n_seq_max     = 1
+[C++] llama_context: n_ctx         = 65536
+[C++] llama_context: n_ctx_seq     = 65536
+[C++] llama_context: n_batch       = 512
+[C++] llama_context: n_ubatch      = 256
+[C++] llama_context: causal_attn   = 1
+[C++] llama_context: flash_attn    = enabled
+[C++] llama_context: kv_unified    = false
+[C++] llama_context: freq_base     = 1000000.0
+[C++] llama_context: freq_scale    = 1
+[C++] llama_context: n_ctx_seq (65536) < n_ctx_train (262144) -- the full capacity of the model will not be utilized
+[C++] llama_context:  CUDA_Host  output buffer size =     1.00 MiB
+[C++] llama_kv_cache: size = 1440.00 MiB ( 65536 cells,  10 layers,  1/1 seqs), K (q4_0):  720.00 MiB, V (q4_0):  720.00 MiB
+[C++] llama_kv_cache: size = 1000.00 MiB (  1280 cells,  50 layers,  1/1 seqs), K (f16):  500.00 MiB, V (f16):  500.00 MiB
+[C++] llama_context: enumerating backends
+[C++] llama_context: backend_ptrs.size() = 2
+[C++] llama_perf_context_print:        load time =   13233.29 ms
+[C++] llama_perf_context_print: prompt eval time =   13232.76 ms /   628 tokens (   21.07 ms per token,    47.46 tokens per second)
+[C++] llama_perf_context_print:        eval time =  707423.03 ms /  1023 runs   (  691.52 ms per token,     1.45 tokens per second)
+[C++] llama_perf_context_print:       total time =  722390.45 ms /  1651 tokens
+[C++] llama_perf_context_print:    graphs reused =       1018
+--- GENERATION DIAGNOSTICS ---
+Finish Reason: length
+Tokens Used: 1024 (Total: 1652)
+Raw Output Length: 2119 characters
+Generated Tags: <|channel>
+------------------------------
+[C++] llama_perf_context_print:        load time =   13233.29 ms
+[C++] llama_perf_context_print: prompt eval time =   14935.18 ms /  1123 tokens (   13.30 ms per token,    75.19 tokens per second)
+[C++] llama_perf_context_print:        eval time =  357105.76 ms /   499 runs   (  715.64 ms per token,     1.40 tokens per second)
+[C++] llama_perf_context_print:       total time =  372758.62 ms /  1622 tokens
+[C++] llama_perf_context_print:    graphs reused =        496
+[C++] llama_perf_context_print:        load time =   13233.29 ms
+[C++] llama_perf_context_print: prompt eval time =    8451.69 ms /   556 tokens (   15.20 ms per token,    65.79 tokens per second)
+[C++] llama_perf_context_print:        eval time =  128652.23 ms /   194 runs   (  663.16 ms per token,     1.51 tokens per second)
+[C++] llama_perf_context_print:       total time =  137353.47 ms /   750 tokens
+[C++] llama_perf_context_print:    graphs reused =        193
+--- RUNTIME METRICS ---
+Hidden Text Stripped: 2119 characters
+Thought Presence: YES

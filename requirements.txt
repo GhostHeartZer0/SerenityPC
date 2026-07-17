@@ -1,19 +1,19 @@
-SerenityPC Installation & GPU Troubleshooting Guide
-This guide provides the necessary steps to install the required Python libraries with full NVIDIA GPU acceleration.
-
-Step 1: Critical Prerequisites
-Before installing, you must have these two components:Visual Studio Build Tools:Download and run the Visual Studio Community installer.In the "Workloads" tab, you must check the box for "Desktop development with C++".NVIDIA CUDA Toolkit:Download and install a recent version of the CUDA Toolkit (e.g., 12.1) from the official NVIDIA website.
-
-Step 2: Set Windows Graphics Preference
-Ensure Windows assigns Python to your NVIDIA GPU.Go to Windows Settings -> System -> Display -> Graphics.Add python.exe to the list (use the "Desktop app" or "Microsoft Store app" option as needed).Click on Python, select Options, and choose "High performance (NVIDIA...)".
-
-Step 3: Reinstall llama-cpp-python (The Final Fix)
-Open a Command Prompt (cmd) and run these commands exactly as shown. This process will compile the library specifically for your GPU.
-Clean Uninstall:pip uninstall llama-cpp-python -y
-Set Build Flags and Reinstall:set CMAKE_ARGS="-DLLAMA_CUDA=on"
-set FORCE_CMAKE=1
-pip install --upgrade --force-reinstall --no-cache-dir llama-cpp-python
-This will take several minutes to complete.
-
-Step 4: Run the Application
-Run run.bat. The application will now check for GPU support and confirm its status in the chat window.
+requests
+psutil
+speechrecognition
+pyttsx3
+pystray
+Pillow
+accelerate
+bitsandbytes
+fastapi
+uvicorn
+pydantic
+transformers
+sounddevice
+beautifulsoup4
+llama-cpp-python==0.3.14
+playwright
+chromadb
+sentence-transformers
+turboquant
