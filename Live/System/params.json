@@ -1,6 +1,6 @@
 {
-    "learned_pause_threshold": "2.44",
-    "active_core": "light",
+    "learned_pause_threshold": "2.321",
+    "active_core": "med",
     "learning_enabled": true,
     "n_gpu_layers": 26,
     "n_ctx": 16384,
@@ -37,8 +37,5 @@
     "tied_on_gpu": true,
     "persona_level": "7",
     "disable_fim_autoswap": true,
-    "config_version": 6,
-    "global_kv_cache": "f16",
-    "k_cache_type": "fp16",
-    "v_cache_type": "fp16"
+    "config_version": 6
 }

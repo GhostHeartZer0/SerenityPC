@@ -284,10 +284,9 @@ processor = None
 _tokenizer = None
 MODEL_LOADED = False
 MODEL_LOADING_ERROR = None
-is_causal = False  # Set during model load; encoder-decoder models (T5Gemma2) require EncoderDecoderCache
 
 def load_model_background():
-    global model, processor, _tokenizer, MODEL_LOADED, MODEL_LOADING_ERROR, is_causal
+    global model, processor, _tokenizer, MODEL_LOADED, MODEL_LOADING_ERROR
     try:
         is_causal = ACTIVE_CORE in ["cg2b", "cg7b", "qwen27b", "qwen35b"] or any(x in target_repo.lower() for x in ["codegemma", "qwen"])
         
@@ -382,8 +381,8 @@ def load_model_background():
             def run_unified_benchmark(use_tq=False):
                 torch.cuda.empty_cache()
                 
-                # TurboQuantCache is decoder-only; skip for encoder-decoder models (T5Gemma2)
-                cache = TurboQuantCache(bits=3) if (use_tq and is_causal) else None
+                # Initializing the specific cache type
+                cache = TurboQuantCache(bits=3) if use_tq else None
                 
                 device = next(model.parameters()).device
                 prompt = "Hello, how are you today?"
@@ -395,10 +394,7 @@ def load_model_background():
                 start_time = time.time()
                 with torch.no_grad():
                     # Running the model to generate output tokens
-                    gen_args = {**inputs, "max_new_tokens": 100}
-                    if cache is not None:
-                        gen_args["past_key_values"] = cache
-                    outputs = model.generate(**gen_args)
+                    outputs = model.generate(**inputs, max_new_tokens=100, past_key_values=cache)
                 
                 duration = time.time() - start_time
                 
@@ -492,10 +488,6 @@ class LogRequest(BaseModel):
     history: Optional[List[Dict[str, str]]] = None
 
 def resolve_kv_cache():
-    """Resolve the KV cache strategy from params.json. Returns None for encoder-decoder models."""
-    # TurboQuantCache is decoder-only — T5Gemma2 requires EncoderDecoderCache
-    if not is_causal:
-        return None
     try:
         params_file = os.path.join(LIVE_ROOT, "System", "params.json")
         global_kv = "Auto"
@@ -866,22 +858,11 @@ async def analyze_log(request: LogRequest):
     result = "thought: " + raw.strip()
     
     # Simple regex parsing for the /analyze endpoint so it still returns the JSON format to the UI
-    # Fuzzier regex parsing to handle Gemma 2 / T5 artifacts and XML/plaintext variations
-    t_match = _re.search(r'<thought>(.*?)</thought>', result, _re.DOTALL | _re.IGNORECASE)
-    if not t_match:
-        t_match = _re.search(r'thought:?\s*(.*?)(?=\n?\s*action:|\n?\s*directive:|\n?\s*Serenity:|$)', result, _re.DOTALL | _re.IGNORECASE)
-        
-    a_match = _re.search(r'<action>(.*?)</action>', result, _re.DOTALL | _re.IGNORECASE)
-    if not a_match:
-        a_match = _re.search(r'action:?\s*(.*?)(?=\n?\s*directive:|\n?\s*Serenity:|$)', result, _re.DOTALL | _re.IGNORECASE)
-        
-    d_match = _re.search(r'<directive>(.*?)</directive>', result, _re.DOTALL | _re.IGNORECASE)
-    if not d_match:
-        d_match = _re.search(r'directive:?\s*(.*?)(?=\n?\s*Serenity:|$)', result, _re.DOTALL | _re.IGNORECASE)
-        
-    s_match = _re.search(r'<speech>(.*?)</speech>', result, _re.DOTALL | _re.IGNORECASE)
-    if not s_match:
-        s_match = _re.search(r'Serenity:?\s*(.*)', result, _re.DOTALL | _re.IGNORECASE)
+    # Fuzzier regex parsing to handle Gemma 2 / T5 artifacts and whitespace variations
+    t_match = _re.search(r'thought:?\s*(.*?)(?=\n?\s*action:|\n?\s*directive:|\n?\s*Serenity:|$)', result, _re.DOTALL | _re.IGNORECASE)
+    a_match = _re.search(r'action:?\s*(.*?)(?=\n?\s*directive:|\n?\s*Serenity:|$)', result, _re.DOTALL | _re.IGNORECASE)
+    d_match = _re.search(r'directive:?\s*(.*?)(?=\n?\s*Serenity:|$)', result, _re.DOTALL | _re.IGNORECASE)
+    s_match = _re.search(r'Serenity:?\s*(.*)', result, _re.DOTALL | _re.IGNORECASE)
     
     thought = t_match.group(1).strip() if t_match else "None"
     action = a_match.group(1).strip() if a_match else "none"

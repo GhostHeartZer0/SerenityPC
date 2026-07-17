@@ -2,7 +2,7 @@
 # Helper classes for logging, UI components, and error handling.
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox
 import sys
 import os
 import subprocess
@@ -16,7 +16,7 @@ try:
 except ImportError:
     nvidia_ml = None
 from PIL import Image, ImageTk
-from serenity_resources import ANIMATION_SEQUENCE, MEDIA_DIR, THEME
+from serenity_resources import ANIMATION_SEQUENCE, MEDIA_DIR
 
 def awaken_live_agent(agent_path):
     """Launches the Live Agent as an independent background process and returns the handle."""
@@ -46,8 +46,7 @@ SPAM_PATTERNS = [
     "ggml_backend_cuda_buffer_type_alloc_buffer",
     "load_tensors: loading",
     "loaded:",
-    "Llama.generate:",
-    "chat template"
+    "Llama.generate:"
 ]
 
 class WidgetLogger:
@@ -79,10 +78,6 @@ class WidgetLogger:
                 
                 self.widget.config(state='normal')
                 self.widget.insert(tk.END, text, (self.tag,))
-                
-                # Trim widget memory overhead (keep max ~3000 lines)
-                if int(float(self.widget.index('end-1c'))) > 3000:
-                    self.widget.delete("1.0", "500.0")
                 
                 if not is_scrolled_up:
                     self.widget.see(tk.END)
@@ -373,96 +368,31 @@ class SystemMonitor:
             
         threading.Thread(target=self._stats_loop, daemon=True).start()
 
-    @staticmethod
-    def _get_cpu_temp():
-        try:
-            if hasattr(psutil, "sensors_temperatures"):
-                temps = psutil.sensors_temperatures()
-                if temps:
-                    for name, entries in temps.items():
-                        if entries and entries[0].current > 0:
-                            return f"{entries[0].current:.0f}°C"
-        except: pass
-        try:
-            import wmi
-            w = wmi.WMI(namespace="root\\wmi")
-            temp_info = w.MSAcpi_ThermalZoneTemperature()
-            if temp_info:
-                celsius = (temp_info[0].CurrentTemperature / 10.0) - 273.15
-                if 0 < celsius < 120:
-                    return f"{celsius:.0f}°C"
-        except: pass
-        try:
-            import wmi
-            w = wmi.WMI(namespace="root\\OpenHardwareMonitor")
-            sensors = w.Sensor()
-            for s in sensors:
-                if s.SensorType == 'Temperature' and 'cpu' in s.Name.lower():
-                    return f"{s.Value:.0f}°C"
-        except: pass
-        return "N/A"
-
-    @staticmethod
-    def _get_cpu_power():
-        try:
-            import wmi
-            w = wmi.WMI(namespace="root\\OpenHardwareMonitor")
-            sensors = w.Sensor()
-            for s in sensors:
-                if s.SensorType == 'Power' and 'cpu' in s.Name.lower():
-                    return f"{s.Value:.1f}W"
-        except: pass
-        return "N/A"
-
-    @staticmethod
-    def _get_shared_vram_used_bytes():
-        try:
-            import wmi
-            w = wmi.WMI(namespace="root\\cimv2")
-            perf = w.Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory()
-            if perf:
-                total_shared = sum(int(getattr(p, 'SharedUsage', 0)) for p in perf)
-                if total_shared > 0:
-                    return total_shared
-        except: pass
-        return 0
-
     def _stats_loop(self):
         while not self.stop_event.is_set():
             try:
                 stats = {}
                 
-                # System Stats (CPU, RAM, Temp, Power)
+                # System Stats (CPU, RAM, Disk)
                 p = psutil.Process()
                 with p.oneshot():
                     vm = psutil.virtual_memory()
                     stats["CPU"] = f"{psutil.cpu_percent():.1f}%"
                     stats["RAM"] = f"{vm.used / (1024**2):.0f} / {vm.total / (1024**2):.0f} MB"
                 
-                stats["CPU Temp"] = SystemMonitor._get_cpu_temp()
-                stats["CPU Power"] = SystemMonitor._get_cpu_power()
+                disk = psutil.disk_usage('/')
+                stats["Disk"] = f"{disk.percent}%"
                 
-                # GPU Stats (NVML & Shared VRAM)
+                # GPU Stats (NVML)
                 if nvidia_ml and self.gpu_handle:
                     try:
                         util = nvidia_ml.nvmlDeviceGetUtilizationRates(self.gpu_handle)
                         mem = nvidia_ml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
                         temp = nvidia_ml.nvmlDeviceGetTemperature(self.gpu_handle, nvidia_ml.NVML_TEMPERATURE_GPU)
                         
-                        ded_used_gb = mem.used / (1024**3)
-                        ded_total_gb = mem.total / (1024**3)
-                        
-                        shared_total_gb = vm.total / (2 * 1024**3)
-                        shared_used_bytes = SystemMonitor._get_shared_vram_used_bytes()
-                        shared_used_gb = shared_used_bytes / (1024**3)
-                        
-                        tot_used_gb = ded_used_gb + shared_used_gb
-                        tot_total_gb = ded_total_gb + shared_total_gb
-                        
                         stats["GPU Use"] = f"{util.gpu}%"
                         stats["VRAM"] = f"{mem.used / (1024**2):.0f} / {mem.total / (1024**2):.0f} MB"
-                        stats["Shared VRAM"] = f"{shared_used_gb:.2f} / {shared_total_gb:.1f} GB"
-                        stats["Total VRAM"] = f"{tot_used_gb:.2f} / {tot_total_gb:.1f} GB"
+                        stats["Shared VRAM"] = f"{vm.total / (2 * 1024**3):.1f} GB"
                         stats["GPU Temp"] = f"{temp}°C"
                         
                         try:
@@ -506,167 +436,3 @@ def enable_fault_debugging():
         print("[DEBUG] Faulthandler enabled. Hard crashes will be logged to Logs/fault_log.txt")
     except Exception as e:
         print(f"[DEBUG] Failed to enable faulthandler: {e}")
-
-
-# --- GIL-free Thread-Safety Utilities (Python 3.13/3.14+) ---
-class ThreadSafeDict(dict):
-    """
-    A thread-safe dictionary subclass wrapper designed for GIL-free Python (3.13/3.14+).
-    Uses a reentrant lock to synchronize all read, write, and deletion operations.
-    """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._lock = threading.RLock()
-
-    def __getitem__(self, key):
-        with self._lock:
-            return super().__getitem__(key)
-
-    def __setitem__(self, key, value):
-        with self._lock:
-            super().__setitem__(key, value)
-
-    def __delitem__(self, key):
-        with self._lock:
-            super().__delitem__(key)
-
-    def __contains__(self, key):
-        with self._lock:
-            return super().__contains__(key)
-
-    def get(self, key, default=None):
-        with self._lock:
-            return super().get(key, default)
-
-    def setdefault(self, key, default=None):
-        with self._lock:
-            return super().setdefault(key, default)
-
-    def pop(self, key, default=None):
-        with self._lock:
-            return super().pop(key, default)
-
-    def popitem(self):
-        with self._lock:
-            return super().popitem()
-
-    def clear(self):
-        with self._lock:
-            super().clear()
-
-    def update(self, *args, **kwargs):
-        with self._lock:
-            super().update(*args, **kwargs)
-
-    def keys(self):
-        with self._lock:
-            return list(super().keys())
-
-    def values(self):
-        with self._lock:
-            return list(super().values())
-
-    def items(self):
-        with self._lock:
-            return list(super().items())
-
-    def copy(self):
-        with self._lock:
-            return ThreadSafeDict(super().copy())
-
-    def __len__(self):
-        with self._lock:
-            return super().__len__()
-
-    def __repr__(self):
-        with self._lock:
-            return super().__repr__()
-
-
-class ThreadSafeList(list):
-    """
-    A thread-safe list subclass wrapper designed for GIL-free Python (3.13/3.14+).
-    Uses a reentrant lock to synchronize all read, write, and iteration operations.
-    """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._lock = threading.RLock()
-
-    def append(self, item):
-        with self._lock:
-            super().append(item)
-
-    def extend(self, iterable):
-        with self._lock:
-            super().extend(iterable)
-
-    def insert(self, index, item):
-        with self._lock:
-            super().insert(index, item)
-
-    def remove(self, item):
-        with self._lock:
-            super().remove(item)
-
-    def pop(self, index=-1):
-        with self._lock:
-            return super().pop(index)
-
-    def clear(self):
-        with self._lock:
-            super().clear()
-
-    def __getitem__(self, index):
-        with self._lock:
-            if isinstance(index, slice):
-                return ThreadSafeList(super().__getitem__(index))
-            return super().__getitem__(index)
-
-    def __setitem__(self, index, value):
-        with self._lock:
-            super().__setitem__(index, value)
-
-    def __delitem__(self, index):
-        with self._lock:
-            super().__delitem__(index)
-
-    def __len__(self):
-        with self._lock:
-            return super().__len__()
-
-    def __iter__(self):
-        with self._lock:
-            return iter(list(super().__iter__()))
-
-    def __repr__(self):
-        with self._lock:
-            return super().__repr__()
-
-    def copy(self):
-        with self._lock:
-            return ThreadSafeList(super().copy())
-
-
-class ThinkingDisplay(tk.Frame):
-    def __init__(self, parent, *args, **kwargs):
-        super().__init__(parent, bg=THEME["bg_color"], *args, **kwargs)
-        self.label = tk.Label(self, text="Thinking...", font=("Open Sans", 10, "italic"), 
-                            fg=THEME["electric_blue"], bg=THEME["bg_color"])
-        self.label.pack(side=tk.LEFT, padx=5)
-        self.progress = ttk.Progressbar(self, mode='indeterminate', length=150)
-        self.progress.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-    
-    def start(self):
-        if not self.winfo_exists(): return
-        self.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
-        self.progress.start(15)
-        
-    def stop(self):
-        if not self.winfo_exists(): return
-        self.progress.stop()
-        self.pack_forget()
-        self.label.config(text="Thinking...")
-
-    def update_status(self, text):
-        if not self.winfo_exists(): return
-        self.label.config(text=text)

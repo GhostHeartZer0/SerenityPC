@@ -1606,38 +1606,16 @@ class SerenityAgent:
                         if "<speech>" in full_response_str:
                             in_speech_block = True
                             chunk = full_response_str.split("<speech>")[-1]
-                            if "</speech>" in chunk:
-                                speech_chunk = chunk.split("</speech>")[0]
-                                speech_buffer += speech_chunk
-                                if speech_chunk: ui.root.after(0, ui.update_console, speech_chunk)
-                                break
-                            else:
-                                speech_buffer += chunk
-                                if chunk: ui.root.after(0, ui.update_console, chunk)
+                            speech_buffer += chunk
+                            if chunk: ui.root.after(0, ui.update_console, chunk)
                     else:
-                        speech_buffer += token
-                        if "</speech>" in speech_buffer:
-                            actual_speech = speech_buffer.split("</speech>")[0]
-                            
-                            def trim_console(target_speech):
-                                try:
-                                    console_content = ui.console.get("1.0", tk.END).rstrip("\n")
-                                    for i in range(1, 10):
-                                        suffix = "</speech>"[:i]
-                                        if console_content.endswith(suffix):
-                                            ui.console.delete(f"end - {i+1} chars", tk.END)
-                                            break
-                                except Exception as e:
-                                    print(f"Error trimming console: {e}")
-                            
-                            token_speech_part = token.split("</speech>")[0]
-                            if token_speech_part:
-                                ui.root.after(0, ui.update_console, token_speech_part)
-                            
-                            speech_buffer = actual_speech
-                            ui.root.after(0, trim_console, actual_speech)
+                        if "</speech>" in token:
+                            chunk = token.replace("</speech>", "")
+                            speech_buffer += chunk
+                            if chunk: ui.root.after(0, ui.update_console, chunk)
                             break # Terminate stream parsing early
                         else:
+                            speech_buffer += token
                             ui.root.after(0, ui.update_console, token)
                         
                         # TTS Chunking Evaluator

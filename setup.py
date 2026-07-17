@@ -85,7 +85,6 @@ def install_engine(cuda_path, use_source=False, force_pypi=False):
     # We also disable AVX512 as it causes stability issues on hybrid architectures.
     cmake_args = (
         "-DGGML_CUDA=on "
-        "-DGGML_CUDA_FA_ALL_QUANTS=ON "
         "-DGGML_AVX512=OFF "
         "-DCMAKE_CXX_STANDARD=17 "
         "-DCMAKE_CUDA_STANDARD=17 "
@@ -97,7 +96,6 @@ def install_engine(cuda_path, use_source=False, force_pypi=False):
 
     env = os.environ.copy()
     env["CMAKE_ARGS"] = cmake_args
-    env["SKBUILD_CMAKE_ARGS"] = cmake_args
     env["FORCE_CMAKE"] = "1"
     scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
     if cuda_path:
@@ -113,7 +111,7 @@ def install_engine(cuda_path, use_source=False, force_pypi=False):
     local_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "llama-cpp-python-src")
     if os.path.exists(local_src) and not force_pypi:
         print(f"  > [!] Local custom engine source detected: {local_src}")
-        install_cmd = [sys.executable, "-m", "pip", "install", local_src, "--no-cache-dir", "--no-deps", "--upgrade", "--ignore-installed"]
+        install_cmd = [sys.executable, "-m", "pip", "install", local_src, "--no-cache-dir", "--no-deps", "--upgrade"]
     else:
         target_package = "llama-cpp-python==0.3.26"
         if use_source:
@@ -125,7 +123,7 @@ def install_engine(cuda_path, use_source=False, force_pypi=False):
             # Wrap in VS context to ensure compiler is found in system temp dir
             import tempfile
             bat_path = os.path.join(tempfile.gettempdir(), "temp_install.bat")
-            bat_content = f'call "{vcvars}"\n' + " ".join(f'"{x}"' if ' ' in x else x for x in install_cmd)
+            bat_content = f'call "{vcvars}"\n' + " ".join(install_cmd)
             with open(bat_path, "w") as f: f.write(bat_content)
             subprocess.check_call(["cmd.exe", "/c", bat_path], env=env)
             try:
@@ -134,58 +132,6 @@ def install_engine(cuda_path, use_source=False, force_pypi=False):
                 pass
         else:
             subprocess.check_call(install_cmd, env=env)
-
-        # --- Build llama-diffusion-cli from vendor source ---
-        if os.path.exists(local_src) and not force_pypi:
-            vendor_dir = os.path.join(local_src, "vendor", "llama.cpp")
-            if os.path.exists(vendor_dir):
-                print(f"\n  > [!] Building llama-diffusion-cli from vendor source...")
-                build_dir = os.path.join(vendor_dir, "build")
-                
-                # 1. CMake Configure
-                cmake_gen_cmd = ["cmake", "-S", vendor_dir, "-B", build_dir, "-DGGML_CUDA=ON"]
-                if cuda_root:
-                    cmake_gen_cmd.extend(["-T", f"cuda={cuda_root}"])
-                
-                # 2. CMake Build
-                cmake_build_cmd = ["cmake", "--build", build_dir, "-j", "--config", "Release", "--target", "llama-diffusion-cli"]
-                
-                def quote_arg(arg):
-                    if ' ' in arg:
-                        if arg.startswith("-T") and "=" in arg:
-                            prefix, path = arg.split("=", 1)
-                            return f'{prefix}="{path}"'
-                        return f'"{arg}"'
-                    return arg
-
-                if vcvars:
-                    bat_path = os.path.join(tempfile.gettempdir(), "temp_build_cli.bat")
-                    bat_content = f'call "{vcvars}"\n' + " ".join(quote_arg(x) for x in cmake_gen_cmd) + "\n" + " ".join(quote_arg(x) for x in cmake_build_cmd)
-                    with open(bat_path, "w") as f: f.write(bat_content)
-                    subprocess.check_call(["cmd.exe", "/c", bat_path], env=env)
-                    try: os.remove(bat_path)
-                    except: pass
-                else:
-                    subprocess.check_call(cmake_gen_cmd, env=env)
-                    subprocess.check_call(cmake_build_cmd, env=env)
-                
-                # 3. Copy Output to Tools
-                tools_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Tools")
-                os.makedirs(tools_dir, exist_ok=True)
-                    
-                exe_src = os.path.join(build_dir, "bin", "Release", "llama-diffusion-cli.exe")
-                exe_fallback = os.path.join(build_dir, "bin", "llama-diffusion-cli.exe")
-                target_exe = os.path.join(tools_dir, "llama-diffusion-cli.exe")
-                
-                if os.path.exists(exe_src):
-                    shutil.copy(exe_src, target_exe)
-                    print(f"  > [V] Copied llama-diffusion-cli.exe to {target_exe}")
-                elif os.path.exists(exe_fallback):
-                    shutil.copy(exe_fallback, target_exe)
-                    print(f"  > [V] Copied llama-diffusion-cli.exe to {target_exe}")
-                else:
-                    print(f"  > [X] Failed to find compiled llama-diffusion-cli.exe")
-        
         return True
     except Exception as e:
         print(f"Install failed: {e}")
@@ -217,8 +163,8 @@ def install_llama_cpp(is_source=False):
     # If we are doing a source install or local install
     if is_source or os.path.exists(local_src):
         # These are the critical flags for llama-cpp-python
-        env["CMAKE_ARGS"] = "-DGGML_CUDA=on -DGGML_CUDA_FA_ALL_QUANTS=ON" 
-        print("🛠️  Setting CMAKE_ARGS: -DGGML_CUDA=on -DGGML_CUDA_FA_ALL_QUANTS=ON")
+        env["CMAKE_ARGS"] = "-DGGML_CUDA=on" 
+        print("🛠️  Setting CMAKE_ARGS: -DGGML_CUDA=on")
 
     try:
         # We use subprocess.run with check=True to catch errors
@@ -294,20 +240,6 @@ def install_with_retry(command):
 
 def main():
     print("--- Serenity Apex: Hardware Initialization ---")
-    
-    # Localize temp and cache paths to bypass Windows Smart App Control (SAC)
-    workspace_dir = os.path.dirname(os.path.abspath(__file__))
-    tmp_dir = os.path.join(workspace_dir, "tmp")
-    cuda_cache_dir = os.path.join(workspace_dir, ".cuda_cache")
-    os.makedirs(tmp_dir, exist_ok=True)
-    os.makedirs(cuda_cache_dir, exist_ok=True)
-    
-    os.environ["TEMP"] = tmp_dir
-    os.environ["TMP"] = tmp_dir
-    os.environ["CUDA_CACHE_PATH"] = cuda_cache_dir
-    os.environ["TORCH_EXTENSIONS_DIR"] = os.path.join(tmp_dir, "torch_extensions")
-    os.environ["TRITON_CACHE_DIR"] = os.path.join(tmp_dir, "triton_cache")
-
     cuda_path = get_cuda_path()
     inject_cuda_path(cuda_path)
 

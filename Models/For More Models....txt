@@ -1,0 +1,12 @@
+If you wanna go bigger, 
+tell me your memory overhead and general purpose (optional), 
+and I'll upload a different model for you.
+Options:
+I have larger E4B models,
+26B models that are larger,
+gemma-4-31B models that match the size of my largest 26B,
+Qwen3.6 27B and 31B-A3B, 2.5, and 3.5.
+Codegemma-7b-it,
+some older gemma-3 models,
+and the Live mode's Intellicore, a 14GB t5gemma-4b-4b model.
+oh, and the .mmproj projector files needed for handling images and video.

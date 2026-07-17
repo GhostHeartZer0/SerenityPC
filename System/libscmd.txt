@@ -1,4 +1,0 @@
-This file lists the Python packages required to run the Serenity AI application.
-Install them by running: pip install -r requirements.txt
-jinja2
-nltk

@@ -1,52 +1,50 @@
 {
-    "main_window": "1227x823+208+188",
+    "main_window": "1203x784+-2+49",
     "model_paths": {
-        "fast": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
-        "search": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
-        "low": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
-        "med": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/26B-A4B/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
-        "high": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
-        "secret": "S:/LLM/gemma-4-unc/gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.i1-Q4_K_M.gguf",
-        "deep_cook": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
-        "vision_video": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
-        "vision_video_projector": "S:/LLM/gemma-4-12B/mmproj-F16.gguf",
-        "vision_video_deep": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        "fast": "S:/SerenityPC Compact Local AI/Models/gemma-4-E2B-it-IQ4_XS.gguf",
+        "search": "S:/SerenityPC Compact Local AI/Models/gemma-4-E2B-it-IQ4_XS.gguf",
+        "low": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
+        "med": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-IQ4_XS.gguf",
+        "high": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
+        "secret": "S:/SerenityPC Compact Local AI/Models/gemma-4-E2B-it-uncensored-Q4_K_M.gguf",
+        "deep_cook": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
+        "vision_video": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/gemma-4-E4B/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
+        "vision_video_projector": "",
+        "vision_video_deep": "",
         "vision_video_deep_projector": "",
-        "vision_multimodal": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
-        "vision_multimodal_projector": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/gemma-4-12b/mmproj-F16.gguf",
+        "vision_multimodal": "S:/SerenityPC/Models/gemma-4-E4B/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
+        "vision_multimodal_projector": "",
         "mid": "S:/SerenityPC/Models/gemma-4-26B MoE/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-        "Live": "C:\\Users\\ccrg6\\Desktop\\Desktop\\Hub\\SerenityPC\\Models\\gemma-4-26B MoE\\gemma-4-26B-A4B-it-MXFP4_MOE.gguf"
+        "Live": "C:\\Users\\ccrg6\\Desktop\\Desktop\\Hub\\SerenityPC\\Models\\gemma-4-26B MoE\\gemma-4-26B-A4B-it-UD-Q5_K_XL.gguf"
     },
     "gpu_layer_config": {
-        "fast": 99,
-        "search": 99,
-        "low": 5,
-        "med": 20,
-        "high": 99,
-        "secret": 6,
-        "deep_cook": 99,
-        "vision_video": 99,
+        "fast": -1,
+        "search": -1,
+        "low": -1,
+        "med": 8,
+        "high": 8,
+        "secret": 26,
+        "deep_cook": -1,
+        "vision_video": 14,
         "vision_video_deep": 14,
-        "vision_multimodal": 99,
-        "mid": 99,
-        "Live": 7
+        "vision_multimodal": 8,
+        "mid": 99
     },
     "context_size_config": {
         "fast": 32768,
-        "search": 32768,
+        "search": 65536,
         "low": 65536,
-        "med": 49152,
-        "high": 65536,
-        "secret": 32768,
-        "deep_cook": 98304,
-        "vision_video": 4096,
+        "med": 65536,
+        "high": 98304,
+        "secret": 131072,
+        "deep_cook": 65536,
+        "vision_video": 2048,
         "vision_video_deep": 4096,
-        "vision_multimodal": 32768,
-        "mid": 32768,
-        "Live": 32768
+        "vision_multimodal": 8192,
+        "mid": 32768
     },
     "temp_config": {
-        "fast": 0.9,
+        "fast": 0.8,
         "search": 0.8,
         "low": 0.8,
         "med": 0.8,
@@ -56,8 +54,7 @@
         "vision_video": 0.1,
         "vision_video_deep": 0.1,
         "vision_multimodal": 1.0,
-        "mid": 0.8,
-        "Live": 0.8
+        "mid": 0.8
     },
     "top_p_config": {
         "fast": 0.95,
@@ -70,25 +67,23 @@
         "vision_video": 0.9,
         "vision_video_deep": 0.9,
         "vision_multimodal": 0.95,
-        "mid": 0.95,
-        "Live": 0.95
+        "mid": 0.95
     },
     "min_p_config": {
-        "fast": 0.01,
+        "fast": 0.05,
         "search": 0.05,
         "low": 0.05,
         "med": 0.05,
-        "high": 0.1,
+        "high": 0.05,
         "secret": 0.05,
         "deep_cook": 0.05,
         "vision_video": 0.0,
         "vision_video_deep": 0.0,
         "vision_multimodal": 0.0,
-        "mid": 0.05,
-        "Live": 0.05
+        "mid": 0.05
     },
     "repeat_penalty_config": {
-        "fast": 1.0,
+        "fast": 1.1,
         "search": 1.1,
         "low": 1.1,
         "med": 1.1,
@@ -98,8 +93,7 @@
         "vision_video": 1.1,
         "vision_video_deep": 1.1,
         "vision_multimodal": 1.1,
-        "mid": 1.1,
-        "Live": 1.1
+        "mid": 1.1
     },
     "frequency_penalty_config": {
         "fast": 0.0,
@@ -112,8 +106,7 @@
         "vision_video": 0.0,
         "vision_video_deep": 0.0,
         "vision_multimodal": 0.0,
-        "mid": 0.0,
-        "Live": 0.0
+        "mid": 0.0
     },
     "presence_penalty_config": {
         "fast": 0.0,
@@ -128,18 +121,17 @@
         "vision_multimodal": 0.0
     },
     "stop_strings_config": {
-        "fast": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
+        "fast": "<|turn>, <turn|>, </turn>,<tool_call|>, <tool_response|>, Serenity:, <eos>",
         "search": "<|turn>, <turn|>, <tool_call|>, <tool_response|>, Serenity:, <eos>",
-        "low": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
+        "low": "<|turn>, <turn|>,  <tool_call|>, <tool_response|>, Serenity:, <eos>",
         "med": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
         "high": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
-        "secret": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
+        "secret": "<|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
         "deep_cook": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
         "vision_video": "[USER],User:,<|endoftext|>,<|im_end|>,###,<end_of_turn>,<|file_separator|>,<bos>,<eos>",
         "vision_video_deep": "[USER],User:,<|endoftext|>,<|im_end|>,###,<end_of_turn>,<|file_separator|>,<bos>,<eos>",
         "vision_multimodal": "[USER],User:,<|endoftext|>,<|im_end|>,###,<end_of_turn>,<|file_separator|>,<bos>,<eos>",
-        "mid": "<|endoftext|>,<end_of_turn>,<|file_separator|>,<eos>,<|turn>,<turn|>",
-        "Live": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>"
+        "mid": "<|endoftext|>,<end_of_turn>,<|file_separator|>,<eos>,<|turn>,<turn|>"
     },
     "n_batch_config": {
         "fast": 512,
@@ -152,8 +144,7 @@
         "vision_video": 512,
         "vision_video_deep": 512,
         "vision_multimodal": 512,
-        "mid": 512,
-        "Live": 512
+        "mid": 512
     },
     "top_k_config": {
         "fast": 64,
@@ -166,14 +157,13 @@
         "vision_video": 64,
         "vision_video_deep": 64,
         "vision_multimodal": 64,
-        "mid": 64,
-        "Live": 64
+        "mid": 64
     },
-    "sash_pos": 787,
+    "sash_pos": 756,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 6,
-    "max_persona_level": 7.0,
+    "active_persona_level": 4,
+    "max_persona_level": 5.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
     "sub_chunk_size": 8,
@@ -207,18 +197,18 @@
             "ctx": 65536
         },
         "T3": {
-            "name": "Level 7",
+            "name": "g4 xl-ctx -1",
             "stop": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
             "temp": 0.8,
             "top_p": 0.95,
             "min_p": 0.05,
             "rep": 1.1,
-            "pres": 0,
-            "freq": 0,
-            "top_k": 40,
+            "pres": 0.0,
+            "freq": 0.0,
+            "top_k": 64,
             "batch": 512,
-            "layers": 7,
-            "ctx": 32768
+            "layers": -1,
+            "ctx": 131072
         },
         "T5": {
             "name": "Qwen3.6",
@@ -235,17 +225,17 @@
             "ctx": 32768
         },
         "T8": {
-            "name": "Diffusiongemma",
-            "stop": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
-            "temp": 0.9,
+            "name": "lg-ctx 7",
+            "stop": "###, <endoftext|>, </turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, </think>, <eos>",
+            "temp": 0.8,
             "top_p": 0.95,
-            "min_p": 0.01,
-            "rep": 1.0,
+            "min_p": 0.05,
+            "rep": 1.1,
             "pres": 0.0,
             "freq": 0.0,
             "top_k": 64,
             "batch": 512,
-            "layers": -1,
+            "layers": 7,
             "ctx": 32768
         },
         "T6": {
@@ -291,17 +281,6 @@
             "ctx": 32768
         }
     },
-    "streaming_mode": "Buffered",
-    "max_token_ratio": 2,
-    "auto_vram_offload": false,
-    "speculative_drafting": false,
-    "history_lookup_mode": "targeted",
-    "k_cache_type": "fp16",
-    "v_cache_type": "fp16",
-    "hao_preset": "None",
-    "swa_kv_cache": "Auto",
-    "media_rendering": 1,
-    "history_usage": "current_window",
-    "ghost_mode": false,
-    "startup_count": 0
+    "streaming_mode": "Experimental Chunking",
+    "max_token_ratio": 4
 }
