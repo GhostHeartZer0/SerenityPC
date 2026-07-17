@@ -1,0 +1,89 @@
+Serenity AI - Easy Setup Guide
+(Updated for all features)
+
+This guide will walk you through setting up your AI chatbot on your Windows computer.
+
+---
+### OPTION 1: Automated Setup (Recommended)
+If you have Python, CUDA, and VS Build Tools installed:
+1. Double-click `setup_venv.bat` in this folder.
+2. The script will create a virtual environment and handle all compilation automatically.
+3. Once finished, use `run.bat` to launch.
+---
+
+Step 1: Install Required Software
+
+You need three main programs.
+
+Python (64-bit):
+
+Go to: https://www.python.org/downloads/windows/
+
+Download the "Windows installer (64-bit)" for Python 3.11.
+
+Run the installer. CRITICAL: On the first screen, check the box "Add python.exe to PATH".
+
+Click "Install Now".
+
+NVIDIA CUDA Toolkit:
+
+Go to: https://www.google.com/search?q=https://developer.nvidia.com/cuda-toolkit/archive
+
+Select the latest stable version (e.g., 12.5 or 13.0).
+
+Choose: Windows -> x86_64 -> 11 (or 10) -> exe (local).
+
+Download and run the installer using the "Express" option.
+
+Visual Studio Build Tools:
+
+Go to: https://www.google.com/search?q=https://visualstudio.microsoft.com/visual-studio-tools/
+
+Download the "Build Tools for Visual Studio".
+
+Run the installer. In the "Workloads" tab, check the box for "Desktop development with C++".
+
+Click "Install".
+
+Step 2: Install Python Libraries (The Hard Part)
+
+This part builds the "bridge" to your GPU.
+
+After installing all three programs above, REBOOT YOUR COMPUTER.
+
+Click the Start Menu and type: Developer Command Prompt
+
+Right-click on "Developer Command Prompt for VS" and select "Run as administrator".
+
+In the new black command window, type these commands one by one, pressing Enter after each:
+
+set CMAKE_ARGS=-DGGML_CUDA=on -A x64
+
+set FORCE_CMAKE=1
+
+pip install llama-cpp-python --force-reinstall --no-cache-dir
+
+This last command will take several minutes. It is compiling the library. This is normal.
+
+Step 3: Install Other Python Libraries
+
+In the same Developer Command Prompt, run this one last command to get all the other libraries for the main app and the live agent:
+
+pip install Pillow jinja2 psutil nvidia-ml-py pyttsx3 SpeechRecognition pystray
+
+Step 4: Ensure Model Compatibility
+Go to:
+https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF
+and download the proper one; Recommended VRAM overhead is half a gig, so go something like VRAM-0.5GB=max file size of the model. This goes in the "Models" Folder.
+
+Step 5: Run Serenity AI!
+
+Close the Developer Command Prompt.
+
+Go to your project folder (where main.py and run.bat are).
+
+Double-click run.bat to start the application.
+
+Click the "Settings" button in the app to select your Models. (leave the layer slider alone unless you get the idea)
+
+Click the "Begin!" button to load your model.
