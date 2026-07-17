@@ -1,2 +1,0 @@
-large prompt RAM TEST
-E4B-Q4_K_M
