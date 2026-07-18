@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 GhostHeartZer0 / SerenityAI Team
+Copyright (c) 2026 GhostHeartZer0 & Friends
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

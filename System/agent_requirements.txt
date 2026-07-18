@@ -1,3 +1,0 @@
-These are the Python libraries required for the Live Agent.
-Install them using: pip install -r agent_requirements.txt
-pystrayPillowSpeechRecognitionpyaudiopyttsx3
