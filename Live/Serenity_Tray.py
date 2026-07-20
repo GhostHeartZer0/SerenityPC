@@ -1,4 +1,38 @@
-import pystray, os, sys, subprocess, socket
+import os
+import tempfile
+
+# --- Localize Temp and Cache Paths ---
+_curr = os.path.abspath(__file__)
+while True:
+    _parent = os.path.dirname(_curr)
+    if _parent == _curr:
+        _workspace = os.path.dirname(os.path.abspath(__file__))
+        break
+    if os.path.exists(os.path.join(_parent, "serenity_resources.py")) or os.path.exists(os.path.join(_parent, ".git")):
+        _workspace = _parent
+        break
+    _curr = _parent
+
+_cache_dir = os.path.join(_workspace, ".serenity_cache")
+_temp_dir = os.path.join(_cache_dir, "temp")
+_cuda_dir = os.path.join(_cache_dir, "cuda")
+_triton_dir = os.path.join(_cache_dir, "triton")
+_torch_ext_dir = os.path.join(_cache_dir, "torch_extensions")
+_pip_dir = os.path.join(_cache_dir, "pip")
+
+for _d in [_temp_dir, _cuda_dir, _triton_dir, _torch_ext_dir, _pip_dir]:
+    os.makedirs(_d, exist_ok=True)
+
+os.environ["TEMP"] = _temp_dir
+os.environ["TMP"] = _temp_dir
+os.environ["TMPDIR"] = _temp_dir
+os.environ["CUDA_CACHE_PATH"] = _cuda_dir
+os.environ["TRITON_CACHE_DIR"] = _triton_dir
+os.environ["TORCH_EXTENSIONS_DIR"] = _torch_ext_dir
+os.environ["PIP_CACHE_DIR"] = _pip_dir
+tempfile.tempdir = _temp_dir
+
+import pystray, sys, subprocess, socket
 from datetime import datetime
 from PIL import Image
 
