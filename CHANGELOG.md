@@ -1,5 +1,23 @@
 # Changelog
 
+## Version 1.5.0 beta
+
+### Features & Improvements
+- **GGUF KV Cache Benchmark**: Integrated live KV cache memory benchmark on model load (calculates FP16 baseline vs active quantized bit-width memory, tokens/sec speedup ratio, and MB saved).
+- **Deep Cook Vision Pipeline**: Wired image routing to `vision_multimodal` and added `vision_deep` pending task execution post-model swap.
+- **Tool Parsing Overhaul**: Expanded tool call regex parsing in `_generation_worker_deep_cook` and `_run_tool_loop` to support `<execute_tool>`, `<executetool>`, `action:`, and normalized `readfile` mapping to `read_file`.
+- **Thought Channel & Prompt Hygiene**: Customized system prompt constraints and prefill handling for Gemma and Diffusion architectures to prevent invalid `<think>` tag insertions; added fallback extraction when LaTeX cleaning strips response text.
+- **UI & Controls**: Preserved Level 7 persona slider availability when Live diffusion models are active. Deferred History Archive menu rendering so initial button state accurately displays "Edit".
+
+### Known Issues
+- **Tool Execution Halts**: Incomplete or non-standard tool tag syntax can occasionally cause generation to halt.
+- **Qwen Low-Level Thought Drift**: Qwen models at low persona levels may process internal thoughts without delivering a final response turn.
+- **CodeGemma 7B IT Load Instability**: Loading CodeGemma 7B IT may fail or stall under specific VRAM configurations.
+- **Diffusion Denoising Visualizer**: Real-time visual feedback for diffusion denoising and time-grounding is currently under development.
+- **Debate Mode Multi-Round Stability**: Multi-round debates with deep cook enabled can experience response crashes.
+- **Markdown & Math Rendering Anomalies**: Complex markdown tables and math equations may occasionally misalign in the chat UI.
+- **Heavy VRAM Model Swaps**: Live model offloading and swapping can experience instability under tight GPU VRAM bounds.
+
 ## Version 1.4.0
 
 ### Features & Improvements

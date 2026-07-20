@@ -39,6 +39,6 @@
     "disable_fim_autoswap": true,
     "config_version": 6,
     "global_kv_cache": "f16",
-    "k_cache_type": "fp16",
-    "v_cache_type": "fp16"
+    "k_cache_type": "q8_0",
+    "v_cache_type": "q5_1"
 }

@@ -188,17 +188,25 @@ class WringerFramework:
         expert_count = 0
         expert_used_count = 0
         
-        # Method A: Try llama_cpp LlamaGGUFReader
+        # Method A: Try gguf / llama_cpp GGUFReader
         try:
-            from llama_cpp.llama_speculative import LlamaGGUFReader
-            reader = LlamaGGUFReader(model_path)
-            for field in reader.fields:
-                if field.name.endswith(".block_count"):
-                    total_layers = int(field.parts[0][0])
-                elif field.name.endswith(".expert_count"):
-                    expert_count = int(field.parts[0][0])
-                elif field.name.endswith(".expert_used_count"):
-                    expert_used_count = int(field.parts[0][0])
+            try:
+                from gguf import GGUFReader
+                reader = GGUFReader(model_path)
+            except Exception:
+                from llama_cpp.llama_speculative import LlamaGGUFReader
+                reader = LlamaGGUFReader(model_path)
+            
+            fields = reader.fields.values() if isinstance(getattr(reader, 'fields', None), dict) else getattr(reader, 'fields', [])
+            for field in fields:
+                field_name = getattr(field, 'name', '') or getattr(field, 'key', '')
+                parts = getattr(field, 'parts', [])
+                if field_name.endswith(".block_count") and parts:
+                    total_layers = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
+                elif field_name.endswith(".expert_count") and parts:
+                    expert_count = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
+                elif field_name.endswith(".expert_used_count") and parts:
+                    expert_used_count = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
         except Exception:
             pass
             
@@ -263,10 +271,8 @@ class WringerFramework:
         
         vram_per_layer = model_base_vram_mb / total_layers
         
-        if ctx_size <= 49152:
-            kv_cache_vram_mb = 3150.0
-        else:
-            kv_cache_vram_mb = (ctx_size / 49152) * 3150.0
+        raw_kv_est = (ctx_size / 49152) * 900.0
+        kv_cache_vram_mb = max(250.0, min(targeted_reserve_vram_mb * 0.35, raw_kv_est))
 
         available_weight_vram = targeted_reserve_vram_mb - kv_cache_vram_mb
         
