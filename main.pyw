@@ -1,5 +1,22 @@
 import os
 import sys
+
+# Localize TEMP, TMP, and compiler/cache directories to bypass Windows security restrictions
+_base_dir = os.path.dirname(os.path.abspath(__file__))
+_local_temp = os.path.join(_base_dir, ".temp")
+_local_cuda = os.path.join(_base_dir, ".cuda_cache")
+_local_triton = os.path.join(_base_dir, ".triton_cache")
+_local_torch = os.path.join(_base_dir, ".torch_extensions")
+
+for _d in [_local_temp, _local_cuda, _local_triton, _local_torch]:
+    os.makedirs(_d, exist_ok=True)
+
+os.environ["TEMP"] = _local_temp
+os.environ["TMP"] = _local_temp
+os.environ["CUDA_CACHE_PATH"] = _local_cuda
+os.environ["TRITON_CACHE_DIR"] = _local_triton
+os.environ["TORCH_EXTENSIONS_DIR"] = _local_torch
+
 import site
 import json
 import threading

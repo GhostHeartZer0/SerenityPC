@@ -4,5 +4,9 @@ pip uninstall llama-cpp-python -y
 del /s /q *.pyc
 del /s /q *.log
 for /d /r . %%d in (__pycache__) do @if exist "%%d" rd /s /q "%%d"
+if exist ".temp" rd /s /q ".temp"
+if exist ".cuda_cache" rd /s /q ".cuda_cache"
+if exist ".triton_cache" rd /s /q ".triton_cache"
+if exist ".torch_extensions" rd /s /q ".torch_extensions"
 echo [OK] Cache, Logs, and broken Backend purged.
 pause
