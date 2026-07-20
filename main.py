@@ -1126,7 +1126,9 @@ class ChatbotApp:
             # Show Unlocked Levels
             levels = [1, 2, 3, 4, 5]
             if self.max_persona_level >= 6: levels.append(6)
-            if self.live_agent_process and self.live_agent_process.poll() is None:
+            live_path = self.model_paths.get("Live", "")
+            is_live_diffusion = "diffusion" in live_path.lower() if live_path else False
+            if (self.live_agent_process and self.live_agent_process.poll() is None) or is_live_diffusion:
                 levels.append(7)
                 
             for lvl in levels:
@@ -1196,7 +1198,6 @@ class ChatbotApp:
         self.history_state["view"] = "content"
         self.history_state["current_path"] = path
         self.history_state["current_display_name"] = display_name
-        self._render_history_menu()
         
         self.past_history_view.config(state='normal')
         self.past_history_view.delete('1.0', tk.END)
@@ -1218,6 +1219,7 @@ class ChatbotApp:
             self.past_history_view.insert(tk.END, f"Error loading history: {e}")
             
         self.past_history_view.config(state='disabled')
+        self._render_history_menu()
 
     def _delete_current_archive(self):
         """Permanently delete the current history file and back out."""
@@ -1590,8 +1592,9 @@ class ChatbotApp:
         
         final_query = VisionHandler.prepare_vision_query(user_msg, is_deep_cook=True)
         
-        # Dual-VLM routing (Video only)
-        target_tier = "vision_video_deep"
+        # Dual-VLM routing (Video vs Image)
+        staged_type = staged.get("type", "image") if isinstance(staged, dict) else "image"
+        target_tier = "vision_video_deep" if staged_type == "video" else "vision_multimodal"
             
         self.state["last_vision_intent"] = target_tier
         
@@ -1627,7 +1630,7 @@ class ChatbotApp:
         queue = self.state.get("processing_queue", [])
         if not queue: queue = [staged["path"]]
         
-        threading.Thread(target=self._batch_vision_worker, args=("video", queue, user_msg, True), daemon=True).start()
+        threading.Thread(target=self._vision_deep_worker, args=(staged, user_msg), daemon=True).start()
         self.root.after(100, self.check_process_queue)
 
     def _vision_deep_worker(self, staged, user_msg):
@@ -2108,19 +2111,27 @@ class ChatbotApp:
         expert_count = 0
         expert_used_count = 0
         
-        # Method A: Try llama_cpp LlamaGGUFReader
+        # Method A: Try gguf / llama_cpp GGUFReader
         try:
-            from llama_cpp.llama_speculative import LlamaGGUFReader
-            reader = LlamaGGUFReader(model_path)
-            for field in reader.fields:
-                if field.name.endswith(".block_count"):
-                    total_layers = int(field.parts[0][0])
-                elif field.name.endswith(".expert_count"):
-                    expert_count = int(field.parts[0][0])
-                elif field.name.endswith(".expert_used_count"):
-                    expert_used_count = int(field.parts[0][0])
+            try:
+                from gguf import GGUFReader
+                reader = GGUFReader(model_path)
+            except Exception:
+                from llama_cpp.llama_speculative import LlamaGGUFReader
+                reader = LlamaGGUFReader(model_path)
+            
+            fields = reader.fields.values() if isinstance(getattr(reader, 'fields', None), dict) else getattr(reader, 'fields', [])
+            for field in fields:
+                field_name = getattr(field, 'name', '') or getattr(field, 'key', '')
+                parts = getattr(field, 'parts', [])
+                if field_name.endswith(".block_count") and parts:
+                    total_layers = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
+                elif field_name.endswith(".expert_count") and parts:
+                    expert_count = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
+                elif field_name.endswith(".expert_used_count") and parts:
+                    expert_used_count = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
         except Exception as e:
-            print(f"[DYNAMIC AUTO-OFFLOAD] LlamaGGUFReader failed: {e}. Falling back to binary parser.")
+            print(f"[DYNAMIC AUTO-OFFLOAD] GGUFReader failed: {e}. Falling back to binary parser.")
             
         # Method B: Fallback to binary parser (robust for any Python environment/LlamaCpp-python version)
         if total_layers == 0 or expert_count == 0:
@@ -2203,9 +2214,10 @@ class ChatbotApp:
         # Calculate the precise weight cost per layer for this specific quant
         vram_per_layer = model_base_vram_mb / total_layers
         
-        # 3. Dynamic KV Cache Footprint Estimation (SWA / Turbo3 Adjusted)
-        # Scales linearly based on context window target
-        kv_cache_vram_mb = max(250.0, (ctx_size / 49152) * 3150.0)
+        # 3. Dynamic KV Cache Footprint Estimation (Adjusted for Quantized KV / SWA / Flash Attention)
+        # 8-bit/4-bit quantized KV cache and SWA reduce footprint dramatically vs legacy FP16 estimates
+        raw_kv_est = (ctx_size / 49152) * 900.0
+        kv_cache_vram_mb = max(250.0, min(targeted_reserve_vram_mb * 0.35, raw_kv_est))
 
         # 4. Math: Allocate remaining VRAM budget to layers
         available_weight_vram = targeted_reserve_vram_mb - kv_cache_vram_mb
@@ -2662,61 +2674,62 @@ class ChatbotApp:
                     print(f"[APEX] VRAM Floor Check Failed: {e}")
 
             # --- GGUF KV Cache Benchmark ---
-            try:
-                print(f"[BENCHMARK] Running GGUF KV Cache Benchmark...")
-                start_b = time.time()
-                prompt = "Hello, how are you today?"
-                # Run completion of up to 100 tokens
-                res = model(
-                    prompt,
-                    max_tokens=100,
-                    temperature=0.3,
-                    top_p=0.95,
-                    stream=False
-                )
-                duration = time.time() - start_b
-                
-                # Get the number of generated tokens
-                choices = res.get("choices", [])
-                text = choices[0].get("text", "") if choices else ""
-                usage = res.get("usage", {})
-                num_tokens = usage.get("completion_tokens", 0) or max(1, len(text.split()))
-                
-                # Dynamically retrieve number of layers, heads, head dim from llama.cpp if available
-                # or fallback to typical sizes [Layers: 32, Heads: 32, Head_Dim: 128]
-                num_layers = 32
-                num_heads = 32
-                head_dim = 128
-                
-                elements = num_layers * num_heads * head_dim * num_tokens * 2 # Key + Value
-                
-                # Calculate baseline FP16 vs current active quantization cache memory
-                base_mem = (elements * 16) / (8 * 1024 * 1024) # 16-bit calculation
-                
-                # Map active t_k to bit-width
-                # 0 -> f32/f16 (16-bit), 1 -> q8_0 (8-bit), 2 -> q4_0 (4-bit), 3 -> q4_1 (4.5-bit), etc.
-                active_bits = 16
-                if t_k == 1 or t_k == 8:
-                    active_bits = 8
-                elif t_k == 2 or t_k == 3 or t_k == 4:
-                    active_bits = 4
-                elif t_k == 6 or t_k == 7:
-                    active_bits = 5
-                
-                quant_mem = (elements * active_bits) / (8 * 1024 * 1024)
-                
-                print(f"--- THE VERDICT ---")
-                print(f"Baseline (FP16) Cache: {base_mem:.2f} MB")
-                print(f"Active Quantized ({active_bits}-bit) Cache: {quant_mem:.2f} MB")
-                print(f"Speedup Ratio: {num_tokens / max(0.01, duration):.2f} tokens/sec")
-                print(f"Memory Saved: {base_mem - quant_mem:.2f} MB")
-                
-                self.process_queue.put({
-                    "status": "diag_log_update",
-                    "content": f"[BENCHMARK] Baseline: {base_mem:.2f}MB | Active Quantized ({active_bits}-bit): {quant_mem:.2f}MB | Speed: {num_tokens / max(0.01, duration):.2f} tok/s"
-                })
-            except Exception as be:
-                print(f"[BENCHMARK] GGUF Benchmark failed: {be}")
+            if not is_diffusion:
+                try:
+                    print(f"[BENCHMARK] Running GGUF KV Cache Benchmark...")
+                    start_b = time.time()
+                    prompt = "Hello, how are you today?"
+                    # Run completion of up to 100 tokens
+                    res = model(
+                        prompt,
+                        max_tokens=100,
+                        temperature=0.3,
+                        top_p=0.95,
+                        stream=False
+                    )
+                    duration = time.time() - start_b
+                    
+                    # Get the number of generated tokens
+                    choices = res.get("choices", [])
+                    text = choices[0].get("text", "") if choices else ""
+                    usage = res.get("usage", {})
+                    num_tokens = usage.get("completion_tokens", 0) or max(1, len(text.split()))
+                    
+                    # Dynamically retrieve number of layers, heads, head dim from llama.cpp if available
+                    # or fallback to typical sizes [Layers: 32, Heads: 32, Head_Dim: 128]
+                    num_layers = 32
+                    num_heads = 32
+                    head_dim = 128
+                    
+                    elements = num_layers * num_heads * head_dim * num_tokens * 2 # Key + Value
+                    
+                    # Calculate baseline FP16 vs current active quantization cache memory
+                    base_mem = (elements * 16) / (8 * 1024 * 1024) # 16-bit calculation
+                    
+                    # Map active t_k to bit-width
+                    # 0 -> f32/f16 (16-bit), 1 -> q8_0 (8-bit), 2 -> q4_0 (4-bit), 3 -> q4_1 (4.5-bit), etc.
+                    active_bits = 16
+                    if t_k == 1 or t_k == 8:
+                        active_bits = 8
+                    elif t_k == 2 or t_k == 3 or t_k == 4:
+                        active_bits = 4
+                    elif t_k == 6 or t_k == 7:
+                        active_bits = 5
+                    
+                    quant_mem = (elements * active_bits) / (8 * 1024 * 1024)
+                    
+                    print(f"--- THE VERDICT ---")
+                    print(f"Baseline (FP16) Cache: {base_mem:.2f} MB")
+                    print(f"Active Quantized ({active_bits}-bit) Cache: {quant_mem:.2f} MB")
+                    print(f"Speedup Ratio: {num_tokens / max(0.01, duration):.2f} tokens/sec")
+                    print(f"Memory Saved: {base_mem - quant_mem:.2f} MB")
+                    
+                    self.process_queue.put({
+                        "status": "diag_log_update",
+                        "content": f"[BENCHMARK] Baseline: {base_mem:.2f}MB | Active Quantized ({active_bits}-bit): {quant_mem:.2f}MB | Speed: {num_tokens / max(0.01, duration):.2f} tok/s"
+                    })
+                except Exception as be:
+                    print(f"[BENCHMARK] GGUF Benchmark failed: {be}")
 
             if self.stop_process.is_set(): return
             self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
@@ -2769,11 +2782,18 @@ class ChatbotApp:
                     sys_clean += "\n[PERMISSION]: You are an autonomous agent. You have PERMISSION to execute any tool call immediately when needed. Do NOT ask for permission or wait for further instructions before calling a tool."
                 
                 # Level 3+ or Deep Cook need the thought channel constraint
-                if self.active_persona_level >= 3 or self.state.get("deep_cook"):
-                    sys_clean += (
-                        "\n[CRITICAL RESTRICTION]: You MUST begin your response by opening the thought channel. Complete ALL internal analysis, planning, and tone-checks inside that channel before closing it."
-                        "\nNote: The thought channel is already opened for you with '<think>'. Write your thoughts directly, and close the channel with '</think>' when transitioning to the final response. DO NOT output '</think>' early. Keep thoughts extremely concise, direct, and structured. Do not repeat instructions, constraints, or write conversational filler (e.g., 'Wait', 'Actually', 'Let me see') in your thoughts. Cut straight to analyzing the input and planning actions."
-                    )
+                is_diffusion = "diffusion" in self.model_path.lower()
+                if not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
+                    if is_gemma:
+                        sys_clean += (
+                            "\n[CRITICAL RESTRICTION]: Complete ALL internal analysis, planning, and tone-checks inside your thought channel before transitioning to the final response."
+                            " Keep thoughts extremely concise, direct, and structured."
+                        )
+                    else:
+                        sys_clean += (
+                            "\n[CRITICAL RESTRICTION]: You MUST begin your response by opening the thought channel. Complete ALL internal analysis, planning, and tone-checks inside that channel before closing it."
+                            "\nNote: The thought channel is already opened for you with '<think>'. Write your thoughts directly, and close the channel with '</think>' when transitioning to the final response. DO NOT output '</think>' early. Keep thoughts extremely concise, direct, and structured. Do not repeat instructions, constraints, or write conversational filler (e.g., 'Wait', 'Actually', 'Let me see') in your thoughts. Cut straight to analyzing the input and planning actions."
+                        )
                 elif self.active_persona_level == 2:
                     sys_clean += "\n[SEARCH PROTOCOL]: If you need information, output a tool call IMMEDIATELY. Do not explain your reasoning unless the search fails."
                 
@@ -2832,7 +2852,7 @@ class ChatbotApp:
                 
                 # Start the model's response turn
                 prompt_str += "<|turn>model\n"
-                if self.active_persona_level >= 3 or self.state.get("deep_cook"):
+                if not is_gemma and not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
                     prompt_str += "<think>\n"
 
                             
@@ -3024,7 +3044,10 @@ class ChatbotApp:
                 # 4. LaTeX Artifact Removal
                 final_answer = self._clean_latex_artifacts(final_answer.strip())
                 if not final_answer and full_resp:
-                    final_answer = full_resp.strip() # Fallback to raw if hygiene nuked it
+                    raw_fallback = full_resp.strip()
+                    for tag in structural_tags:
+                        raw_fallback = re.sub(tag, '', raw_fallback, flags=re.IGNORECASE | re.DOTALL)
+                    final_answer = raw_fallback.strip()
                 
                 # 5. Delivery
                 self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
@@ -3298,8 +3321,8 @@ class ChatbotApp:
                     # Standard OpenAI-style tool calls handled by _run_tool_loop
                     result_text = self._run_tool_loop(result_text, prompt, params)
                 else:
-                    # Gemma-4 manual tool parsing
-                    if any(tag in result_text for tag in ["<ctrl42>call:", "<|tool_call>call:", "<|tool>call:", "call:", "action:"]):
+                    # Gemma-4 manual tool parsing (Support all Gemma-4 execute_tool / readfile / action syntaxes)
+                    if any(tag in result_text.lower() for tag in ["<ctrl42>call:", "<|tool_call>call:", "<|tool>call:", "call:", "action:", "<execute_tool>", "<executetool>", "read_file", "readfile"]):
                         self.process_queue.put({"status": "thinking_status", "content": "Deep Cook: Executing Sub-Task Tool..."})
                         result_text = self._run_tool_loop(result_text, prompt_str, params)
 
@@ -4340,12 +4363,14 @@ class ChatbotApp:
         if depth > 3:
             return f"{full_resp}\n\n[SYSTEM]: Tool recursion limit reached. Truncating response."
 
-        # Added support for Gemma-4 'action' tags and missing 'call:' prefixes
-        call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:)([\w_]+)\s*\{(.*?)\}', full_resp, re.DOTALL | re.IGNORECASE)
+        # Added support for Gemma-4 'action', 'execute_tool', 'executetool' tags and missing 'call:' prefixes
+        call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
         if not call_match:
             return full_resp
 
         call_name = call_match.group(1).strip()
+        if call_name.lower() in ["readfile", "read_file"]:
+            call_name = "read_file"
         args_raw = call_match.group(2).strip()
         
         # Robust Argument Parsing (Template-Aware)
@@ -5195,6 +5220,7 @@ class ChatbotApp:
             t = self.pending_task; self.pending_task = None
             if t["type"] == "deep_cook": self.send_deep_cook_message(t["message"], True)
             elif t["type"] == "chat": self.send_message(t["message"], True)
+            elif t["type"] == "vision_deep": self._execute_vision_deep_cook(t["staged"], t["message"])
             elif t["type"] == "vision_standard": 
                 self.initiate_vision_analysis(t["staged"]["type"], t["staged"]["path"], t["message"])
             elif t["type"] == "synthesis_finalize":
@@ -5690,7 +5716,9 @@ class ChatbotApp:
         
         # --- Level 7 Auto-Hide on Offload ---
         if self.depth_slider.cget('to') == 7:
-            if not (self.live_agent_process and self.live_agent_process.poll() is None):
+            live_path = self.model_paths.get("Live", "")
+            is_live_diffusion = "diffusion" in live_path.lower() if live_path else False
+            if not (self.live_agent_process and self.live_agent_process.poll() is None or is_live_diffusion):
                 new_max = 6 if self.max_persona_level >= 6 else int(self.max_persona_level)
                 self.depth_slider.config(to=max(new_max, 5))
                 if self.active_persona_level == 7:

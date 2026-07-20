@@ -83,55 +83,78 @@ def calculate_dynamic_gpu_layers(model_path: str, ctx_size: int, targeted_reserv
     expert_count = 0
     expert_used_count = 0
 
-    # Try reading via binary parser to extract block count and MoE metadata
+    # Method A: Try gguf / llama_cpp GGUFReader
     try:
-        with open(model_path, "rb") as f:
-            magic = f.read(4)
-            if magic == b"GGUF":
-                _version = struct.unpack("<I", f.read(4))[0]
-                _tensor_count = struct.unpack("<Q", f.read(8))[0]
-                kv_count = struct.unpack("<Q", f.read(8))[0]
-
-                def read_str(fo):
-                    length = struct.unpack("<Q", fo.read(8))[0]
-                    return fo.read(length).decode("utf-8", errors="ignore")
-
-                def skip_value(fo, vt):
-                    if vt in [0, 1, 7]: fo.read(1)
-                    elif vt in [2, 3]: fo.read(2)
-                    elif vt in [4, 5, 6]: fo.read(4)
-                    elif vt in [10, 11, 12]: fo.read(8)
-                    elif vt == 8:
-                        length = struct.unpack("<Q", fo.read(8))[0]
-                        fo.read(length)
-                    elif vt == 9:
-                        item_type = struct.unpack("<I", fo.read(4))[0]
-                        array_len = struct.unpack("<Q", fo.read(8))[0]
-                        for _ in range(array_len):
-                            skip_value(fo, item_type)
-
-                for _ in range(kv_count):
-                    key = read_str(f)
-                    val_type = struct.unpack("<I", f.read(4))[0]
-                    if key.endswith(".block_count"):
-                        if val_type == 4: total_layers = struct.unpack("<I", f.read(4))[0]
-                        elif val_type == 5: total_layers = struct.unpack("<i", f.read(4))[0]
-                        elif val_type == 10: total_layers = struct.unpack("<Q", f.read(8))[0]
-                        elif val_type == 11: total_layers = struct.unpack("<q", f.read(8))[0]
-                    elif key.endswith(".expert_count"):
-                        if val_type == 4: expert_count = struct.unpack("<I", f.read(4))[0]
-                        elif val_type == 5: expert_count = struct.unpack("<i", f.read(4))[0]
-                        elif val_type == 10: expert_count = struct.unpack("<Q", f.read(8))[0]
-                        elif val_type == 11: expert_count = struct.unpack("<q", f.read(8))[0]
-                    elif key.endswith(".expert_used_count"):
-                        if val_type == 4: expert_used_count = struct.unpack("<I", f.read(4))[0]
-                        elif val_type == 5: expert_used_count = struct.unpack("<i", f.read(4))[0]
-                        elif val_type == 10: expert_used_count = struct.unpack("<Q", f.read(8))[0]
-                        elif val_type == 11: expert_used_count = struct.unpack("<q", f.read(8))[0]
-                    else:
-                        skip_value(f, val_type)
+        try:
+            from gguf import GGUFReader
+            reader = GGUFReader(model_path)
+        except Exception:
+            from llama_cpp.llama_speculative import LlamaGGUFReader
+            reader = LlamaGGUFReader(model_path)
+        
+        fields = reader.fields.values() if isinstance(getattr(reader, 'fields', None), dict) else getattr(reader, 'fields', [])
+        for field in fields:
+            field_name = getattr(field, 'name', '') or getattr(field, 'key', '')
+            parts = getattr(field, 'parts', [])
+            if field_name.endswith(".block_count") and parts:
+                total_layers = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
+            elif field_name.endswith(".expert_count") and parts:
+                expert_count = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
+            elif field_name.endswith(".expert_used_count") and parts:
+                expert_used_count = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
     except Exception:
         pass
+
+    # Method B: Fallback to binary parser
+    if total_layers == 0 or expert_count == 0:
+        try:
+            with open(model_path, "rb") as f:
+                magic = f.read(4)
+                if magic == b"GGUF":
+                    _version = struct.unpack("<I", f.read(4))[0]
+                    _tensor_count = struct.unpack("<Q", f.read(8))[0]
+                    kv_count = struct.unpack("<Q", f.read(8))[0]
+
+                    def read_str(fo):
+                        length = struct.unpack("<Q", fo.read(8))[0]
+                        return fo.read(length).decode("utf-8", errors="ignore")
+
+                    def skip_value(fo, vt):
+                        if vt in [0, 1, 7]: fo.read(1)
+                        elif vt in [2, 3]: fo.read(2)
+                        elif vt in [4, 5, 6]: fo.read(4)
+                        elif vt in [10, 11, 12]: fo.read(8)
+                        elif vt == 8:
+                            length = struct.unpack("<Q", fo.read(8))[0]
+                            fo.read(length)
+                        elif vt == 9:
+                            item_type = struct.unpack("<I", fo.read(4))[0]
+                            array_len = struct.unpack("<Q", fo.read(8))[0]
+                            for _ in range(array_len):
+                                skip_value(fo, item_type)
+
+                    for _ in range(kv_count):
+                        key = read_str(f)
+                        val_type = struct.unpack("<I", f.read(4))[0]
+                        if key.endswith(".block_count"):
+                            if val_type == 4: total_layers = struct.unpack("<I", f.read(4))[0]
+                            elif val_type == 5: total_layers = struct.unpack("<i", f.read(4))[0]
+                            elif val_type == 10: total_layers = struct.unpack("<Q", f.read(8))[0]
+                            elif val_type == 11: total_layers = struct.unpack("<q", f.read(8))[0]
+                        elif key.endswith(".expert_count"):
+                            if val_type == 4: expert_count = struct.unpack("<I", f.read(4))[0]
+                            elif val_type == 5: expert_count = struct.unpack("<i", f.read(4))[0]
+                            elif val_type == 10: expert_count = struct.unpack("<Q", f.read(8))[0]
+                            elif val_type == 11: expert_count = struct.unpack("<q", f.read(8))[0]
+                        elif key.endswith(".expert_used_count"):
+                            if val_type == 4: expert_used_count = struct.unpack("<I", f.read(4))[0]
+                            elif val_type == 5: expert_used_count = struct.unpack("<i", f.read(4))[0]
+                            elif val_type == 10: expert_used_count = struct.unpack("<Q", f.read(8))[0]
+                            elif val_type == 11: expert_used_count = struct.unpack("<q", f.read(8))[0]
+                        else:
+                            skip_value(f, val_type)
+        except Exception:
+            pass
 
     if total_layers == 0:
         total_layers = 32
@@ -140,7 +163,8 @@ def calculate_dynamic_gpu_layers(model_path: str, ctx_size: int, targeted_reserv
     model_base_vram_mb = file_size_bytes / (1024 * 1024)
     vram_per_layer = model_base_vram_mb / total_layers
 
-    kv_cache_vram_mb = 3150.0 if ctx_size <= 49152 else (ctx_size / 49152) * 3150.0
+    raw_kv_est = (ctx_size / 49152) * 900.0
+    kv_cache_vram_mb = max(250.0, min(targeted_reserve_vram_mb * 0.35, raw_kv_est))
     available_weight_vram = targeted_reserve_vram_mb - kv_cache_vram_mb
 
     if available_weight_vram <= 0:
