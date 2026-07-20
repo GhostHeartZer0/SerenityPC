@@ -1,6 +1,15 @@
 import sys
-import subprocess
 import os
+
+# --- Cache Localization ---
+try:
+    if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from System import localize_cache
+except Exception as e:
+    print(f"Cache localization failed to load: {e}")
+
+import subprocess
 import time
 import traceback
 import ctypes

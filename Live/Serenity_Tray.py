@@ -1,4 +1,16 @@
-import pystray, os, sys, subprocess, socket
+import os, sys
+
+# --- Cache Localization ---
+try:
+    live_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(live_dir)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    from System import localize_cache
+except Exception as e:
+    print(f"Cache localization failed to load: {e}")
+
+import pystray, subprocess, socket
 from datetime import datetime
 from PIL import Image
 

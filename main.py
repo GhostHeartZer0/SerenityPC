@@ -1,7 +1,18 @@
+import sys
+import os
+
+# --- Cache Localization ---
+try:
+    if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from System import localize_cache
+except Exception as e:
+    print(f"Cache localization failed to load: {e}")
+
 import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox, filedialog, ttk
 import tkinter.font as tkFont
-import threading, traceback, sys, os, json, zlib, time, queue, subprocess, re, atexit, webbrowser, requests, io, faulthandler, struct
+import threading, traceback, json, zlib, time, queue, subprocess, re, atexit, webbrowser, requests, io, faulthandler, struct
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 if TYPE_CHECKING:
     from tkinter import Canvas, Label, Button, Frame, Text, Scale

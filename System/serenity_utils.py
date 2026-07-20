@@ -1,10 +1,20 @@
 # serenity_utils.py
 # Helper classes for logging, UI components, and error handling.
 
-import tkinter as tk
-from tkinter import messagebox
 import sys
 import os
+
+# --- Cache Localization ---
+try:
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    from System import localize_cache
+except Exception as e:
+    print(f"Cache localization failed to load: {e}")
+
+import tkinter as tk
+from tkinter import messagebox
 import subprocess
 import time
 import traceback

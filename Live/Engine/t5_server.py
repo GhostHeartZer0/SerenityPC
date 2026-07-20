@@ -1,4 +1,17 @@
-import torch, os, sys, json, subprocess, threading, signal, psutil, logging, uvicorn, time
+import os, sys
+
+# --- Cache Localization ---
+try:
+    engine_root = os.path.dirname(os.path.abspath(__file__))
+    live_root = os.path.dirname(engine_root)
+    base_dir = os.path.dirname(live_root)
+    if base_dir not in sys.path:
+        sys.path.insert(0, base_dir)
+    from System import localize_cache
+except Exception as e:
+    print(f"Cache localization failed to load: {e}")
+
+import torch, json, subprocess, threading, signal, psutil, logging, uvicorn, time
 try:
     import winsound
 except ImportError:
@@ -21,8 +34,6 @@ import io
 ENGINE_ROOT = os.path.dirname(os.path.abspath(__file__))
 LIVE_ROOT = os.path.dirname(ENGINE_ROOT)
 BASE_DIR = os.path.dirname(LIVE_ROOT)
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
 
 from System.kv_manager import KVManager
 from serenity_resources import TRI_ATTENTION_ENABLED, TRI_ATTENTION_BUDGET
