@@ -195,16 +195,27 @@ class GemmaToolRegistry:
                     os.makedirs(scratch_dir, exist_ok=True)
                     temp_script = os.path.join(scratch_dir, "temp_viewer.py")
                     
+                    import re
+                    clean_prompt = re.sub(r'<\|"?|\\"?\|?>?|<\||\|>', '', prompt).strip(' "<|>\\')
+                    
                     script_content = f"""import tkinter as tk
+from tkinter import scrolledtext
+
 root = tk.Tk()
 root.overrideredirect(True)
 root.attributes('-topmost', True)
-root.attributes('-alpha', 0.9)
-root.geometry("400x300+100+100")
+root.attributes('-alpha', 0.95)
+root.geometry("500x350+100+100")
 root.config(bg='black')
-tk.Label(root, text='[Serenity Image / Diagram Viewer]', fg='#00ffcc', bg='black', font=('Consolas', 10)).pack(pady=10)
-tk.Label(root, text={repr(prompt)[:500]}, fg='white', bg='black', wraplength=380).pack(pady=10)
-tk.Button(root, text='[X] Close', command=root.destroy, bg='#222', fg='white').pack(side=tk.BOTTOM, pady=10)
+
+tk.Label(root, text='[Serenity Image / Diagram Viewer]', fg='#00ffcc', bg='black', font=('Consolas', 10, 'bold')).pack(pady=5)
+
+txt = scrolledtext.ScrolledText(root, fg='white', bg='#111111', font=('Consolas', 9), insertbackground='white', borderwidth=0)
+txt.insert(tk.END, {repr(clean_prompt)})
+txt.config(state=tk.DISABLED)
+txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+tk.Button(root, text='[X] Close', command=root.destroy, bg='#222', fg='white', relief=tk.FLAT).pack(side=tk.BOTTOM, pady=5)
 root.mainloop()"""
                     with open(temp_script, "w", encoding="utf-8") as f:
                         f.write(script_content)
