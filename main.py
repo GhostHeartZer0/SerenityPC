@@ -1376,9 +1376,10 @@ class ChatbotApp:
         # Grid Layout: Left Column (GPU/VRAM) | Right Column (System/CPU)
         stats_to_show = [
             ("GPU Use", "GPU Use"), ("CPU", "CPU Use"),
-            ("VRAM", "VRAM"), ("RAM", "Total RAM"),
-            ("Shared VRAM", "Shared VRAM"), ("Disk", "Disk Use"),
-            ("GPU Temp", "GPU Temp"), ("Power", "Power")
+            ("VRAM", "VRAM"), ("VRAM", "Total VRAM"),
+            ("Shared VRAM", "Shared VRAM"), ("Total RAM", "Total RAM"),
+            ("GPU Temp", "GPU Temp"), ("CPU Temp", "CPU Temp"),
+            ("Power", "GPU Power"), ("CPU Power", "CPU Power")
         ] if SYSTEM_MONITOR_LOADED else [("CPU", "CPU"), ("RAM", "RAM")]
         
         for i, (key, label) in enumerate(stats_to_show):
