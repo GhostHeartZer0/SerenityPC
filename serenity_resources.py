@@ -20,7 +20,7 @@ LIVE_ENGINE_SCRIPT = os.path.join(LIVE_DIR, "Engine", "t5_server.py")
 
 # --- LIVE ENGINE CONFIG ---
 SERENITY_LIVE_URL = "http://127.0.0.1:8001/analyze"
-SERENITY_LIVE_KEY = "serenity-alpha-core-77X"
+SERENITY_LIVE_KEY = "REVOKED"
 
 # --- UI THEME ---
 THEME = {
