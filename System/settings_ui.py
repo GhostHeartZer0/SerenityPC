@@ -392,44 +392,24 @@ def open_settings_window(app):
         for v, t in [(0, "None"), (1, "Inline"), (2, "Popup")]:
             tk.Radiobutton(media_frame, text=t, variable=media_var, value=v, bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=5)
 
-        tier_grid = tk.Frame(main, bg=THEME["bg_color"])
-        tier_grid.pack(fill=tk.X, pady=10)
-        tier_grid.grid_columnconfigure(0, weight=1); tier_grid.grid_columnconfigure(1, weight=1)
-        tiers = ["fast", "search", "low", "med", "high", "secret", "Live", "deep_cook"]
-        for i, tier in enumerate(tiers):
-            r, c = divmod(i, 2)
-            _create_tier_block(tier_grid, tier, r, c)
-
-        over_lf = tk.LabelFrame(tier_grid, text="Global Overrides", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"), pady=5)
-        over_lf.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=10, pady=5)
+        over_lf = tk.LabelFrame(main, text="Global Engine & Memory Overrides", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"), pady=5)
+        over_lf.pack(fill=tk.X, padx=10, pady=5)
         
-        k_cache_var = tk.StringVar(value=app.config.get("k_cache_type", "q8_0"))
-        v_cache_var = tk.StringVar(value=app.config.get("v_cache_type", "q4_0"))
-        
-        kv_frame = tk.Frame(over_lf, bg=THEME["bg_color"])
-        kv_frame.pack(anchor="w", padx=10, pady=5)
-        
-        tk.Label(kv_frame, text="K Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=0, column=0, sticky="w", pady=2)
-        k_cache_dropdown = ttk.Combobox(kv_frame, textvariable=k_cache_var, values=["fp16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "turbo3_tcq", "turbo2_tcq"], state="readonly", width=12)
-        k_cache_dropdown.grid(row=0, column=1, padx=5, pady=2)
-        
-        tk.Label(kv_frame, text="V Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=1, column=0, sticky="w", pady=2)
-        v_cache_dropdown = ttk.Combobox(kv_frame, textvariable=v_cache_var, values=["fp16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "turbo3_tcq", "turbo2_tcq"], state="readonly", width=12)
-        v_cache_dropdown.grid(row=1, column=1, padx=5, pady=2)
+        over_subgrid = tk.Frame(over_lf, bg=THEME["bg_color"])
+        over_subgrid.pack(fill=tk.X, padx=5, pady=5)
+        over_subgrid.grid_columnconfigure(0, weight=1)
+        over_subgrid.grid_columnconfigure(1, weight=1)
 
-        tk.Label(kv_frame, text="History Lookup:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=2, column=0, sticky="w", pady=2)
-        history_lookup_var = tk.StringVar(value=app.config.get("history_lookup_mode", "targeted"))
-        history_lookup_dropdown = ttk.Combobox(kv_frame, textvariable=history_lookup_var, values=["targeted", "model", "level", "all"], state="readonly", width=12)
-        history_lookup_dropdown.grid(row=2, column=1, padx=5, pady=2)
+        left_over_col = tk.Frame(over_subgrid, bg=THEME["bg_color"])
+        left_over_col.grid(row=0, column=0, sticky="nsew", padx=5)
 
-        tk.Label(kv_frame, text="History Usage:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=3, column=0, sticky="w", pady=2)
-        history_usage_var = tk.StringVar(value=app.config.get("history_usage", "all"))
-        history_usage_dropdown = ttk.Combobox(kv_frame, textvariable=history_usage_var, values=["all", "current_window", "off"], state="readonly", width=12)
-        history_usage_dropdown.grid(row=3, column=1, padx=5, pady=2)
+        right_over_col = tk.Frame(over_subgrid, bg=THEME["bg_color"])
+        right_over_col.grid(row=0, column=1, sticky="nsew", padx=5)
 
+        # Left Sub-Column Controls
         hao_var = tk.StringVar(value=app.config.get("hao_preset", "exps=CPU"))
-        tk.Label(over_lf, text="HAO Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
-        hao_f = tk.Frame(over_lf, bg=THEME["bg_color"]); hao_f.pack(anchor="w", padx=10)
+        tk.Label(left_over_col, text="HAO Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(2,0))
+        hao_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); hao_f.pack(anchor="w", padx=10)
         for o in ["None", "exps=CPU"]:
             tk.Radiobutton(hao_f, text=o, variable=hao_var, value=o, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
@@ -437,8 +417,8 @@ def open_settings_window(app):
                            activebackground=THEME["electric_blue"], width=10).pack(side=tk.LEFT, padx=2)
 
         swa_var = tk.StringVar(value=app.config.get("swa_kv_cache", "Auto"))
-        tk.Label(over_lf, text="SWA Offload:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
-        swa_f = tk.Frame(over_lf, bg=THEME["bg_color"]); swa_f.pack(anchor="w", padx=10)
+        tk.Label(left_over_col, text="SWA Offload:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        swa_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); swa_f.pack(anchor="w", padx=10)
         for o in ["Auto", "CPU Only"]:
             tk.Radiobutton(swa_f, text=o, variable=swa_var, value=o, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
@@ -446,8 +426,8 @@ def open_settings_window(app):
                            activebackground=THEME["electric_blue"], width=10).pack(side=tk.LEFT, padx=2)
 
         stream_var = tk.StringVar(value=app.state.get("streaming_mode", "Buffered"))
-        tk.Label(over_lf, text="Streaming Behavior:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
-        stream_f = tk.Frame(over_lf, bg=THEME["bg_color"]); stream_f.pack(anchor="w", padx=10)
+        tk.Label(left_over_col, text="Streaming Behavior:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        stream_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); stream_f.pack(anchor="w", padx=10)
         for o in ["Real-time", "Buffered", "Experimental Chunking", "Mass Dump"]:
             tk.Radiobutton(stream_f, text=o, variable=stream_var, value=o, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
@@ -455,13 +435,46 @@ def open_settings_window(app):
                            activebackground=THEME["electric_blue"], width=0).pack(side=tk.LEFT, padx=5, pady=2)
 
         ratio_var = tk.IntVar(value=app.config.get("max_token_ratio", 4))
-        tk.Label(over_lf, text="Response Headroom (ctx/N):", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
-        ratio_f = tk.Frame(over_lf, bg=THEME["bg_color"]); ratio_f.pack(anchor="w", padx=10)
+        tk.Label(left_over_col, text="Response Headroom (ctx/N):", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        ratio_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); ratio_f.pack(anchor="w", padx=10)
         for val, lbl in [(16, "U-Fast (16)"), (8, "Fast (8)"), (4, "Balanced (4)"), (2, "Deep (2)")]:
             tk.Radiobutton(ratio_f, text=lbl, variable=ratio_var, value=val, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
                            selectcolor=THEME["electric_blue"], indicatoron=False,
                            activebackground=THEME["electric_blue"], width=0).pack(side=tk.LEFT, padx=5, pady=2)
+
+        # Right Sub-Column Controls (4 Dropdowns)
+        k_cache_var = tk.StringVar(value=app.config.get("k_cache_type", "q8_0"))
+        v_cache_var = tk.StringVar(value=app.config.get("v_cache_type", "q4_0"))
+        
+        kv_frame = tk.Frame(right_over_col, bg=THEME["bg_color"])
+        kv_frame.pack(anchor="w", padx=10, pady=5)
+        
+        tk.Label(kv_frame, text="K Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=0, column=0, sticky="w", pady=2)
+        k_cache_dropdown = ttk.Combobox(kv_frame, textvariable=k_cache_var, values=["fp16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "turbo3_tcq", "turbo2_tcq"], state="readonly", width=14)
+        k_cache_dropdown.grid(row=0, column=1, padx=5, pady=2)
+        
+        tk.Label(kv_frame, text="V Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=1, column=0, sticky="w", pady=2)
+        v_cache_dropdown = ttk.Combobox(kv_frame, textvariable=v_cache_var, values=["fp16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "turbo3_tcq", "turbo2_tcq"], state="readonly", width=14)
+        v_cache_dropdown.grid(row=1, column=1, padx=5, pady=2)
+
+        tk.Label(kv_frame, text="History Lookup Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=2, column=0, sticky="w", pady=2)
+        history_lookup_var = tk.StringVar(value=app.config.get("history_lookup_mode", "targeted"))
+        history_lookup_dropdown = ttk.Combobox(kv_frame, textvariable=history_lookup_var, values=["targeted", "model", "level", "all"], state="readonly", width=14)
+        history_lookup_dropdown.grid(row=2, column=1, padx=5, pady=2)
+
+        tk.Label(kv_frame, text="History Usage Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=3, column=0, sticky="w", pady=2)
+        history_usage_var = tk.StringVar(value=app.config.get("history_usage", "all"))
+        history_usage_dropdown = ttk.Combobox(kv_frame, textvariable=history_usage_var, values=["all", "current_window", "off"], state="readonly", width=14)
+        history_usage_dropdown.grid(row=3, column=1, padx=5, pady=2)
+
+        tier_grid = tk.Frame(main, bg=THEME["bg_color"])
+        tier_grid.pack(fill=tk.X, pady=10)
+        tier_grid.grid_columnconfigure(0, weight=1); tier_grid.grid_columnconfigure(1, weight=1)
+        tiers = ["fast", "search", "low", "med", "high", "secret", "Live", "deep_cook"]
+        for i, tier in enumerate(tiers):
+            r, c = divmod(i, 2)
+            _create_tier_block(tier_grid, tier, r, c)
 
 
         tk.Label(main, text="Vision Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(anchor="w", padx=10, pady=(15, 5))

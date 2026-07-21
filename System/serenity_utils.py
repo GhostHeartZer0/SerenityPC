@@ -425,7 +425,17 @@ class SystemMonitor:
                 if total_shared > 0:
                     return total_shared
         except: pass
+        try:
+            import win32com.client
+            wmi_obj = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+            perf = wmi_obj.ExecQuery("SELECT SharedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory")
+            if perf:
+                total_shared = sum(int(getattr(p, 'SharedUsage', 0)) for p in perf)
+                if total_shared > 0:
+                    return total_shared
+        except: pass
         return 0
+
 
     def _stats_loop(self):
         while not self.stop_event.is_set():
