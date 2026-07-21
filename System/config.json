@@ -1,5 +1,5 @@
 {
-    "main_window": "1134x727+10+54",
+    "main_window": "1134x883+12+39",
     "model_paths": {
         "fast": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
@@ -169,10 +169,10 @@
         "mid": 64,
         "Live": 64
     },
-    "sash_pos": 609,
+    "sash_pos": 673,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 7,
+    "active_persona_level": 6,
     "max_persona_level": 7.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
@@ -302,6 +302,6 @@
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
     "history_usage": "current_window",
-    "ghost_mode": false,
-    "startup_count": 0
+    "ghost_mode": true,
+    "startup_count": 2
 }

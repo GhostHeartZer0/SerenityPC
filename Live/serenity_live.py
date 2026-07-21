@@ -890,7 +890,7 @@ class SerenityUI:
             
         # 2. Graceful HTTP shutdown request
         try:
-            requests.post("http://127.0.0.1:8001/shutdown", headers={"x-api-key": "serenity-alpha-core-77X"}, timeout=3)
+            requests.post("http://127.0.0.1:8001/shutdown", headers={"x-api-key": "REVOKED"}, timeout=3)
             time.sleep(1.0)  # Give it a moment to self-terminate
         except Exception: pass
 
@@ -1491,7 +1491,7 @@ class SerenityAgent:
             f"\nSession History:\n{session_text}"
         )
         
-        headers = {"x-api-key": "serenity-alpha-core-77X"}
+        headers = {"x-api-key": "REVOKED"}
         try:
             resp = requests.post(SERENITY_ENGINE_URL, json={"text": prompt, "max_tokens": 1024}, headers=headers, timeout=60)
             if resp.status_code == 200:
@@ -1530,7 +1530,7 @@ class SerenityAgent:
             self.log_error(f"Compaction error: {e}")
 
     def query_engine(self, text_input, image_b64=None, memory_context=None, ui=None):
-        headers = {"x-api-key": "serenity-alpha-core-77X"}
+        headers = {"x-api-key": "REVOKED"}
         
         if memory_context is None:
             try:
@@ -1913,7 +1913,7 @@ class SerenityAgent:
                     self.save_params()
                     self.log_thought(f"[SYSTEM] Agent requested persona shift to Level {lvl} ({self.current_mood}).")
             elif action == "offload_engine":
-                requests.post("http://127.0.0.1:8001/shutdown", headers={"x-api-key": "serenity-alpha-core-77X"}, timeout=2)
+                requests.post("http://127.0.0.1:8001/shutdown", headers={"x-api-key": "REVOKED"}, timeout=2)
                 self.log_thought("[SYSTEM] Agent self-offloaded engine.")
             elif action == "disable_learning":
                 self.params["learning_enabled"] = "False"
@@ -2026,7 +2026,7 @@ class SerenityAgent:
         probe_timeout = 30 if is_debug else 2
         
         try:
-            r = requests.get("http://127.0.0.1:8001/diagnose", headers={"x-api-key": "serenity-alpha-core-77X"}, timeout=probe_timeout)
+            r = requests.get("http://127.0.0.1:8001/diagnose", headers={"x-api-key": "REVOKED"}, timeout=probe_timeout)
             if r.status_code == 200:
                 engine_up = True
         except Exception:
@@ -2063,7 +2063,7 @@ class SerenityAgent:
         while True:
             try:
                 wait_timeout = 60 if is_debug else 5
-                r = requests.get("http://127.0.0.1:8001/diagnose", headers={"x-api-key": "serenity-alpha-core-77X"}, timeout=wait_timeout)
+                r = requests.get("http://127.0.0.1:8001/diagnose", headers={"x-api-key": "REVOKED"}, timeout=wait_timeout)
                 if r.status_code == 200:
                     data = r.json()
                     engine_v = data.get("config_version", -1)
