@@ -87,9 +87,6 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, BitsAndBytesConfi
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - [SERENITY ENGINE] - %(message)s")
 
-***REMOVED***
-***REMOVED***
-
 def system_announce(text):
     try:
         engine = pyttsx3.init()

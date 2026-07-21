@@ -1995,7 +1995,7 @@ class ChatbotApp:
                 "max_tokens": 1024,
                 "temperature": 0.4
             }
-            headers = {"x-api-key": "serenity-alpha-core-77X"}
+            headers = {"x-api-key": "REVOKED"}
             
             self.process_queue.put({"status": "thinking_status", "content": "Live Handoff: Waiting for T5 response..."})
             response = requests.post(url, json=payload, headers=headers, timeout=120)
@@ -5669,7 +5669,7 @@ class ChatbotApp:
         try:
             import requests as _req
             _req.post("http://127.0.0.1:8001/shutdown",
-                      headers={"x-api-key": "serenity-alpha-core-77X"}, timeout=2)
+                      headers={"x-api-key": "REVOKED"}, timeout=2)
         except: pass
         # Hard kill via port scan
         if SYSTEM_MONITOR_LOADED:

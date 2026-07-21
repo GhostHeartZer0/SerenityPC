@@ -64,7 +64,7 @@ def launch_engine(icon, item=None):
     # 2. Check if engine is already serving before trying to spawn a new one
     try:
         import requests
-        r = requests.get("http://127.0.0.1:8001/diagnose", headers={"x-api-key": "serenity-alpha-core-77X"}, timeout=1)
+        r = requests.get("http://127.0.0.1:8001/diagnose", headers={"x-api-key": "REVOKED"}, timeout=1)
         if r.status_code == 200:
             log_sys_external("Engine already online, skipping backend spawn.")
             return
