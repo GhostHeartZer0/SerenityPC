@@ -11,6 +11,8 @@ Live/__pycache__/
 *.db
 *.sqlite
 *.sqlite3
+*.env
+*.env.example
 
 # Logs and temp files
 Logs/
