@@ -4375,7 +4375,7 @@ class ChatbotApp:
         
         # Robust Argument Parsing (Template-Aware)
         # MISSION: Handle Gemma-4 <|"|> quotes and unquoted JSON keys from reasoning models
-        clean_args = args_raw.replace('<|"|>', '"').strip()
+        clean_args = args_raw.replace('<|"|>', '"').replace('<|"', '"').replace('"|>', '"').strip()
         if clean_args.startswith("{") and clean_args.endswith("}"):
             clean_args = clean_args[1:-1].strip()
             
