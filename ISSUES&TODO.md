@@ -1,4 +1,5 @@
 ### Known Issues
+- **PQC Middleware Vulnerability**: The current ML-DSA implementation relies on system time for replay protection. An attacker with synchronized clocks could forge valid requests. Mitigation: Bind keys to hardware MAC addresses.
 - **Tool Execution Halts**: Incomplete or non-standard tool tag syntax can occasionally cause generation to halt.
 - **Qwen Low-Level Thought Drift**: Qwen models at low persona levels may process internal thoughts without delivering a final response turn.
 - **CodeGemma 7B IT Load Instability**: Loading CodeGemma 7B IT may fail or stall under specific VRAM configurations.
