@@ -3,6 +3,7 @@
 ## Version 1.5.1: Security & System Policy Update
 ### Features
 - **Smart App Control & Cache Localization**: Localizes `TEMP`, `TMP`, CUDA compiler JIT cache (`CUDA_CACHE_PATH`), PyTorch build/kernel extensions (`TORCH_EXTENSIONS_DIR`, `PYTORCH_KERNEL_CACHE_PATH`, `TORCH_HOME`), Triton (`TRITON_CACHE_DIR`), Pip (`PIP_CACHE_DIR`), and HuggingFace (`HF_HOME`) into the local workspace `.cache/` directory. Bypasses Windows Smart App Control (SAC) blocks on `%TEMP%` sub-process compilations.
+- **ML-DSA (Dilithium) & Hardware MAC Binding**: Implemented ML-DSA-44 header signing (`X-PQC-Timestamp`, `X-PQC-Signature`, `X-PQC-Public-Key`, `X-PQC-MAC-Binding`) with 30s sliding window replay protection in `System/pqc_signer.py`. Integrated `MLDSAMiddleware` into `t5_server.py` and `setup_engine.py`. Bound signature key derivation and verification directly to host MAC address digest (`uuid.getnode()`). Updated client request tools across `serenity_live.py`, `Serenity_Tray.py`, and `tool_registry.py`.
 
 ## Version 1.5.0-compact
 
