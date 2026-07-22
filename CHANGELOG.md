@@ -7,7 +7,7 @@
 - **Tool Parsing Overhaul**: Expanded tool call regex parsing in `_generation_worker_deep_cook` and `_run_tool_loop` to support `<execute_tool>`, `<executetool>`, `action:`, and normalized `readfile` mapping to `read_file`.
 - **Thought Channel & Prompt Hygiene**: Customized system prompt constraints and prefill handling for Gemma and Diffusion architectures to prevent invalid `<think>` tag insertions; added fallback extraction when LaTeX cleaning strips response text.
 - **UI & Controls**: Preserved Level 7 persona slider availability when Live diffusion models are active. Deferred History Archive menu rendering so initial button state accurately displays "Edit".
-- **Updated gemma-4 chat templates** to the july release, boasting improved benchmark scores, tool call handling, and thought handling.
+- **Main Branch Sync**: Full merge of changes from `main` branch (v1.5.0 beta), including GGUF KV cache benchmarking, vision pipeline updates, tool parsing overhaul, thought channel handling, persona level updates in `serenity_resources.py`, and updated chat templates.
 
 ## Version 1.4.2: ML-DSA (Dilithium) & Hardware MAC Binding Security
 ### Features
