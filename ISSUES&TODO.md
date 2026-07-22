@@ -1,4 +1,5 @@
 ### Known Issues
+- **PQC Middleware Vulnerability**: The current ML-DSA implementation relies on system time for replay protection. An attacker with synchronized clocks could forge valid requests. Mitigation: Bind keys to hardware MAC addresses.
 - **Tool Execution Halts**: Incomplete or non-standard tool tag syntax can occasionally cause generation to halt.
 - **Debate Mode Multi-Round Stability**: Multi-round debates with deep cook enabled can experience response crashes.
 - **Markdown & Math Rendering Anomalies**: Complex markdown tables and math equations may occasionally misalign in the chat UI.
