@@ -77,3 +77,4 @@ crash_*.txt
 *.rar
 desktop.ini
 [Dd]esktop.ini
+System/config.json

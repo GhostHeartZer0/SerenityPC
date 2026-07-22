@@ -13,6 +13,16 @@
 - **Cross-Platform Checklist**: Created a workspace TODO.txt detailing steps to remove Windows-specific dependencies (such as `windnd`, `winsound`, VBScript shortcuts, and `taskkill` port management) for future cross-platform compatibility.
 - **Model Acquisition Strategy**: Documented and mapped GGUF/projector model equivalents from Hugging Face for local execution.
 
+## Version 1.5.0 beta
+
+### Features & Improvements
+- **GGUF KV Cache Benchmark**: Integrated live KV cache memory benchmark on model load (calculates FP16 baseline vs active quantized bit-width memory, tokens/sec speedup ratio, and MB saved).
+- **Deep Cook Vision Pipeline**: Wired image routing to `vision_multimodal` and added `vision_deep` pending task execution post-model swap.
+- **Tool Parsing Overhaul**: Expanded tool call regex parsing in `_generation_worker_deep_cook` and `_run_tool_loop` to support `<execute_tool>`, `<executetool>`, `action:`, and normalized `readfile` mapping to `read_file`.
+- **Thought Channel & Prompt Hygiene**: Customized system prompt constraints and prefill handling for Gemma and Diffusion architectures to prevent invalid `<think>` tag insertions; added fallback extraction when LaTeX cleaning strips response text.
+- **UI & Controls**: Preserved Level 7 persona slider availability when Live diffusion models are active. Deferred History Archive menu rendering so initial button state accurately displays "Edit".
+- **Updated gemma-4 chat templates** to the july release, boasting improved benchmark scores, tool call handling, and thought handling.
+
 ## Version 1.4.0
 
 ### Features & Improvements

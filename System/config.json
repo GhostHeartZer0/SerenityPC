@@ -1,4 +1,3 @@
-{
     "main_window": "1203x784+-2+49",
     "model_paths": {
         "fast": "S:/SerenityPC Compact Local AI/Models/gemma-4-E2B-it-IQ4_XS.gguf",
@@ -8,14 +7,14 @@
         "high": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
         "secret": "S:/SerenityPC Compact Local AI/Models/gemma-4-E2B-it-uncensored-Q4_K_M.gguf",
         "deep_cook": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
-        "vision_video": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/gemma-4-E4B/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
+        "vision_video": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
         "vision_video_projector": "",
         "vision_video_deep": "",
         "vision_video_deep_projector": "",
-        "vision_multimodal": "S:/SerenityPC/Models/gemma-4-E4B/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
+        "vision_multimodal": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-UD-IQ3_XXS.gguf",
         "vision_multimodal_projector": "",
-        "mid": "S:/SerenityPC/Models/gemma-4-26B MoE/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-        "Live": "C:\\Users\\ccrg6\\Desktop\\Desktop\\Hub\\SerenityPC\\Models\\gemma-4-26B MoE\\gemma-4-26B-A4B-it-UD-Q5_K_XL.gguf"
+        "mid": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-IQ4_XS.gguf",
+        "Live": "S:/SerenityPC Compact Local AI/Models/gemma-4-E4B-it-IQ4_XS.gguf"
     },
     "gpu_layer_config": {
         "fast": -1,
@@ -159,7 +158,11 @@
         "vision_multimodal": 64,
         "mid": 64
     },
+<<<<<<< HEAD
     "sash_pos": 756,
+=======
+    "sash_pos": 673,
+>>>>>>> main
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
     "active_persona_level": 4,
@@ -281,6 +284,22 @@
             "ctx": 32768
         }
     },
+<<<<<<< HEAD
     "streaming_mode": "Experimental Chunking",
     "max_token_ratio": 4
+=======
+    "streaming_mode": "Real-time",
+    "max_token_ratio": 4,
+    "auto_vram_offload": true,
+    "speculative_drafting": false,
+    "history_lookup_mode": "targeted",
+    "k_cache_type": "q8_0",
+    "v_cache_type": "q5_1",
+    "hao_preset": "None",
+    "swa_kv_cache": "Auto",
+    "media_rendering": 1,
+    "history_usage": "current_window",
+    "ghost_mode": true,
+    "startup_count": 2
+>>>>>>> main
 }
