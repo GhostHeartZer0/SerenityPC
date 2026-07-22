@@ -1335,7 +1335,11 @@ class ChatbotApp:
         tk.Label(header, text="Backend Logs", font=self.fonts["italic"], bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT)
         
         self.log_switch_canvas = tk.Canvas(header, width=104, height=28, bg=THEME["bg_color"], highlightthickness=0)
-        self.log_switch_canvas.pack(side=tk.RIGHT, padx=5)
+        self.log_switch_canvas.pack(side=tk.RIGHT, padx=(2, 5))
+        
+        self.clear_log_btn = tk.Label(header, text="🗑", font=("Consolas", 12), bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
+        self.clear_log_btn.pack(side=tk.RIGHT, padx=(5, 2))
+        self.clear_log_btn.bind("<Button-1>", self._clear_active_log)
         if self.log_switch_canvas is not None:
             self.log_switch_canvas.create_rectangle(2, 2, 102, 26, outline=THEME["electric_blue"], width=2, fill=THEME["widget_bg_color"])
             self.switch_knob = int(self.log_switch_canvas.create_rectangle(2, 2, 30, 26, fill=THEME["electric_blue"]))
@@ -1481,6 +1485,21 @@ class ChatbotApp:
                     canvas_sw.itemconfig(5, fill=THEME["electric_blue"])   # Icon ⚠
                     canvas_sw.itemconfig(6, fill=THEME["bg_color"])         # Icon 🔍
                 except: pass
+
+    def _clear_active_log(self, e=None):
+        target = self.state.get("log_view", "thought")
+        widget = getattr(self, f"{target}_log", None)
+        if widget:
+            try:
+                state = widget.cget("state")
+                if state != "normal":
+                    widget.config(state="normal")
+                widget.delete("1.0", tk.END)
+                if state != "normal":
+                    widget.config(state=state)
+            except Exception:
+                pass
+
     def _animate_text_fade(self, tag, start_color, end_color, steps=20, current=0):
         if current > steps: return
         color = self._lerp_color(start_color, end_color, current / steps)
