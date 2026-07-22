@@ -1,15 +1,12 @@
 ### Known Issues
-- **Tool Execution Halts**: Incomplete or non-standard tool tag syntax can occasionally cause generation to halt.
 - **Debate Mode Multi-Round Stability**: Multi-round debates with deep cook enabled can experience response crashes.
 - **Markdown & Math Rendering Anomalies**: Complex markdown tables and math equations may occasionally misalign in the chat UI.
-- **Shared VRAM & Monitor Layout**: Shared VRAM displays total instead of `[usage / total GB]` format, and lacks CPU Temperature and CPU Power indicators.
 - **History Archive Scrollbar**: Scrollbar is only active on the scrollbar element rather than the entire submenu, and the top menu lacks scroll support.
 - **System Monitor Settings Bug**: Toggling between graph vs line for system monitor items causes the monitor widget to vanish.
 - **Card Recognition & Vision Alignment**: Ambiguity in card ranks (e.g. 6-heart vs 9-diamond) under default pixel density, requiring auto-crop functionality for active playing areas.
 - **UI Spacing & Scaling Constraints**: Layout offsets and spacing issues occur on window resize.
-- **Quickswap Prompt Pop**: Switching to Level 6 persona causes the previous user prompt to re-trigger. similar edge cases exist for other levels.
+- **Quickswap Prompt Pop**: Switching to Level 6 persona causes the previous user prompt to re-trigger. Similar edge cases exist for other levels.
 - **Intellicore & Quickcore Generation Config**: Incomplete or incorrect configurations prevent proper text generation on these backends.
-- **telemetries not populating**: VRAM, Total RAM, CPU Temp, CPU Power
 
 ### To-Do List
 - **Avatar Visual States**: Map pre-UI startup phase to `The_Wise_Listener`, generation failures to `sorry_serenity`, and add a setting for DMN timeout utilizing `_galaxy` assets.

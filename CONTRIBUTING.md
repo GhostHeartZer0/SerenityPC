@@ -1,6 +1,7 @@
 # Contributing to SerenityPC
 
-Thank you for your interest in improving SerenityPC! To maintain stability, we follow a standard Pull Request (PR) review process. Direct pushes to the `main` branch are restricted.
+Welcome to my project! If you have any issues or suggestions please feel free to make an issue or suggest changes. All PRs are welcome, but I reccomend checking out one of SerenityPC's branches, those are free to do whatever with. I periodically update them from main whenever I get to a stable point. Feel free to fork, clone, edit, experiment with, etc. See TODO.txt and ISSUES&TODO.md for more information.
+---
 
 ## How to Contribute
 
