@@ -164,9 +164,6 @@ class GamingModeMonitor:
 GAMING_MONITOR = GamingModeMonitor()
 threading.Thread(target=GAMING_MONITOR.check, daemon=True).start()
 
-***REMOVED***
-***REMOVED***
-
 def system_announce(text):
     if not pyttsx3: return
     try:
