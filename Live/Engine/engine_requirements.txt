@@ -1,5 +1,0 @@
-accelerate
-bitsandbytes
-fastapi
-uvicorn
-pydantic
