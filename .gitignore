@@ -62,6 +62,7 @@ crash_*.txt
 /Live/t5gemma-2-4b-4b
 /Live/t5gemma-2-1b-1b
 /Live/t5gemma-2-270m-270m
+Models/
 
 # Model weight and binary formats
 *.gguf
@@ -80,3 +81,5 @@ crash_*.txt
 desktop.ini
 [Dd]esktop.ini
 System/config.json
+Docs/Test Prompts.txt
+System/rgb_state.json
