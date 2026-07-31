@@ -145,8 +145,15 @@ def open_settings_window(app):
         vram_frame.pack(anchor="w", pady=(5, 0))
         tk.Label(vram_frame, text="VRAM (GB):", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT)
         vram_ent = tk.Entry(vram_frame, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=6)
-        vram_ent.insert(0, f"{app.state.get('virtual_vram', 0)/1024:g}" if app.state.get('virtual_vram', 0) > 0 else "0")
         vram_ent.pack(side=tk.LEFT, padx=5)
+        
+        dmn_frame = tk.Frame(left_header, bg=THEME["bg_color"])
+        dmn_frame.pack(anchor="w", pady=(5, 0))
+        tk.Label(dmn_frame, text="DMN Timeout (min:sec):", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT)
+        dmn_ent = tk.Entry(dmn_frame, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=7)
+        dmn_val = app.config.get("dmn_timeout", "05:00")
+        dmn_ent.insert(0, str(dmn_val))
+        dmn_ent.pack(side=tk.LEFT, padx=5)
         
         g_frame = tk.Frame(left_header, bg=THEME["bg_color"])
         g_frame.pack(anchor="w", pady=(10, 0))
@@ -534,6 +541,7 @@ def open_settings_window(app):
             app.state["streaming_mode"] = stream_var.get()
             app.config["max_token_ratio"] = ratio_var.get()
             app.config["image_handling"] = image_handling_var.get()
+            app.config["dmn_timeout"] = dmn_ent.get().strip()
             try: app.state["virtual_vram"] = int(float(vram_ent.get()) * 1024)
             except: pass
             for t, e in ents.items():
