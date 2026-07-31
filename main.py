@@ -1986,7 +1986,7 @@ class ChatbotApp:
                        if hasattr(self, "attachment_frame"): self.attachment_frame.pack_forget()
 
                     self._display_ai_message(is_streaming=True)
-                    self.set_avatar_state("pondering" if self.active_persona_level >= 4 else "thinking")
+                    self.set_avatar_state("meditating")
                     self._prep_generation()
                     
                     # Construct multimodal content
@@ -2077,7 +2077,7 @@ class ChatbotApp:
             return
 
         self._display_ai_message(is_streaming=True)
-        self.set_avatar_state("pondering" if self.active_persona_level >= 4 else "thinking")
+        self.set_avatar_state("meditating")
         
         self._prep_generation()
         temp_msgs = self.messages + [{"role": "user", "content": user_msg}]
@@ -2110,7 +2110,7 @@ class ChatbotApp:
             return
 
         self._display_ai_message(is_streaming=True)
-        self.set_avatar_state("deep_think")
+        self.set_avatar_state("meditating")
         
         self._prep_generation()
         threading.Thread(target=self._generation_worker_deep_cook, args=(user_msg,), daemon=True).start()
@@ -5234,7 +5234,8 @@ class ChatbotApp:
         self.update_persona_display()
         self.set_avatar_state("pleased")
         self._log_and_display(f"Loaded {os.path.basename(self.model_path)}")
-        self.root.after(1500, lambda *args: self.set_avatar_state("listening"))
+        if not self.pending_task:
+            self.root.after(1500, lambda *args: self.set_avatar_state("listening"))
 
         if self.pending_task:
             t = self.pending_task; self.pending_task = None
@@ -5251,7 +5252,7 @@ class ChatbotApp:
     def _handle_load_error(self, msg):
         self.state["running"] = False; self.model = None
         self.set_ui_state(model_loaded=False)
-        self.set_avatar_state("confused")
+        self.set_avatar_state("apologetic")
         messagebox.showerror("Load Error", msg.get("content"))
 
     def _synthesis_worker(self, task):
@@ -5505,7 +5506,7 @@ class ChatbotApp:
             
             if error:
                 self._append_to_chat(f"\n\n[System Error]: {final_answer}\n\n", "system")
-                self.set_avatar_state("confused")
+                self.set_avatar_state("apologetic")
                 try:
                     with open(self.error_log_file, 'a', encoding='utf-8') as f:
                         f.write(f"\n[{time.strftime('%H:%M:%S')}] [System Error]: {final_answer}\n")
@@ -5587,10 +5588,13 @@ class ChatbotApp:
         except: pass
         
         self.state["response_started"] = False
-        self.root.after(5000, lambda *args: self.set_avatar_state("listening"))
+        self.root.after(1500, lambda *args: self.set_avatar_state("listening"))
 
     def _buffer_text(self, text):
         """Append text to the streaming buffer."""
+        if not self.state.get("response_started"):
+            self.state["response_started"] = True
+            self.set_avatar_state("explain_wise")
         self.text_buffer += text
 
     def _update_stats_display(self, stats):
@@ -5947,7 +5951,10 @@ class ChatbotApp:
             "dmn_lvl3": "lvl3_galaxy.jpg",
             "dmn_lvl4": "lvl4_galaxy.jpg",
             "dmn_lvl5": "lvl5_galaxy.jpg",
-            "meditating": "meditating_serenity.png",
+            "dmn_lvl6": "lvl6_galaxy.jpg",
+            "meditating": "Meditating_Serenity.png",
+            "transcendent": "transcendent_serenity.png",
+            "idle_lvl7": "transcendent_serenity.png",
             "cecilia_alt": "Cecilia_01.png"
         }
         
@@ -5973,7 +5980,25 @@ class ChatbotApp:
             if getattr(self, "idle_timer_id", None) is not None:
                 self.root.after_cancel(self.idle_timer_id)
                 self.idle_timer_id = None
-            self.idle_timer_id = self.root.after(5000, lambda *args: self._set_persona_idle_state())
+            self.idle_timer_id = self.root.after(3000, lambda *args: self._set_persona_idle_state())
+        elif state in PERSONA_IDLE_MAP.values() or state in ["idle_lvl1", "idle_lvl2", "idle_lvl3", "idle_lvl4", "idle_lvl5", "idle_lvl6", "idle_lvl7", "transcendent"]:
+            if getattr(self, "idle_timer_id", None) is not None:
+                self.root.after_cancel(self.idle_timer_id)
+                self.idle_timer_id = None
+            timeout_ms = self._parse_dmn_timeout_sec() * 1000
+            self.idle_timer_id = self.root.after(timeout_ms, lambda *args: self.set_avatar_state(f"dmn_lvl{self.active_persona_level}"))
+
+    def _parse_dmn_timeout_sec(self):
+        val = self.config.get("dmn_timeout", "05:00")
+        if isinstance(val, (int, float)):
+            return max(1, int(val))
+        try:
+            parts = str(val).strip().split(":")
+            if len(parts) == 2:
+                return max(1, int(parts[0]) * 60 + int(parts[1]))
+            return max(1, int(parts[0]))
+        except Exception:
+            return 300
 
     def _set_persona_idle_state(self):
         if self.state.get("avatar_current") == "listening":

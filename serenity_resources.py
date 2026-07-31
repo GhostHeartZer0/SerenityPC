@@ -119,7 +119,7 @@ PERSONA_IDLE_MAP = {
     1: "idle_lvl1", 2: "idle_lvl2", 
     3: "idle_lvl3", 4: "idle_lvl4", 
     5: "idle_lvl5", 6: "idle_lvl6",
-    7: "listening",
+    7: "transcendent",
 }
 
 # --- SYSTEM PROMPTS ---
@@ -189,12 +189,14 @@ AVATAR_FILENAMES = {
     "dmn_lvl3": "lvl3_galaxy.jpg",
     "dmn_lvl4": "lvl4_galaxy.jpg",
     "dmn_lvl5": "lvl5_galaxy.jpg",
-    "meditating": "meditating_serenity.png",
+    "dmn_lvl6": "lvl6_galaxy.jpg",
+    "meditating": "Meditating_Serenity.png",
+    "idle_lvl7": "transcendent_serenity.png",
     "cecilia_alt": "Cecilia_01.png"
 }
 
 # Base names (without extension) for the LoadingScreen animator
-ANIMATION_SEQUENCE = ["serenity_greeting", "serenity_thinking"]
+ANIMATION_SEQUENCE = ["The_Wise_Listener"]
 
 def get_complexity_keywords():
     return ["analyze", "summarize", "research", "compare", "plan", "complex", "detailed"]
