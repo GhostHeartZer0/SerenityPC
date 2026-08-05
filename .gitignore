@@ -78,8 +78,12 @@ Models/
 *.tar.gz
 *.tgz
 *.rar
-desktop.ini
-[Dd]esktop.ini
+# Windows OS files
+[dD]esktop.ini
+**/[dD]esktop.ini
+Thumbs.db
+**/Thumbs.db
+
 System/config.json
 Docs/Test Prompts.txt
 System/rgb_state.json
