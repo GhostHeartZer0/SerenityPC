@@ -2589,7 +2589,7 @@ class ChatbotApp:
                         model_dir = os.path.dirname(self.model_path)
                         if os.path.exists(model_dir):
                             for f in os.listdir(model_dir):
-                                if f.lower().endswith(".gguf") and "assistant" in f.lower():
+                                if f.lower().endswith(".gguf") and any(k in f.lower() for k in ["assistant", "mtp"]):
                                     assistant_path = os.path.join(model_dir, f)
                                     break
                     
@@ -5223,7 +5223,8 @@ class ChatbotApp:
         self.loaded_persona_level = msg["level"]
         if "tier" in msg: self.current_model_tier = msg["tier"]
         self.set_ui_state(model_loaded=True, generating=False)
-        self.load_history()
+        has_pending = bool(self.pending_task)
+        self.load_history(render_active=not has_pending)
         if getattr(self, 'turbo_vec', None):
             lookup_mode = self.config.get("history_lookup_mode", "targeted")
             threading.Thread(
@@ -5239,6 +5240,15 @@ class ChatbotApp:
 
         if self.pending_task:
             t = self.pending_task; self.pending_task = None
+            
+            # Render history so the UI isn't empty if we were pending
+            if t["type"] in ["chat", "deep_cook", "vision_deep", "vision_standard"]:
+                self._render_messages_to_active_chat(self.messages)
+                if "message" in t:
+                    self.user_input.delete("1.0", tk.END)
+                    self.last_user_message = t["message"]
+                    self._display_user_message(t["message"])
+            
             if t["type"] == "deep_cook": self.send_deep_cook_message(t["message"], True)
             elif t["type"] == "chat": self.send_message(t["message"], True)
             elif t["type"] == "vision_deep": self._execute_vision_deep_cook(t["staged"], t["message"])
@@ -5251,6 +5261,7 @@ class ChatbotApp:
 
     def _handle_load_error(self, msg):
         self.state["running"] = False; self.model = None
+        self.pending_task = None # Clear pending task to prevent ghost triggers
         self.set_ui_state(model_loaded=False)
         self.set_avatar_state("apologetic")
         messagebox.showerror("Load Error", msg.get("content"))
@@ -5598,41 +5609,38 @@ class ChatbotApp:
         self.text_buffer += text
 
     def _update_stats_display(self, stats):
-        if not hasattr(self, 'stats_labels'): return
+        if not hasattr(self, 'stats_labels') or not self.stats_labels: return
+        graph_mode = self.config.get("monitor_graph_mode", False)
         try:
             for k, v in stats.items():
                 if k in self.stats_labels:
-                    display_text = str(v)
-                    if k == "Power" and isinstance(v, (int, float)):
-                        display_text = f"{v:.1f}W"
-                    self.stats_labels[k].config(text=display_text)
+                    val_str = str(v)
+                    if graph_mode and "%" in val_str:
+                        try:
+                            pct = float(val_str.replace("%", "").strip())
+                            bars = int(pct / 10)
+                            val_str = f"[{'█' * bars}{'░' * (10 - bars)}] {pct:.0f}%"
+                        except Exception: pass
+                    elif k == "Power" and isinstance(v, (int, float)):
+                        val_str = f"{v:.1f}W"
+                    self.stats_labels[k].config(text=val_str)
         except: pass
-
-
-        if not SYSTEM_MONITOR_LOADED and self.stats_labels:
-             if self.stats_labels.get("CPU") and self.stats_labels["CPU"].cget("text") == "N/A":
-                 self.stats_labels["CPU"].config(text="No Libs")
-                 self.stats_labels["RAM"].config(text="pip install")
-                 if "GPU Util" in self.stats_labels:
-                     self.stats_labels["GPU Util"].config(text="psutil nvidia_ml")
 
     def update_persona_display(self, val=None):
         if self.depth_slider is None: return
         
-        # Skip level 6 on the slider during drag/interaction
+        # Skip level 6 on the slider during drag/interaction unless level 6 is active
         if val is not None and not getattr(self, '_setting_slider', False) and self.active_persona_level != 6:
             raw_val = int(val)
             if raw_val == 6:
-                if self.active_persona_level <= 5:
-                    self._setting_slider = True
-                    self.depth_slider.set(7)
-                    self._setting_slider = False
-                    lvl = 7
-                else:
-                    self._setting_slider = True
+                self._setting_slider = True
+                if self.active_persona_level >= 7:
                     self.depth_slider.set(5)
-                    self._setting_slider = False
                     lvl = 5
+                else:
+                    self.depth_slider.set(7)
+                    lvl = 7
+                self._setting_slider = False
             else:
                 lvl = raw_val
         else:
@@ -5800,12 +5808,13 @@ class ChatbotApp:
         hist.config(state='disabled')
         hist.see(tk.END)
 
-    def load_history(self):
+    def load_history(self, render_active=True):
         is_ghost = self.config.get("ghost_mode", False)
         if is_ghost:
             # Ghost mode: retain 2 replies (4 messages) in memory for context
             self.messages = self.messages[-4:] if hasattr(self, 'messages') and self.messages else []
-            self._render_messages_to_active_chat(self.messages)
+            if render_active:
+                self._render_messages_to_active_chat(self.messages)
             return
 
         usage = self.config.get("history_usage", "all")
@@ -5815,7 +5824,8 @@ class ChatbotApp:
             return
         if usage == "current_window":
             if self.messages:
-                self._render_messages_to_active_chat(self.messages)
+                if render_active:
+                    self._render_messages_to_active_chat(self.messages)
                 return
             self.clear_chat_ui()
             return
@@ -5844,7 +5854,8 @@ class ChatbotApp:
                 
                 self.past_history_view.config(state='disabled')
                 self.past_history_view.yview_moveto(1.0)
-                self._render_messages_to_active_chat(self.messages)
+                # Option 1: Keep past history in Archive tab, start active chat fresh
+                self.clear_chat_ui()
                 self._log_and_display("Archive Updated.")
             except: 
                 self._log_and_display("Archive load failed.")
@@ -5881,6 +5892,13 @@ class ChatbotApp:
             self.params = {}
             print(f"[APEX] No inference overrides found for {tier}. Using engine defaults.")
 
+    def _fit_image_aspect(self, img, target_w=350, target_h=350):
+        orig_w, orig_h = img.size
+        ratio = min(target_w / float(orig_w), target_h / float(orig_h))
+        new_w = max(1, int(orig_w * ratio))
+        new_h = max(1, int(orig_h * ratio))
+        return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
     def load_all_images(self):
         w, h = 350, 350 
         try:
@@ -5895,7 +5913,7 @@ class ChatbotApp:
             try:
                 p = os.path.join(self.dirs["Media"], fname)
                 if os.path.exists(p):
-                    img = Image.open(p).resize((w, h), Image.Resampling.LANCZOS)
+                    img = self._fit_image_aspect(Image.open(p), w, h)
                     self.avatar_states[state] = ImageTk.PhotoImage(img)
                     #print(f"Loaded: {fname}")
             except Exception as e: print(f"Error loading {fname}: {e}")
@@ -5920,7 +5938,7 @@ class ChatbotApp:
                         self.root.after_cancel(self.idle_timer_id)
                         self.idle_timer_id = None
                     
-                    img = Image.open(p).resize((350, 350), Image.Resampling.LANCZOS)
+                    img = self._fit_image_aspect(Image.open(p), 350, 350)
                     self.tmp_img = ImageTk.PhotoImage(img)
                     self.right_panel.itemconfig(self.avatar_image_item, state='normal', image=self.tmp_img)
                     self.right_panel.itemconfig(self.avatar_text_item, state='hidden')
@@ -5969,7 +5987,7 @@ class ChatbotApp:
             p = os.path.join(self.dirs["Media"], fname)
             if os.path.exists(p):
                 try:
-                    img = Image.open(p).resize((350, 350), Image.Resampling.LANCZOS)
+                    img = self._fit_image_aspect(Image.open(p), 350, 350)
                     self.tmp_img = ImageTk.PhotoImage(img)
                     self.right_panel.itemconfig(self.avatar_image_item, state='normal', image=self.tmp_img)
                     self.right_panel.itemconfig(self.avatar_text_item, state='hidden')

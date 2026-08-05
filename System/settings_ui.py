@@ -475,6 +475,7 @@ def open_settings_window(app):
         history_usage_dropdown = ttk.Combobox(kv_frame, textvariable=history_usage_var, values=["all", "current_window", "off"], state="readonly", width=14)
         history_usage_dropdown.grid(row=3, column=1, padx=5, pady=2)
 
+        tk.Label(main, text="Text/Inline Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(anchor="w", padx=10, pady=(15, 5))
         tier_grid = tk.Frame(main, bg=THEME["bg_color"])
         tier_grid.pack(fill=tk.X, pady=10)
         tier_grid.grid_columnconfigure(0, weight=1); tier_grid.grid_columnconfigure(1, weight=1)

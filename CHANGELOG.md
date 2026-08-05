@@ -1,5 +1,18 @@
 # Changelog
 
+## Version 1.5.2
+
+- **MTP Assistant Search**: Added `MTP` keyword matching to MTP assistant model auto-detection.
+- **Avatar Aspect Ratio Scaling**: Preserved image aspect ratios when resizing avatar icons (`_fit_image_aspect`).
+- **Settings UI Headers**: Titled Engines section (`Text/Inline Engines`).
+- **System Monitor Graph Mode**: Fixed system monitor graph vs line mode formatting and display updates.
+- **UI Persona Controls**: Set Level 7 to fill slider position 6 directly when Level 6 is hidden.
+- **Loading Splash Notification**: Added pre-start message (`Loading... please wait. This'll only take a minute or two.`).
+- **History & Chat Cleanup**: Prevented old history messages from popping up in active chat during model loads by keeping active chat fresh on model swap and preserving history archive in Archive tab. Fixed prompt positioning bugs on pending prompt submission.
+- **Bidirectional Slider Trap**: Fixed persona slider jumping logic so sliding downwards from level 7 past hidden level 6 correctly lands on level 5.
+- **Telemetry Enhancements**: Added `root\LibreHardwareMonitor` namespace queries for CPU Temperature and CPU Power telemetries in addition to `OpenHardwareMonitor` and WMI fallbacks.
+- **Git Ignore Hardening**: Added recursive `**/[dD]esktop.ini` and `**/Thumbs.db` pattern rules to `.gitignore`.
+
 ## Version 1.5.1
 
 - **Avatar Visual States & Transitions**: Mapped pre-UI startup splash to `The_Wise_Listener`, generation error states to `sorry_serenity` (`apologetic`), prefill phase to `Meditating_Serenity`, response generation to `explain_wise`, and Level 7 persona to `transcendent_serenity`. Configured 3-second transition from `serenity_greeting` to persona idle images, added DMN Timeout setting (`min:sec` format in UI), and fixed model load `pending_task` timer override edge cases.
