@@ -145,7 +145,8 @@ class LoadingScreen:
         self.canvas = tk.Canvas(self.root, width=self.width, height=self.height, bg="#000000", highlightthickness=0)
         self.canvas.pack()
         self.load_animation_images()
-        self.canvas.create_text(self.width / 2, self.height - 30, text="Serenity is Awakening...", font=("Open Sans", 12, "italic"), fill="#FFFFFF")
+        self.canvas.create_text(self.width / 2, self.height - 40, text="Serenity is Awakening...", font=("Open Sans", 11, "bold"), fill="#FFFFFF")
+        self.canvas.create_text(self.width / 2, self.height - 20, text="Loading... please wait. This'll only take a minute or two.", font=("Open Sans", 9, "italic"), fill="#00FFCC")
         self.root.lift()
         self.root.attributes("-topmost", True)
 
@@ -394,11 +395,14 @@ class SystemMonitor:
         except: pass
         try:
             import wmi
-            w = wmi.WMI(namespace="root\\OpenHardwareMonitor")
-            sensors = w.Sensor()
-            for s in sensors:
-                if s.SensorType == 'Temperature' and 'cpu' in s.Name.lower():
-                    return f"{s.Value:.0f}°C"
+            for ns in ["root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"]:
+                try:
+                    w = wmi.WMI(namespace=ns)
+                    sensors = w.Sensor()
+                    for s in sensors:
+                        if s.SensorType == 'Temperature' and 'cpu' in s.Name.lower():
+                            return f"{s.Value:.0f}°C"
+                except: pass
         except: pass
         return "N/A"
 
@@ -406,11 +410,14 @@ class SystemMonitor:
     def _get_cpu_power():
         try:
             import wmi
-            w = wmi.WMI(namespace="root\\OpenHardwareMonitor")
-            sensors = w.Sensor()
-            for s in sensors:
-                if s.SensorType == 'Power' and 'cpu' in s.Name.lower():
-                    return f"{s.Value:.1f}W"
+            for ns in ["root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"]:
+                try:
+                    w = wmi.WMI(namespace=ns)
+                    sensors = w.Sensor()
+                    for s in sensors:
+                        if s.SensorType == 'Power' and 'cpu' in s.Name.lower():
+                            return f"{s.Value:.1f}W"
+                except: pass
         except: pass
         return "N/A"
 
