@@ -1,5 +1,21 @@
 # Changelog
 
+## Version 1.5.3
+
+- **Muse Glimmer Native Loader & Custom Build Flags Update**: Updated `setup.py` and `Tools/build_engine.ps1` to inject custom CMake flags (`-DLLAMA_MTP=ON`, `-DLLAMA_DIFFUSION=ON`, `-DLLAMA_TURBOQUANT=ON`, `-DLLAMA_TRI_ATTENTION=ON`, `-DLLAMA_TURBOVEC=ON`). Removed runtime header patching for `muse-glimmer` in `System/serenity_utils.py` to allow native execution via `llama.cpp` build b10353+.
+
+- **Robust Deferred Library Imports**: Guarded `cv2` and `windnd` imports in `load_heavy_libraries()` with fallback exception handling to prevent missing optional libraries from failing core application startup. Added global `numpy as np` initialization in `main.py`, `System/vision_handler.py`, `Wringer.py`, and `Debate.py`. Updated `requirements.txt` with `opencv-python` and `pynvml`.
+- **Dynamic CPU Thread Allocation & Safe Core Pinning**: Added `HardwareProfile.get_optimal_threads()` to calculate thread counts dynamically based on physical/logical core counts. Replaced hardcoded `n_threads=8` across standard chat, vision, draft, and auto-recovery model loaders to prevent thread thrashing/OOM on 4-thread and 8-thread CPUs.
+- **Muse Glimmer Native Architecture Mapping**: Added `"muse-glimmer"` and `"muse_glimmer"` string lookup mappings directly to `llm_arch_from_string` in `llama-cpp-python-src/vendor/llama.cpp/src/llama-arch.cpp` (mapping to Meta's base `LLM_ARCH_LLAMA`), allowing out-of-the-box GGUF inference without requiring runtime binary header patching.
+- **Muse Glimmer & Gemma-4 Architecture Support & Auto-Patching**: Added `patch_gguf_architecture` GGUF binary metadata patcher as a secondary fallback mechanism. Intercepts unknown GGUF model architecture and tokenizer exceptions (such as `muse-glimmer` or `gemma4`) during model initialization and automatically maps Gemma variants (`gemma4`, `gemma3`) to `gemma2`, patching `general.architecture`, `tokenizer.ggml.model` string values, and KV key prefixes (e.g. `gemma4.` -> `gemma2.`) in-place before retrying model load. Added `patch_llama_deallocator` to safely handle partially initialized `LlamaModel` cleanup during failed model loads without throwing `AttributeError`.
+- **Muse Reasoning Strength Setting**: Added configurable `muse_reasoning_strength` setting (`off`, `low`, `medium`, `high`, `xhigh`) in the Settings UI with dynamic system prompt injection across standard chat, deep cook, and vision inference loops.
+- **Markdown Engine Optimization (TODO #1)**: Refactored `_apply_markdown` to run formatting steps iteratively instead of recursively, optimizing table parsing and math tag rendering to eliminate UI thread pauses.
+- **Thought Budget Recovery (TODO #8)**: Added `budget_recovery_mode` setting (`off`, `respond`, `wrapup`, `autocont`) with automated synthesis pass when generation hits token budget within reasoning blocks.
+- **Post-Generation RLHF Feedback (TODO #10)**: Embedded 👍/👎 feedback buttons into chat message outputs, saving user ratings to `System/rlhf_logs.json` and integrating stats into DMN backbone memory.
+- **Self-Analysis Feature (TODO #12)**: Added "Self-Analysis" status button in Backend Logs header that generates a live configuration status report in the chat window.
+- **Legacy PC Hardware & CUDA Setup Auto-Gathering & Upgrades**: Added pre-flight Python bitness/version/RAM checks, CPU AVX/AVX2 capability scans, and CUDA Toolkit / Compute Capability checks to `setup.py`. Implemented `activate_local_venv()` for automatic workspace `.venv` detection with `--global` support for targeting system Python environments, and `gather_missing_tools()` to automatically download, locate, and PATH-inject missing build tools (`cmake`, `ninja`, `git`, `nvcc`, `MSVC`). Configured universal PTX compilation range (`sm_50` through `sm_90+`) to ensure zero-recompile runtime portability on older/other GPUs. Resolved pip file-locking (`WinError 5`) on satisfied requirements and added non-interactive `--rebuild` CLI automation.
+
+
 ## Version 1.5.2
 
 - **MTP Assistant Search**: Added `MTP` keyword matching to MTP assistant model auto-detection.

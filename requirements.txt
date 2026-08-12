@@ -12,8 +12,10 @@ pydantic
 transformers
 sounddevice
 beautifulsoup4
-llama-cpp-python==0.3.14
+llama-cpp-python>=0.3.26
 playwright
 chromadb
 sentence-transformers
 turboquant
+opencv-python
+pynvml

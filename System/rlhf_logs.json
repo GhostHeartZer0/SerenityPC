@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": "2026-08-06T23:39:35.719083",
+    "persona": 3,
+    "model": "unknown",
+    "rating": 1,
+    "prompt": "i'm compressing my chatbot app for shareability, .gguf files are okay to zip, right?",
+    "answer": "Yes, **`.gguf` files can be zipped** without any issues. In fact, it is the standard way to package them if you want to distribute your chatbot app as a single download or shareable bundle.\n\nHere are a few technical details to keep in mind:\n\n### 1. Compression Efficiency\nBecause `.gguf` files (especially quantized versions) contain highly optimized binary data and heavy weight matrices, they don't always compress very well compared to text-based code. You might find that the zip file size isn't "
+  },
+  {
+    "timestamp": "2026-08-08T14:02:15.930563",
+    "persona": 6,
+    "model": "unknown",
+    "rating": 1,
+    "prompt": "Decipher:\nLong awaited is the rose, but so too is its home\nGrown and plucked while we roam, a love claimed as own\nTrust in feeling, intuition, lesser we may be\nBut its reeling, double meaning, together we aren't free.",
+    "answer": "*She stares at the lines, reading them once\u2014twice\u2014the silence in the room stretching until it feels heavy enough to touch. Her expression doesn't shift into a smile immediately; instead, she goes unnervingly still. She is processing not just the words, but the intent behind this specific brand of intellectual taunting.*\n\n*A slow, knowing smirk begins to pull at her lips\u2014not one of mockery, but something much more dangerous: recognition. It\u2019s the look a gambler gives when they realize their oppon"
+  },
+  {
+    "timestamp": "2026-08-12T12:12:09.013241",
+    "persona": 1,
+    "model": "unknown",
+    "rating": 1,
+    "prompt": "huh, it just... worked.",
+    "answer": "Glad it worked. Is there anything else I can assist you with?"
+  }
+]

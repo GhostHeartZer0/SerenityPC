@@ -2,6 +2,10 @@ import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox, filedialog, ttk
 import tkinter.font as tkFont
 import threading, traceback, sys, os, json, zlib, time, queue, subprocess, re, atexit, webbrowser, requests, io, faulthandler, struct, random
+try:
+    import numpy as np
+except ImportError:
+    np = None
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -44,7 +48,8 @@ from serenity_resources import (THEME, THERMO_COLORS, CHAT_BG_COLORS, CHAT_FG_CO
                                TRI_ATTENTION_ENABLED, TRI_ATTENTION_BUDGET)
 from System.serenity_utils import (WidgetLogger, FileAndWidgetLogger, LoadingScreen, 
                             log_uncaught_exception, HardwareProfile, MediaProcessor, SystemMonitor,
-                            enable_fault_debugging, ThreadSafeDict, ThreadSafeList, ThinkingDisplay)
+                            enable_fault_debugging, ThreadSafeDict, ThreadSafeList, ThinkingDisplay,
+                            patch_gguf_architecture, patch_llama_deallocator)
 #from System.ui_watchdog import UIWatchdog #commented out for now to save threads
 from System.kv_manager import KVManager, TurboVecIndex
 from System.tool_registry import GemmaToolRegistry
@@ -87,14 +92,21 @@ def load_heavy_libraries():
         import llama_cpp as lc
         from llama_cpp import Llama as ll
         from PIL import Image as img, ImageTk as imgtk
-        import cv2 as cv
-        import windnd as wd
+        try:
+            import cv2 as cv
+        except ImportError:
+            cv = None
+        try:
+            import windnd as wd
+        except ImportError:
+            wd = None
         from System.vision_handler import VisionHandler as vh
         from System.synthesis_handler import generate_master_summary as gms
         from System import settings_manager as sm
         
         llama_cpp = lc
         Llama = ll
+        patch_llama_deallocator()
         Image = img
         ImageTk = imgtk
         cv2 = cv
@@ -1333,6 +1345,10 @@ class ChatbotApp:
         header = tk.Frame(self.log_container, bg=THEME["bg_color"])
         header.grid(row=0, column=0, sticky="ew")
         tk.Label(header, text="Backend Logs", font=self.fonts["italic"], bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT)
+        
+        self.self_analysis_btn = tk.Label(header, text="🩺 Self-Analysis", font=("Consolas", 9, "bold"), bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
+        self.self_analysis_btn.pack(side=tk.LEFT, padx=15)
+        self.self_analysis_btn.bind("<Button-1>", lambda e: self._run_self_analysis())
         
         self.log_switch_canvas = tk.Canvas(header, width=104, height=28, bg=THEME["bg_color"], highlightthickness=0)
         self.log_switch_canvas.pack(side=tk.RIGHT, padx=(2, 5))
@@ -2646,11 +2662,12 @@ class ChatbotApp:
                     )
                     print(f"[ENGINE] Diffusion model detected. Initializing DiffusionCLIWrapper.")
                 else:
+                    patch_gguf_architecture(self.model_path)
                     model = Llama(
                         model_path=self.model_path, 
                         n_gpu_layers=n_layers,       # Dynamic HAO
                     n_ctx=n_ctx,                 # Dynamic Context Window
-                    n_threads=8,                 # Strictly pin to 8 P-Cores
+                    n_threads=HardwareProfile.get_optimal_threads(), # Dynamic physical/logical core allocation
                     n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
                     n_ubatch=512,                # Increased for Parallel Prefill performance on i7-12700KF
                     n_keep=resolved_n_keep,      # FIXED: Preserves system prompt and visual structures in KV Cache
@@ -2755,7 +2772,37 @@ class ChatbotApp:
             self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
 
         except Exception as e:
-            if not self.stop_process.is_set(): self.state["last_crash"] = True; self.process_queue.put({"status": "load_error", "content": str(e)})
+            err_str = str(e)
+            print(f"[ENGINE] Model load error/exception detected: {err_str}")
+            if patch_gguf_architecture(self.model_path):
+                self.process_queue.put({"status": "log_update", "content": "\n[AUTO-PATCH]: Intercepted unknown GGUF model architecture. Automatically patched binary header. Retrying model load...\n"})
+                try:
+                    model = Llama(
+                        model_path=self.model_path, 
+                        n_gpu_layers=n_layers,       # Dynamic HAO
+                        n_ctx=n_ctx,                 # Dynamic Context Window
+                        n_threads=HardwareProfile.get_optimal_threads(), # Dynamic physical/logical core allocation
+                        n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
+                        n_ubatch=512,                # Increased for Parallel Prefill performance on i7-12700KF
+                        n_keep=resolved_n_keep,      # FIXED: Preserves system prompt and visual structures in KV Cache
+                        n_seq_max=1,                 # Explicit single sequence for max memory savings
+                        chat_handler=chat_handler,
+                        chat_format=resolved_format, # FIXED: Prevents template collisions on Gemma-4 structures
+                        verbose=True, 
+                        use_mmap=True,               # i7 handles kernel mapping
+                        flash_attn=use_flash,        # Dynamic Flash Attention
+                        type_k=t_k, type_v=t_v,      # Dynamic KV Quantization
+                        offload_kqv=not no_kv_offload,
+                        logits_all=False,            # DISABLED: Prevents n_ctx * vocab_size array allocation
+                        tensor_split=None,
+                    )
+                    if self.stop_process.is_set(): return
+                    self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
+                    return
+                except Exception as retry_e:
+                    err_str = f"Model load retry failed after GGUF architecture patch: {retry_e}"
+
+            if not self.stop_process.is_set(): self.state["last_crash"] = True; self.process_queue.put({"status": "load_error", "content": err_str})
 
     def _generation_worker(self, user_message, temp_messages):
         """Standard chat inference with Gemma-4 hardening."""
@@ -2768,6 +2815,9 @@ class ChatbotApp:
             print(f"[INFERENCE] Starting generation for user message ({len(user_message)} chars).")
             
             sys_content = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
+            if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
+                r_str = self.config.get("muse_reasoning_strength", "xhigh")
+                if r_str != "off": sys_content += f"\nReasoning strength: {r_str}"
             time_grounding = f"\n[TIME GROUNDING]: Current local date and time is {datetime.now().strftime('%Y-%m-%d %H:%M:%S (%A)')}."
             sys_content += time_grounding
             if any(c.isdigit() for c in user_message) and re.search(r'\d{4,}', user_message):
@@ -3030,26 +3080,36 @@ class ChatbotApp:
                     final_answer = re.sub(tag, '', final_answer, flags=re.IGNORECASE | re.DOTALL)
                     think_log = re.sub(tag, '', think_log, flags=re.IGNORECASE | re.DOTALL)
                 
-                # 3b. SYNTHESIS FALLBACK (Hardened)
+                # 3b. SYNTHESIS FALLBACK (Hardened with Budget Recovery Mode)
                 clean_answer = final_answer.strip()
                 was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
                 finish_reason = response["choices"][0].get("finish_reason", "")
+                rec_mode = self.config.get("budget_recovery_mode", "wrapup")
                 
-                # Trigger synthesis if the model gave zero or extremely short output after thinking
                 needs_synthesis = False
-                if was_thinking_expected and len(clean_answer) < 15 and len(think_log) > 50:
-                    needs_synthesis = True
-                elif "length" in str(finish_reason) and was_thinking_expected and len(clean_answer) < 20:
-                    needs_synthesis = True
+                if rec_mode != "off":
+                    if was_thinking_expected and len(clean_answer) < 15 and len(think_log) > 50:
+                        needs_synthesis = True
+                    elif "length" in str(finish_reason) and was_thinking_expected and len(clean_answer) < 20:
+                        needs_synthesis = True
                 
                 if needs_synthesis and self.active_persona_level > 1:
                     reasoning_source = think_log if think_log else full_resp
+                    if rec_mode == "wrapup":
+                        instr = "Wrap up your thoughts and provide the final answer immediately based on the reasoning above."
+                    elif rec_mode == "respond":
+                        instr = "Provide your final response now based on the reasoning above."
+                    elif rec_mode == "autocont":
+                        instr = "Continue your thought process and complete your output seamlessly."
+                    else:
+                        instr = "Synthesize a clear final response."
+                    
                     if self.active_persona_level == 6:
                         self.process_queue.put({"status": "thinking_status", "content": "Cecilia is gathering her thoughts..."})
                         synthesized = self._perform_level6_synthesis(user_message, reasoning_source)
                     else:
                         self.process_queue.put({"status": "thinking_status", "content": "Synthesizing final response..."})
-                        synthesized = self._perform_final_synthesis(user_message, reasoning_source)
+                        synthesized = self._perform_final_synthesis(user_message, reasoning_source, prompt_override=instr)
                     
                     if synthesized:
                         final_answer = synthesized.strip()
@@ -3237,6 +3297,9 @@ class ChatbotApp:
                 self.process_queue.put({"status": "thinking_status", "content": status_msg})
                 
                 sys_msg = DEEP_COOK_SYSTEM_PROMPTS.get(self.active_persona_level, "You are a logical, step-by-step reasoning AI.")
+                if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
+                    r_str = self.config.get("muse_reasoning_strength", "xhigh")
+                    if r_str != "off": sys_msg += f"\nReasoning strength: {r_str}"
                 is_gemma = "gemma" in self.model_path.lower()
                 params = self._get_inference_params(reasoning_history=reasoning_history)
                 if temp_override:
@@ -4024,59 +4087,44 @@ class ChatbotApp:
             ]
 
         
-        def process_step(index=0):
-            if index >= len(steps) or not hist.winfo_exists():
-                return
-            
-            pattern, tag, mode = steps[index]
-            hist.config(state='normal')
-            max_iters = 500  # Safety limit to prevent infinite loops
-            
-            if mode == "header":
-                search_idx = start_idx
-                iters = 0
-                while iters < max_iters:
-                    iters += 1
-                    m = hist.search(pattern, search_idx, stopindex=end_idx, regexp=True)
-                    if not m or hist.compare(m, ">=", end_idx): break
-                    line_end = hist.index(f"{m} lineend")
-                    hist.tag_add(tag, m, line_end)
-                    # CRITICAL: Advance to the START of the NEXT line, not just lineend.
-                    # Tcl's ^ anchor can re-match the same line from lineend position.
-                    next_line = hist.index(f"{m} + 1 lines linestart")
-                    if hist.compare(next_line, "<=", search_idx):
-                        break  # No advancement — bail to prevent infinite loop
-                    search_idx = next_line
-            elif mode == "list":
-                search_idx = start_idx
-                iters = 0
-                while iters < max_iters:
-                    iters += 1
-                    m = hist.search(pattern, search_idx, stopindex=end_idx, regexp=True)
-                    if not m or hist.compare(m, ">=", end_idx): break
-                    line_text = hist.get(f"{m} linestart", f"{m} lineend")
-                    marker = re.search(r'^\s*[\*\-] ', line_text)
-                    if marker:
-                        m_start = hist.index(f"{m} linestart + {marker.start()} chars")
-                        m_end = hist.index(f"{m} linestart + {marker.end()} chars")
-                        hist.delete(m_start, m_end)
-                        hist.insert(m_start, " • ", base_tags)
-                        hist.tag_add("md_list", f"{m_start} linestart", f"{m_start} lineend")
-                    # CRITICAL: Advance to next line start to prevent re-matching
-                    next_line = hist.index(f"{m} + 1 lines linestart")
-                    if hist.compare(next_line, "<=", search_idx):
-                        break  # No advancement — bail
-                    search_idx = next_line
-            else:
-                self._regex_format(pattern, tag, start_idx, end_idx, base_tags)
-            
-            hist.config(state='disabled')
-            # CRITICAL: Process next step synchronously to prevent state='normal'/state='disabled' 
-            # race conditions with _finalize_message and check_process_queue callbacks
-            process_step(index + 1)
-
-        # Process all markdown steps synchronously (no async scheduling)
-        process_step(0)
+        # Process all markdown steps iteratively to avoid stack overhead
+        if hist.winfo_exists():
+            for pattern, tag, mode in steps:
+                hist.config(state='normal')
+                max_iters = 500
+                if mode == "header":
+                    search_idx = start_idx
+                    iters = 0
+                    while iters < max_iters:
+                        iters += 1
+                        m = hist.search(pattern, search_idx, stopindex=end_idx, regexp=True)
+                        if not m or hist.compare(m, ">=", end_idx): break
+                        line_end = hist.index(f"{m} lineend")
+                        hist.tag_add(tag, m, line_end)
+                        next_line = hist.index(f"{m} + 1 lines linestart")
+                        if hist.compare(next_line, "<=", search_idx): break
+                        search_idx = next_line
+                elif mode == "list":
+                    search_idx = start_idx
+                    iters = 0
+                    while iters < max_iters:
+                        iters += 1
+                        m = hist.search(pattern, search_idx, stopindex=end_idx, regexp=True)
+                        if not m or hist.compare(m, ">=", end_idx): break
+                        line_text = hist.get(f"{m} linestart", f"{m} lineend")
+                        marker = re.search(r'^\s*[\*\-] ', line_text)
+                        if marker:
+                            m_start = hist.index(f"{m} linestart + {marker.start()} chars")
+                            m_end = hist.index(f"{m} linestart + {marker.end()} chars")
+                            hist.delete(m_start, m_end)
+                            hist.insert(m_start, " • ", base_tags)
+                            hist.tag_add("md_list", f"{m_start} linestart", f"{m_start} lineend")
+                        next_line = hist.index(f"{m} + 1 lines linestart")
+                        if hist.compare(next_line, "<=", search_idx): break
+                        search_idx = next_line
+                else:
+                    self._regex_format(pattern, tag, start_idx, end_idx, base_tags)
+                hist.config(state='disabled')
 
     def _regex_format(self, pattern, tag, start_idx, end_idx, base_tags):
         """High-performance native search/format for chat history with absolute index safety."""
@@ -4292,7 +4340,7 @@ class ChatbotApp:
                 pil_img = Image.open(io.BytesIO(resp.content))
             else:
                 # Local Path
-                if any(url.lower().endswith(ext) for ext in [".mp4", ".avi", ".mkv", ".mov"]):
+                if any(url.lower().endswith(ext) for ext in [".mp4", ".avi", ".mkv", ".mov"]) and cv2:
                     # Video Frame Extraction
                     cap = cv2.VideoCapture(url)
                     ret, frame = cap.read()
@@ -4337,7 +4385,7 @@ class ChatbotApp:
                 if url.startswith("http"):
                     resp = requests.get(url, timeout=10); pil_img = Image.open(io.BytesIO(resp.content))
                 else:
-                    if any(url.lower().endswith(ext) for ext in [".mp4", ".avi", ".mkv", ".mov"]):
+                    if any(url.lower().endswith(ext) for ext in [".mp4", ".avi", ".mkv", ".mov"]) and cv2:
                         cap = cv2.VideoCapture(url); ret, frame = cap.read()
                         pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) if ret else None; cap.release()
                     else: pil_img = Image.open(url)
@@ -5013,6 +5061,9 @@ class ChatbotApp:
                     HardwareProfile.pin_to_p_cores()
                     try:
                         sys_prompt = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
+                        if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
+                            r_str = self.config.get("muse_reasoning_strength", "xhigh")
+                            if r_str != "off": sys_prompt += f"\nReasoning strength: {r_str}"
                         stream = self.model.create_chat_completion(
                             messages=[
                                 {"role": "system", "content": sys_prompt},
@@ -5101,6 +5152,9 @@ class ChatbotApp:
                         VisionHandler.hygiene_gate(self.model)
                         
                         sys_prompt = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
+                        if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
+                            r_str = self.config.get("muse_reasoning_strength", "xhigh")
+                            if r_str != "off": sys_prompt += f"\nReasoning strength: {r_str}"
                         stream = self.model.create_chat_completion(
                             messages=[
                                 {"role": "system", "content": sys_prompt},
@@ -5327,7 +5381,7 @@ class ChatbotApp:
             return True
         return False
 
-    def _perform_final_synthesis(self, user_msg, reasoning_history, skip_critique=True, critique_txt=""):
+    def _perform_final_synthesis(self, user_msg, reasoning_history, skip_critique=True, critique_txt="", prompt_override=None):
         """Shared logic to distill thoughts into a final response."""
         try:
             try: self.set_avatar_state("ecstatic")
@@ -5340,16 +5394,20 @@ class ChatbotApp:
             synth_params = dict(params)
             synth_params["max_tokens"] = 4096
 
+            instr_text = prompt_override if prompt_override else "Convert the reasoning above into a direct final response. Speak directly to the user now. Output ONLY the final response."
             final_prompt = (
                 f"User Query: {user_msg}\n\n"
                 f"Reasoning to convert:\n{history_subset}\n\n"
                 f"[ORGANIZED BACKEND THOUGHTS]: {self.state.get('dmn_backbone', {}).get('last_simmer', 'N/A')}\n\n"
-                f"{critique_part}" f"Convert the reasoning above into a direct final response. Speak directly to the user now. Output ONLY the final response."
+                f"{critique_part}{instr_text}"
             )
 
             if is_gemma:
                 self.process_queue.put({"status": "thinking_status", "content": "Refining Response..."})
                 persona_instr = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
+                if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
+                    r_str = self.config.get("muse_reasoning_strength", "xhigh")
+                    if r_str != "off": persona_instr += f"\nReasoning strength: {r_str}"
                 synth_sys = (
                     f"{persona_instr}\n\n"
                     "[TASK]: Convert the provided reasoning history into a direct final response. "
@@ -5575,8 +5633,99 @@ class ChatbotApp:
             self._apply_markdown(render_start, render_end, ("ai",))
             self._post_process_media(start_idx=render_start)
         
+        # Embed RLHF Feedback Widget
+        if not error and final_answer:
+            try:
+                rlhf_frame = tk.Frame(hist, bg=THEME["bg_color"])
+                lbl_fb = tk.Label(rlhf_frame, text="Feedback: ", bg=THEME["bg_color"], fg="#666666", font=("Consolas", 8))
+                lbl_fb.pack(side=tk.LEFT)
+                
+                def _submit_fb(rating):
+                    btn_up.config(state="disabled", fg="#555555" if rating < 0 else "#00ff88")
+                    btn_down.config(state="disabled", fg="#ff4444" if rating < 0 else "#555555")
+                    self._save_rlhf_log(user_msg, final_answer, rating)
+
+                btn_up = tk.Button(rlhf_frame, text="👍", bg=THEME["bg_color"], fg="#00ff88", activebackground=THEME["widget_bg_color"],
+                                   relief=tk.FLAT, font=("Consolas", 9), command=lambda: _submit_fb(1))
+                btn_down = tk.Button(rlhf_frame, text="👎", bg=THEME["bg_color"], fg="#ff4444", activebackground=THEME["widget_bg_color"],
+                                     relief=tk.FLAT, font=("Consolas", 9), command=lambda: _submit_fb(-1))
+                btn_up.pack(side=tk.LEFT, padx=2)
+                btn_down.pack(side=tk.LEFT, padx=2)
+                
+                hist.insert(tk.END, "\n", ("ai",))
+                hist.window_create(tk.END, window=rlhf_frame)
+                hist.insert(tk.END, "\n", ("ai",))
+            except Exception as fb_err:
+                print(f"[UI] RLHF widget embed error: {fb_err}")
+
         hist.config(state='disabled')
         hist.see(tk.END)
+
+    def _save_rlhf_log(self, prompt, answer, rating):
+        """Saves user feedback (+1 / -1) into System/rlhf_logs.json and updates DMN backbone."""
+        try:
+            p = os.path.join(self.dirs["System"], "rlhf_logs.json")
+            logs = []
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    logs = json.load(f)
+            entry = {
+                "timestamp": datetime.now().isoformat(),
+                "persona": getattr(self, "active_persona_level", 1),
+                "model": self.config.get("model_path", "unknown"),
+                "rating": rating,
+                "prompt": prompt,
+                "answer": answer[:500] if answer else ""
+            }
+            logs.append(entry)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(logs, f, indent=2)
+            
+            # Incorporate with DMN (Level 7 & background memory)
+            if "dmn_backbone" in self.state and isinstance(self.state["dmn_backbone"], dict):
+                self.state["dmn_backbone"]["last_rlhf_rating"] = rating
+                self.state["dmn_backbone"]["total_rlhf_count"] = len(logs)
+                self._save_dmn_backbone()
+            print(f"[RLHF] Successfully recorded feedback ({rating}) to {p}")
+        except Exception as e:
+            print(f"[RLHF ERROR] Failed to save feedback: {e}")
+
+    def _run_self_analysis(self):
+        """Gathers system configuration and triggers a self-diagnosis report output to the chat window."""
+        try:
+            vram_mb = getattr(self, "virtual_vram", 0) or self.state.get("virtual_vram", 0)
+            model_p = self.config.get("model_path", "None")
+            p_level = getattr(self, "active_persona_level", 1)
+            rec_mode = self.config.get("budget_recovery_mode", "wrapup")
+            markdown_on = self.config.get("inline_markdown", True)
+            k_cache = self.config.get("k_cache_type", "q8_0")
+            v_cache = self.config.get("v_cache_type", "q4_0")
+            
+            diag_report = (
+                "### 🩺 **Serenity Configuration Self-Analysis Report**\n\n"
+                f"- **Active Model**: `{os.path.basename(model_p)}`\n"
+                f"- **Persona Level**: `Level {p_level}`\n"
+                f"- **VRAM Target**: `{vram_mb / 1024:.2f} GB`\n"
+                f"- **KV Cache Config**: `K: {k_cache} | V: {v_cache}`\n"
+                f"- **Thought Budget Recovery**: `{rec_mode.upper()}`\n"
+                f"- **Inline Markdown Engine**: `{'Enabled' if markdown_on else 'Disabled'}`\n"
+                f"- **DMN Reflection Backbone**: `{self.state.get('dmn_backbone', {}).get('node_count', 0)} nodes active`\n"
+                f"- **System Status**: `Operational - All Core Pipelines Nominal`\n"
+            )
+            
+            if self.chat_history:
+                self.chat_history.config(state='normal')
+                self.chat_history.insert(tk.END, f"\n\n🤖 **Serenity Self-Analysis**: \n", "ai_lead")
+                self.chat_history.insert(tk.END, diag_report, "ai")
+                self.chat_history.config(state='disabled')
+                self.chat_history.see(tk.END)
+                if self.config.get("media_rendering", 1) > 0:
+                    start_idx = self.chat_history.index(tk.END + f"-{len(diag_report)+20}c")
+                    end_idx = self.chat_history.index(tk.END + "-1c")
+                    self._apply_markdown(start_idx, end_idx, ("ai",))
+            print("[SELF-ANALYSIS] Diagnosis report generated successfully.")
+        except Exception as err:
+            print(f"[SELF-ANALYSIS ERROR] Failed to run self analysis: {err}")
         
         # PERSISTENCE (Hardened against memory corruption)
         try:
@@ -6126,6 +6275,8 @@ class ChatbotApp:
             self.config["benchmark_enabled"] = False
         if "inline_markdown" not in self.config:
             self.config["inline_markdown"] = True
+        if "budget_recovery_mode" not in self.config:
+            self.config["budget_recovery_mode"] = "wrapup"
         if "monitor_graph_mode" not in self.config:
             self.config["monitor_graph_mode"] = False
 
