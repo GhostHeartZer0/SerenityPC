@@ -189,6 +189,14 @@ def open_settings_window(app):
             tk.Radiobutton(image_handling_frame, text=opt.capitalize(), variable=image_handling_var, value=opt,
                            bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=5)
 
+        tk.Label(left_header, text="Muse Reasoning:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", pady=(5, 0))
+        muse_reasoning_var = tk.StringVar(value=app.config.get("muse_reasoning_strength", "xhigh"))
+        muse_reasoning_frame = tk.Frame(left_header, bg=THEME["bg_color"])
+        muse_reasoning_frame.pack(anchor="w", padx=10)
+        for opt in ["off", "low", "medium", "high", "xhigh"]:
+            tk.Radiobutton(muse_reasoning_frame, text=opt.capitalize(), variable=muse_reasoning_var, value=opt,
+                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=2)
+
         # 3 Checkboxes relocated from Global Overrides to left column
         auto_vram_var = tk.BooleanVar(value=app.config.get("auto_vram_offload", False))
         spec_draft_var = tk.BooleanVar(value=app.config.get("speculative_drafting", True))
@@ -475,6 +483,11 @@ def open_settings_window(app):
         history_usage_dropdown = ttk.Combobox(kv_frame, textvariable=history_usage_var, values=["all", "current_window", "off"], state="readonly", width=14)
         history_usage_dropdown.grid(row=3, column=1, padx=5, pady=2)
 
+        tk.Label(kv_frame, text="Budget Recovery Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=4, column=0, sticky="w", pady=2)
+        budget_recovery_var = tk.StringVar(value=app.config.get("budget_recovery_mode", "wrapup"))
+        budget_recovery_dropdown = ttk.Combobox(kv_frame, textvariable=budget_recovery_var, values=["off", "respond", "wrapup", "autocont"], state="readonly", width=14)
+        budget_recovery_dropdown.grid(row=4, column=1, padx=5, pady=2)
+
         tk.Label(main, text="Text/Inline Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(anchor="w", padx=10, pady=(15, 5))
         tier_grid = tk.Frame(main, bg=THEME["bg_color"])
         tier_grid.pack(fill=tk.X, pady=10)
@@ -538,10 +551,12 @@ def open_settings_window(app):
             app.config["thinking_checkbox"] = thinking_var.get()
             app.config["benchmark_enabled"] = benchmark_var.get()
             app.config["inline_markdown"] = inline_md_var.get()
+            app.config["budget_recovery_mode"] = budget_recovery_var.get()
             app.config["monitor_graph_mode"] = monitor_graph_var.get()
             app.state["streaming_mode"] = stream_var.get()
             app.config["max_token_ratio"] = ratio_var.get()
             app.config["image_handling"] = image_handling_var.get()
+            app.config["muse_reasoning_strength"] = muse_reasoning_var.get()
             app.config["dmn_timeout"] = dmn_ent.get().strip()
             try: app.state["virtual_vram"] = int(float(vram_ent.get()) * 1024)
             except: pass

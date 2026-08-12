@@ -1,6 +1,13 @@
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 import base64
 import os
+import glob
+import math
+import tempfile
+import numpy as np
 import torch
 import psutil
 from llama_cpp import Llama
@@ -50,11 +57,12 @@ class VisionHandler:
         params = getattr(self, 'params', {}).copy()
         use_flash = params.pop('flash_attn', True) # KW_ARGS COLLISION FIX
 
+        threads = HardwareProfile.get_optimal_threads() if HardwareProfile else 4
         self.llm = Llama(
             model_path=self.model_path,
             n_gpu_layers=layers,  # This is your 'offload' target
             n_ctx=32768,          # You have 32GB RAM now—use it!
-            n_threads=8,          # Strictly pin to 8 P-Cores
+            n_threads=threads,    # Dynamic physical/logical core allocation
             n_batch=512,          # Optimized for VRAM spike guard
             n_ubatch=256,         # Micro-batching for bus alignment
             use_mmap=True,        # i7 manages kernel mapping

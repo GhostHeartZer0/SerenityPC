@@ -9,6 +9,7 @@ import time
 import random
 import gc
 import struct
+import numpy as np
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from typing import List, Dict, Any, Optional
