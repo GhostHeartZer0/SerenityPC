@@ -1,6 +1,8 @@
 from typing import List, Dict, Any, Optional
 from System.tri_attention_core import TriAttentionScorer
 import logging
+import numpy as np
+import os
 
 class KVManager:
     """
@@ -106,3 +108,168 @@ class KVManager:
         kept_indices = sorted(list(set(kept_indices)))
         pruned_text = "\n\n[...] (Sparsified by TriAttention) [...]\n\n".join([chunks[i] for i in kept_indices])
         return pruned_text
+
+
+class TurboVecIndex:
+    def __init__(self, history_dir):
+        import os
+        import threading
+        self.history_dir = history_dir
+        self._ingested_files = set()
+        self.metadata = []
+        self.lock = threading.RLock()
+        self.collection = None
+        self.embedder = None
+
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+        try:
+            import turbovec
+            self.collection = turbovec.TurboQuantIndex(384)
+        except Exception as e:
+            print(f"[TURBOVEC] Failed to initialize TurboQuantIndex: {e}")
+
+        try:
+            from sentence_transformers import SentenceTransformer
+            self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
+        except Exception as e:
+            print(f"[TURBOVEC] Failed to initialize SentenceTransformer: {e}")
+
+    def ingest_needed_files(self, active_model_path: Optional[str], active_level: Optional[int], lookup_mode: str):
+        import glob
+        import os
+        import re
+        import json
+        import zlib
+
+        with self.lock:
+            active_model_name = None
+            if active_model_path:
+                active_model_name = os.path.splitext(os.path.basename(active_model_path))[0].lower()
+
+            files = glob.glob(os.path.join(self.history_dir, "*.history.jsonz"))
+            files_to_load = []
+
+            for f in files:
+                basename = os.path.basename(f)
+                match = re.search(r"^(.*)_lvl(\d+)\.history\.jsonz$", basename)
+                if not match:
+                    continue
+                
+                f_model = match.group(1).lower()
+                f_level = int(match.group(2))
+
+                should_load = False
+                if lookup_mode == "targeted":
+                    if active_model_name and f_model == active_model_name and active_level is not None and f_level == active_level:
+                        should_load = True
+                elif lookup_mode == "model":
+                    if active_model_name and f_model == active_model_name:
+                        should_load = True
+                elif lookup_mode == "level":
+                    if active_level is not None and f_level == active_level:
+                        should_load = True
+                elif lookup_mode == "all":
+                    should_load = True
+
+                if should_load:
+                    files_to_load.append((f, f_model, f_level))
+
+            newly_ingested = 0
+            for f, f_model, f_level in files_to_load:
+                if f in self._ingested_files:
+                    continue
+                try:
+                    with open(f, 'rb') as fp:
+                        history = json.loads(zlib.decompress(fp.read()).decode('utf-8'))
+                    
+                    texts = []
+                    temp_metadata = []
+                    for msg in history:
+                        content = msg.get("content", "")
+                        if len(content) > 20:
+                            texts.append(content)
+                            temp_metadata.append({
+                                "content": content,
+                                "role": msg.get("role"),
+                                "file": f,
+                                "model": f_model,
+                                "level": f_level
+                            })
+                    
+                    if texts and self.embedder is not None and self.collection is not None:
+                        vecs = self.embedder.encode(texts, convert_to_numpy=True)
+                        self.collection.add(vecs.astype(np.float32))
+                        self.metadata.extend(temp_metadata)
+                        newly_ingested += len(texts)
+                    elif texts:
+                        self.metadata.extend(temp_metadata)
+                        newly_ingested += len(texts)
+
+                    self._ingested_files.add(f)
+                except Exception as e:
+                    print(f"[TURBOVEC] Failed to parse history {f}: {e}")
+
+            if newly_ingested > 0:
+                print(f"[TURBOVEC] Ingested {newly_ingested} new chunks. Total indexed: {len(self.metadata)}")
+
+    def search(self, query: str, top_k: int = 3, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted"):
+        import numpy as np
+        
+        with self.lock:
+            self.ingest_needed_files(active_model_path, active_level, lookup_mode)
+            
+            if not self.metadata:
+                return []
+
+            active_model_name = None
+            if active_model_path:
+                active_model_name = os.path.splitext(os.path.basename(active_model_path))[0].lower()
+
+            mask = np.zeros(len(self.metadata), dtype=bool)
+            for i, meta in enumerate(self.metadata):
+                match = False
+                if lookup_mode == "targeted":
+                    if active_model_name and meta["model"] == active_model_name and active_level is not None and meta["level"] == active_level:
+                        match = True
+                elif lookup_mode == "model":
+                    if active_model_name and meta["model"] == active_model_name:
+                        match = True
+                elif lookup_mode == "level":
+                    if active_level is not None and meta["level"] == active_level:
+                        match = True
+                elif lookup_mode == "all":
+                    match = True
+                
+                mask[i] = match
+
+            if not np.any(mask):
+                return []
+
+            # If vector search engine is active, perform vector similarity search
+            if self.embedder is not None and self.collection is not None:
+                try:
+                    query_vec = self.embedder.encode([query], convert_to_numpy=True).astype(np.float32)
+                    distances, indices = self.collection.search(query_vec, k=top_k, mask=mask)
+                    
+                    results = []
+                    if len(indices) > 0:
+                        for idx in indices[0]:
+                            if 0 <= idx < len(self.metadata):
+                                results.append(self.metadata[idx]["content"])
+                    return results
+                except Exception as e:
+                    print(f"[TURBOVEC] Vector search failed ({e}), falling back to keyword search.")
+
+            # Fallback keyword search
+            query_terms = [t for t in query.lower().split() if len(t) > 3]
+            scored_res = []
+            for i, meta in enumerate(self.metadata):
+                if mask[i]:
+                    c_lower = meta["content"].lower()
+                    score = sum(c_lower.count(t) for t in query_terms)
+                    if score > 0:
+                        scored_res.append((score, meta["content"]))
+            
+            scored_res.sort(key=lambda x: x[0], reverse=True)
+            return [text for _, text in scored_res[:top_k]]

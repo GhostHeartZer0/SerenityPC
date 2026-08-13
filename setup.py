@@ -2,6 +2,12 @@ import sys
 import subprocess
 import os
 import tempfile
+import shutil
+import glob
+import re
+import time
+import ctypes
+import traceback
 
 # --- Localize Temp and Cache Paths ---
 _curr = os.path.abspath(__file__)
@@ -16,29 +22,25 @@ while True:
     _curr = _parent
 
 _cache_dir = os.path.join(_workspace, ".serenity_cache")
-_temp_dir = os.path.join(_cache_dir, "temp")
 _cuda_dir = os.path.join(_cache_dir, "cuda")
 _triton_dir = os.path.join(_cache_dir, "triton")
 _torch_ext_dir = os.path.join(_cache_dir, "torch_extensions")
 _pip_dir = os.path.join(_cache_dir, "pip")
 
-for _d in [_temp_dir, _cuda_dir, _triton_dir, _torch_ext_dir, _pip_dir]:
+for _d in [_cuda_dir, _triton_dir, _torch_ext_dir, _pip_dir]:
     os.makedirs(_d, exist_ok=True)
 
-os.environ["TEMP"] = _temp_dir
-os.environ["TMP"] = _temp_dir
-os.environ["TMPDIR"] = _temp_dir
+_user_temp = os.path.join(os.environ.get("USERPROFILE", "C:\\Users\\Default"), "AppData", "Local", "Temp")
+if os.path.exists(_user_temp):
+    os.environ["TEMP"] = _user_temp
+    os.environ["TMP"] = _user_temp
+    os.environ["TMPDIR"] = _user_temp
+    tempfile.tempdir = _user_temp
+
 os.environ["CUDA_CACHE_PATH"] = _cuda_dir
 os.environ["TRITON_CACHE_DIR"] = _triton_dir
 os.environ["TORCH_EXTENSIONS_DIR"] = _torch_ext_dir
 os.environ["PIP_CACHE_DIR"] = _pip_dir
-tempfile.tempdir = _temp_dir
-
-import time
-import traceback
-import ctypes
-import glob
-import shutil
 
 # --- Configuration ---
 REQUIREMENTS_FILE = "requirements.txt"
@@ -46,38 +48,185 @@ REQUIREMENTS_FILE = "requirements.txt"
 # For 3050 LP: sm_86 is the architecture.
 # --- End Configuration ---
 
+def ensure_venv():
+    """Ensure setup runs inside a .venv; create and re-exec if running in base Python."""
+    env_file = os.path.join(_workspace, ".env")
+    if not os.path.exists(env_file):
+        print(f"[*] Creating default .env file at {env_file}...")
+        with open(env_file, "w") as f:
+            f.write("# Serenity PC Environment Configuration\n")
+            f.write("# Legacy GPU Target: sm_50, sm_61\n")
+
+    if sys.prefix != sys.base_prefix:
+        if not shutil.which("ninja"):
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "ninja", "--quiet"])
+            except Exception:
+                pass
+        return
+
+    venv_dir = os.path.join(_workspace, ".venv")
+    is_win = os.name == "nt"
+    py_exe = os.path.join(venv_dir, "Scripts" if is_win else "bin", "python.exe" if is_win else "python")
+
+    if not os.path.exists(py_exe):
+        print(f"[*] Creating .venv environment at: {venv_dir}")
+        subprocess.check_call([sys.executable, "-m", "venv", venv_dir])
+        subprocess.check_call([py_exe, "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools", "ninja", "--quiet"])
+
+    print(f"[*] Relaunching setup.py inside .venv ({py_exe})...")
+    subprocess.check_call([py_exe] + sys.argv)
+    sys.exit(0)
+
+def get_short_path(path):
+    """Convert Windows path to 8.3 short path format to prevent space-splitting in CMake arguments."""
+    if not path or not os.path.exists(path):
+        return path
+    try:
+        buf = ctypes.create_unicode_buffer(500)
+        res = ctypes.windll.kernel32.GetShortPathNameW(path, buf, 500)
+        if res > 0:
+            return buf.value
+    except Exception:
+        pass
+    return path
+
 def get_cuda_path():
     base_install = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
     if os.path.exists(base_install):
         versions = glob.glob(os.path.join(base_install, "v*")) 
         if versions:
+            v12 = [v for v in versions if os.path.basename(v).startswith("v12")]
+            if v12:
+                return os.path.join(sorted(v12)[-1], "bin")
             return os.path.join(sorted(versions)[-1], "bin")
     return os.environ.get('CUDA_PATH') or os.environ.get('CUDA_HOME')
 
 def inject_cuda_path(cuda_bin_path):
-    if cuda_bin_path and os.path.isdir(cuda_bin_path) and hasattr(os, 'add_dll_directory'):
-        try:
-            os.add_dll_directory(cuda_bin_path)
-            # Also add the lib/x64 path where cublas lives
-            lib_path = os.path.join(os.path.dirname(cuda_bin_path), "lib", "x64")
-            if os.path.exists(lib_path) and os.path.isdir(lib_path):
-                os.add_dll_directory(lib_path)
-            print(f"  > [V] Apex Link Established: {cuda_bin_path}")
-        except Exception as e:
-            print(f"  > [!] DLL Error: {e}")
+    if cuda_bin_path and os.path.isdir(cuda_bin_path):
+        cuda_root = os.path.dirname(cuda_bin_path)
+        cuda_root_short = get_short_path(cuda_root)
+        cuda_bin_short = get_short_path(cuda_bin_path)
+        nvcc_path = get_short_path(os.path.join(cuda_bin_path, "nvcc.exe"))
+        
+        os.environ["CUDA_PATH"] = cuda_root_short
+        os.environ["CUDA_HOME"] = cuda_root_short
+        os.environ["CUDAToolkit_ROOT"] = cuda_root_short
+        if os.path.exists(nvcc_path):
+            os.environ["CUDACXX"] = nvcc_path
+        os.environ["PATH"] = cuda_bin_short + os.pathsep + os.environ.get("PATH", "")
+        if hasattr(os, 'add_dll_directory'):
+            try:
+                os.add_dll_directory(cuda_bin_path)
+                lib_path = os.path.join(cuda_root, "lib", "x64")
+                if os.path.exists(lib_path) and os.path.isdir(lib_path):
+                    os.add_dll_directory(lib_path)
+                print(f"  > [V] Apex Link Established: {cuda_bin_path}")
+            except Exception as e:
+                print(f"  > [!] DLL Error: {e}")
 
 def find_vcvars():
-    paths = [
-        r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat",
+    """Locate Visual Studio / MSVC vcvars64.bat, prioritizing VS 2022 for CUDA compatibility."""
+    vs2022_paths = [
         r"C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat",
         r"C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat",
         r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
+    ]
+    for p in vs2022_paths:
+        if os.path.exists(p):
+            return p
+
+    vswhere_paths = [
+        r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe",
+        r"C:\Program Files\Microsoft Visual Studio\Installer\vswhere.exe",
+    ]
+    for vswhere_exe in vswhere_paths:
+        if os.path.exists(vswhere_exe):
+            try:
+                cmd = [vswhere_exe, "-version", "[17.0,18.0)", "-products", "*", "-property", "installationPath"]
+                out = subprocess.check_output(cmd, text=True, errors="ignore").strip()
+                if not out:
+                    cmd = [vswhere_exe, "-latest", "-prerelease", "-products", "*", "-property", "installationPath"]
+                    out = subprocess.check_output(cmd, text=True, errors="ignore").strip()
+                if out:
+                    for inst in out.splitlines():
+                        inst = inst.strip()
+                        if inst:
+                            bat = os.path.join(inst, "VC", "Auxiliary", "Build", "vcvars64.bat")
+                            if os.path.exists(bat):
+                                return bat
+                            bat_all = os.path.join(inst, "VC", "Auxiliary", "Build", "vcvarsall.bat")
+                            if os.path.exists(bat_all):
+                                return bat_all
+            except Exception:
+                pass
+
+    paths = [
+        r"C:\Program Files\Microsoft Visual Studio\2026\Community\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files\Microsoft Visual Studio\2026\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files\Microsoft Visual Studio\2026\Preview\VC\Auxiliary\Build\vcvars64.bat",
         r"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
         r"C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
     ]
     for p in paths:
-        if os.path.exists(p): return p
+        if os.path.exists(p):
+            return p
+
+    glob_patterns = [
+        r"C:\Program Files\Microsoft Visual Studio\2022\*\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\*\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files\Microsoft Visual Studio\*\*\VC\Auxiliary\Build\vcvars64.bat",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\*\*\VC\Auxiliary\Build\vcvars64.bat",
+    ]
+    for pattern in glob_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            return matches[0]
+
     return None
+
+def capture_vcvars_env(vcvars_path):
+    if not vcvars_path or not os.path.exists(vcvars_path):
+        return {}
+    
+    toolsets = ["-vcvars_ver=14.4", "-vcvars_ver=14.3", ""]
+    for ts in toolsets:
+        try:
+            cmd = f'call "{vcvars_path}" {ts} >nul 2>&1 && set'
+            output = subprocess.check_output(cmd, shell=True, text=True, errors='ignore')
+            env_vars = {}
+            for line in output.splitlines():
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    env_vars[k] = v
+            if env_vars and "VCINSTALLDIR" in env_vars:
+                if ts:
+                    print(f"  > [V] Selected VS 2022 Toolset ({ts}) for CUDA nvcc stability.")
+                return env_vars
+        except Exception:
+            pass
+    return {}
+
+def setup_msvc_env():
+    """Detect and inject MSVC build environment into os.environ."""
+    vcvars = find_vcvars()
+    if vcvars:
+        vc_env = capture_vcvars_env(vcvars)
+        if vc_env:
+            os.environ.update(vc_env)
+            os.environ["CC"] = "cl"
+            os.environ["CXX"] = "cl"
+            print(f"✅ MSVC Compiler Environment initialized ({vcvars}).")
+            return True
+        else:
+            print(f"⚠️  Found {vcvars} but failed to capture environment.")
+    else:
+        print("❌ Visual Studio MSVC compiler (vcvars64.bat) NOT found.")
+    return False
 
 def check_build_environment():
     """Pre-flight check to identify why builds usually fail."""
@@ -106,45 +255,103 @@ def check_build_environment():
         print("✅ All critical build tools detected.\n")
     return all_passed
 
-def install_engine(cuda_path, use_source=False, force_pypi=False):
+import re
+
+def check_cuda_version_and_options(cuda_path=None):
+    """Detect CUDA version and prompt options if CUDA 13+ is present on legacy hardware."""
+    try:
+        nvcc_bin = os.path.join(cuda_path, "nvcc.exe") if cuda_path and os.path.exists(os.path.join(cuda_path, "nvcc.exe")) else "nvcc"
+        out = subprocess.check_output([nvcc_bin, "--version"], text=True)
+        match = re.search(r"release (\d+)\.", out)
+        if match and int(match.group(1)) >= 13:
+            print("\n==================================================")
+            print("⚠️  WARNING: CUDA 13+ Detected!")
+            print("CUDA 13+ has dropped compiler support for legacy GPUs (sm_50, sm_61).")
+            print("To compile for Maxwell/Pascal (GTX 900/1000 series), CUDA 12.x is recommended.")
+            print("==================================================")
+            print("Options:")
+            print(" [1] Attempt Legacy build anyway (Fallback archs)")
+            print(" [2] Force CPU-only mode (-DGGML_CUDA=off)")
+            print(" [3] Abort setup (to install CUDA 12.x Toolkit)")
+            choice = input("Select option [1/2/3] (default 1): ").strip() or "1"
+            if choice == "2":
+                return "cpu", "50;61;70;75;80;86"
+            elif choice == "3":
+                print("Exiting setup.")
+                sys.exit(0)
+            return "cuda", "50;61;86"
+    except Exception:
+        pass
+    return "cuda", "50;61;86"
+
+def install_engine(cuda_path, use_source=False, force_pypi=False, build_mode="cuda", cuda_archs="50;61;86"):
     """
-    Unified installer optimized for i7-12700KF + RTX 3050 LP.
+    Unified installer optimized for legacy hardware compatibility (sm_50, sm_61 support).
     """
-    print(f"\n[ ! ] PHASE: Building Apex Engine (P-Core Optimized)...")
+    print(f"\n[ ! ] PHASE: Building Apex Engine (Legacy GPU Support: {cuda_archs})...")
     
     cuda_root = os.path.dirname(cuda_path) if cuda_path else ""
+    cuda_flag = "on" if build_mode == "cuda" else "off"
     
-    # CRITICAL: We let CMake auto-detect or use native architecture.
-    # We also disable AVX512 as it causes stability issues on hybrid architectures.
-    cmake_args = (
-        "-DGGML_CUDA=on "
-        "-DGGML_AVX512=OFF "
-        "-DCMAKE_CXX_STANDARD=17 "
-        "-DCMAKE_CUDA_STANDARD=17 "
-        "-DCMAKE_CXX_FLAGS='/Zc:preprocessor' "
-        "-DCMAKE_CUDA_FLAGS='-Xcompiler /Zc:preprocessor'"
-    )
-    if cuda_root:
-        cmake_args += f' -T "cuda={cuda_root}"'
+    cmake_args_list = [
+        f"-DGGML_CUDA={cuda_flag}",
+        f"-DCMAKE_CUDA_ARCHITECTURES={cuda_archs}",
+        "-DGGML_AVX512=OFF",
+        "-DCMAKE_CXX_STANDARD=17",
+        "-DCMAKE_CUDA_STANDARD=17",
+        "-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler",
+    ]
+    if cuda_path and os.path.exists(cuda_path):
+        cuda_root_short = get_short_path(cuda_root).replace("\\", "/")
+        nvcc_short = get_short_path(os.path.join(cuda_path, "nvcc.exe")).replace("\\", "/")
+        cmake_args_list.append(f"-DCUDAToolkit_ROOT={cuda_root_short}")
+        cmake_args_list.append(f"-DCMAKE_CUDA_COMPILER={nvcc_short}")
+
+    cmake_args = " ".join(cmake_args_list)
 
     env = os.environ.copy()
-    env["CMAKE_ARGS"] = cmake_args
-    env["FORCE_CMAKE"] = "1"
+    env["CMAKE_BUILD_PARALLEL_LEVEL"] = "4"
+    env["MAX_JOBS"] = "4"
     scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
     if cuda_path:
-        env["CUDA_PATH"] = cuda_root
-        env["CUDA_HOME"] = cuda_root
-        env["PATH"] = cuda_path + os.pathsep + scripts_dir + os.pathsep + env.get("PATH", "")
+        cuda_bin_short = get_short_path(cuda_path)
+        cuda_root_short = get_short_path(cuda_root)
+        nvcc_short = get_short_path(os.path.join(cuda_path, "nvcc.exe"))
+        env["CUDA_PATH"] = cuda_root_short
+        env["CUDA_HOME"] = cuda_root_short
+        env["CUDAToolkit_ROOT"] = cuda_root_short
+        env["CUDACXX"] = nvcc_short
+        env["PATH"] = cuda_bin_short + os.pathsep + scripts_dir + os.pathsep + env.get("PATH", "")
     else:
         env["PATH"] = scripts_dir + os.pathsep + env.get("PATH", "")
 
+    user_temp = os.path.join(os.environ.get("USERPROFILE", "C:\\Users\\Default"), "AppData", "Local", "Temp")
+    if os.path.exists(user_temp):
+        env["TEMP"] = user_temp
+        env["TMP"] = user_temp
+        env["TMPDIR"] = user_temp
+
+    if shutil.which("ninja") or os.path.exists(os.path.join(scripts_dir, "ninja.exe")):
+        env["CMAKE_GENERATOR"] = "Ninja"
+        print("🚀 Using Ninja generator for faster/reliable build.")
+    elif cuda_root:
+        cmake_args += f' -T "cuda={cuda_root}"'
+
+    env["CMAKE_ARGS"] = cmake_args
+    env["FORCE_CMAKE"] = "1"
+
     vcvars = find_vcvars()
+    if vcvars:
+        vc_env = capture_vcvars_env(vcvars)
+        env.update(vc_env)
+        env["CC"] = "cl"
+        env["CXX"] = "cl"
     
     # Command construction
     local_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "llama-cpp-python-src")
     if os.path.exists(local_src) and not force_pypi:
         print(f"  > [!] Local custom engine source detected: {local_src}")
-        install_cmd = [sys.executable, "-m", "pip", "install", local_src, "--no-cache-dir", "--no-deps", "--upgrade"]
+        install_cmd = [sys.executable, "-m", "pip", "install", get_short_path(local_src), "--no-cache-dir", "--no-deps", "--upgrade"]
     else:
         target_package = "llama-cpp-python==0.3.26"
         if use_source:
@@ -152,19 +359,7 @@ def install_engine(cuda_path, use_source=False, force_pypi=False):
         install_cmd = [sys.executable, "-m", "pip", "install", target_package, "--no-cache-dir", "--no-deps", "--upgrade"]
 
     try:
-        if vcvars:
-            # Wrap in VS context to ensure compiler is found in system temp dir
-            import tempfile
-            bat_path = os.path.join(tempfile.gettempdir(), "temp_install.bat")
-            bat_content = f'call "{vcvars}"\n' + " ".join(install_cmd)
-            with open(bat_path, "w") as f: f.write(bat_content)
-            subprocess.check_call(["cmd.exe", "/c", bat_path], env=env)
-            try:
-                os.remove(bat_path)
-            except:
-                pass
-        else:
-            subprocess.check_call(install_cmd, env=env)
+        subprocess.check_call(install_cmd, env=env)
         return True
     except Exception as e:
         print(f"Install failed: {e}")
@@ -272,9 +467,12 @@ def install_with_retry(command):
             raise e
 
 def main():
+    ensure_venv()
     print("--- Serenity Apex: Hardware Initialization ---")
+    setup_msvc_env()
     cuda_path = get_cuda_path()
     inject_cuda_path(cuda_path)
+    check_build_environment()
 
     # 1. Check for existing hardware-accelerated build & verify stability
     print("\n--- [ llama-cpp-python Stability Check ] ---")
@@ -323,14 +521,16 @@ def main():
         print("[*] Uninstalling llama-cpp-python (dependencies will not be touched)...")
         subprocess.call([sys.executable, "-m", "pip", "uninstall", "-y", "llama-cpp-python"])
 
-        # 3. Rebuild for i7-12700KF
+        # 3. Rebuild for Legacy GPU Hardware
+        build_mode, cuda_archs = check_cuda_version_and_options(cuda_path)
+        
         print("\nSelect Build Method:")
         print(" [1] Fast Build (Recommended)")
         print(" [2] Source Build (If Offload Toggle is broken)")
         build_choice = input("Choice [1/2] (default: 1): ").strip()
         use_source_flag = (build_choice == "2")
 
-        if install_engine(cuda_path, use_source=use_source_flag, force_pypi=force_pypi):
+        if install_engine(cuda_path, use_source=use_source_flag, force_pypi=force_pypi, build_mode=build_mode, cuda_archs=cuda_archs):
             print("\n[V] Engine rebuild complete. Verifying GPU support...")
             try:
                 import llama_cpp

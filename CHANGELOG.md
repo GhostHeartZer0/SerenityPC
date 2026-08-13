@@ -1,5 +1,10 @@
 # Changelog
 
+## Version 1.5.1: Legacy Compatibility & Setup Automation
+- **.venv Auto-Bootstrapping**: Added `ensure_venv()` to `setup.py` to automatically create `.venv` and re-execute within `.venv` if run from system Python. Ensures `.env` exists with legacy configuration. Automatically installs `pip`, `wheel`, `setuptools`, and `ninja` inside `.venv` for reliable C++ builds. Fixed top-level import ordering (`shutil`, `glob`, `re`). Preserves standard `%LOCALAPPDATA%\Temp` during build execution to prevent Windows ACL `Access is denied` errors when `nvcc` invokes MSVC `vcvars64.bat`.
+- **Legacy CUDA Architectures & Build Optimization**: Streamlined CUDA build target architectures to `50;61;86` (Maxwell, Pascal, Ampere), trimming unnecessary targets (`70`, `75`, `80`). Set `CMAKE_BUILD_PARALLEL_LEVEL=4` and `MAX_JOBS=4` to throttle parallel Ninja MSVC/nvcc compilation threads, preventing compiler memory exhaustion and PDB lock timeouts. Implemented `get_short_path()` helper for 8.3 path sanitization.
+- **MSVC Environment Injection & VS 2022 Toolset Selection**: Enhanced `capture_vcvars_env()` in `setup.py` to invoke `vcvars64.bat` with `-vcvars_ver=14.4` / `-vcvars_ver=14.3` options, targeting the VS 2022 MSVC toolset headers. This prevents CUDA `cudafe++` parser crash (`0xC0000005 ACCESS_VIOLATION`) caused by attempting to parse VS 2026 / MSVC 19.51 C++ STL headers. Automatically exports `CUDA_PATH`, `CUDA_HOME`, `CUDAToolkit_ROOT`, and `CUDACXX` into `os.environ`.
+
 ## Version 1.5.0 beta
 ### Features & Improvements
 - **GGUF KV Cache Benchmark**: Integrated live KV cache memory benchmark on model load (calculates FP16 baseline vs active quantized bit-width memory, tokens/sec speedup ratio, and MB saved).

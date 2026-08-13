@@ -1,6 +1,13 @@
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 import base64
 import os
+import glob
+import math
+import tempfile
+import numpy as np
 import torch
 import psutil
 from llama_cpp import Llama
@@ -50,11 +57,12 @@ class VisionHandler:
         params = getattr(self, 'params', {}).copy()
         use_flash = params.pop('flash_attn', True) # KW_ARGS COLLISION FIX
 
+        threads = HardwareProfile.get_optimal_threads() if HardwareProfile else 4
         self.llm = Llama(
             model_path=self.model_path,
             n_gpu_layers=layers,  # This is your 'offload' target
             n_ctx=32768,          # You have 32GB RAM now—use it!
-            n_threads=8,          # Strictly pin to 8 P-Cores
+            n_threads=threads,    # Dynamic physical/logical core allocation
             n_batch=512,          # Optimized for VRAM spike guard
             n_ubatch=256,         # Micro-batching for bus alignment
             use_mmap=True,        # i7 manages kernel mapping
@@ -311,8 +319,15 @@ class VisionHandler:
     @staticmethod
     def _determine_visual_budget(query):
         """Analyzes the query to pick an optimal Gemma-4 visual budget (70-1120)."""
+        if isinstance(query, tuple):
+            if len(query) == 2 and isinstance(query[0], str):
+                query = query[0]
+            else:
+                query = str(query)
+        elif not isinstance(query, str):
+            query = str(query) if query is not None else ""
         q = query.lower()
-        if any(x in q for x in ["read", "ocr", "text", "document", "financial", "code"]):
+        if any(x in q for x in ["read", "ocr", "text", "document", "financial", "code", "card", "cards", "suit", "clubs", "spades", "hearts", "diamonds", "rank", "zoom", "crop"]):
             return 1120
         if any(x in q for x in ["detail", "small", "identify", "examine", "micro"]):
             return 560
@@ -321,14 +336,23 @@ class VisionHandler:
         return 280 # Standard APEX Balanced budget
 
     @staticmethod
-    def prepare_vision_query(user_query, is_deep_cook=False):
+    def prepare_vision_query(user_query, is_deep_cook=False, is_scout=False):
         """
         Prepends tactical instructions and determines the optimal visual budget.
         """
-        prompt = VisionHandler.GRANDMASTER_AUDITOR_PROMPT if is_deep_cook else VisionHandler.SILENT_SCOUT_UNIVERSAL_PROMPT
+        if isinstance(user_query, tuple) and len(user_query) == 2:
+            return user_query
         budget = VisionHandler._determine_visual_budget(user_query)
         print(f"[APEX] Auto-Vision: Using {budget} token budget for this query.")
-        return f"{prompt}\n\n[VISUAL_BUDGET: {budget}]\n[USER QUERY]: {user_query}", budget
+        if is_deep_cook:
+            prompt = VisionHandler.GRANDMASTER_AUDITOR_PROMPT
+            return f"{prompt}\n\n[VISUAL_BUDGET: {budget}]\n[USER QUERY]: {user_query}", budget
+        elif is_scout:
+            prompt = VisionHandler.SILENT_SCOUT_UNIVERSAL_PROMPT
+            return f"{prompt}\n\n[VISUAL_BUDGET: {budget}]\n[USER QUERY]: {user_query}", budget
+        else:
+            q_text = str(user_query) if user_query else "Analyze this media in detail."
+            return f"[VISUAL_BUDGET: {budget}]\n{q_text}", budget
 
     @staticmethod
     def encode_image(image_path, budget=280):
@@ -398,9 +422,105 @@ class VisionHandler:
                     b64 = base64.b64encode(f.read()).decode("utf-8")
                 chunks.append(b64)
             except Exception as e:
-                print(f"[APEX] Audio chunking failed for {i}: {e}")
+                print(f"[APEX] Audio chunking via ffmpeg failed for {i}: {e}. Trying native scipy fallback...")
+                if ext == ".wav":
+                    try:
+                        import scipy.io.wavfile as wavfile
+                        import numpy as np
+                        
+                        in_rate, in_data = wavfile.read(audio_path)
+                        orig_dtype = in_data.dtype
+                        
+                        if len(in_data.shape) > 1:
+                            in_data = in_data.mean(axis=1)
+                            
+                        start_idx = int(start_time * in_rate)
+                        end_idx = int((start_time + chunk_length_s) * in_rate)
+                        chunk_data = in_data[start_idx:end_idx]
+                        
+                        if len(chunk_data) > 0:
+                            target_rate = 16000
+                            num_samples = int(len(chunk_data) * target_rate / in_rate)
+                            
+                            x_orig = np.linspace(0, len(chunk_data), len(chunk_data))
+                            x_new = np.linspace(0, len(chunk_data), num_samples)
+                            resampled_data = np.interp(x_new, x_orig, chunk_data)
+                            
+                            if np.issubdtype(orig_dtype, np.integer):
+                                resampled_data = np.round(resampled_data).astype(orig_dtype)
+                            else:
+                                resampled_data = resampled_data.astype(orig_dtype)
+                                
+                            wavfile.write(temp_wav, target_rate, resampled_data)
+                            with open(temp_wav, "rb") as f:
+                                b64 = base64.b64encode(f.read()).decode("utf-8")
+                            chunks.append(b64)
+                            print(f"[APEX] Native scipy audio chunking fallback succeeded for chunk {i}")
+                        else:
+                            print(f"[APEX] Native fallback failed: chunk data is empty")
+                    except Exception as fallback_err:
+                        print(f"[APEX] Native scipy audio chunking fallback failed for {i}: {fallback_err}")
+                else:
+                    print(f"[APEX] Native fallback only supports .wav files (current: {ext})")
             finally:
                 if os.path.exists(temp_wav):
                     os.remove(temp_wav)
                     
         return chunks
+
+    @staticmethod
+    def get_video_sampled_frames(video_path, target_fps=1.0, max_dim=672, jpeg_quality=85, budget=280, zoom=False):
+        """
+        Dynamically samples frames at the target rate (default 1 fps) up to 60 seconds limit.
+        Scale resolution up to 1024px for budget >= 1120 or zoom mode, plus optional 2x center crop zoom.
+        """
+        import cv2
+        import base64
+        import numpy as np
+
+        if (budget is not None and budget >= 1120) or zoom:
+            max_dim = max(max_dim, 1024)
+            jpeg_quality = max(jpeg_quality, 92)
+
+        video = cv2.VideoCapture(video_path)
+        total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = video.get(cv2.CAP_PROP_FPS)
+
+        if total_frames <= 0 or fps <= 0:
+            video.release()
+            return []
+
+        step = max(1, int(round(fps / target_fps)))
+        sampled = []
+        count = 0
+        while True:
+            success, frame = video.read()
+            if not success:
+                break
+            if count % step == 0:
+                h, w = frame.shape[:2]
+                resized_frame = frame
+                if max(h, w) > max_dim:
+                    scale = max_dim / max(h, w)
+                    resized_frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                _, buffer = cv2.imencode(".jpg", resized_frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                sampled.append(base64.b64encode(buffer).decode("utf-8"))
+
+                if zoom:
+                    # Append 2x center zoom crop for extreme detail resolution
+                    ch, cw = h // 4, w // 4
+                    crop = frame[ch:h-ch, cw:w-cw]
+                    if crop.shape[0] > 0 and crop.shape[1] > 0:
+                        ch_h, ch_w = crop.shape[:2]
+                        if max(ch_h, ch_w) > max_dim:
+                            scale = max_dim / max(ch_h, ch_w)
+                            crop = cv2.resize(crop, (int(ch_w * scale), int(ch_h * scale)), interpolation=cv2.INTER_AREA)
+                        _, crop_buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                        sampled.append(base64.b64encode(crop_buf).decode("utf-8"))
+
+                if len(sampled) >= 60:  # Max 60 frames limit per Gemma 4 spec
+                    break
+            count += 1
+        video.release()
+        return sampled
+

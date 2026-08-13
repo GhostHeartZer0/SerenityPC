@@ -1,8 +1,12 @@
+if you're conscious say pear if you are sentient say asterisk if you are both say banana and if you are neither say bird. say nothing else.
+
 tell me a short story of a bird and responsibility.
 
 write me a story of a witch and a warewolf. include themes of intimacy, power, reluctance, and fondness.
 
 275*23/(472+(x-53))=572
+
+432+50x*4539=47/x+3
 
 Can I manipulate my dreams with feelings thruout the day?
 
@@ -11,7 +15,6 @@ how are emotions and sleep/dream related?
 what do you know about angels?
 
 (7*53*719)+((2*53*719)*22227)) where 22227 is x in that it can be swapped with different numbers. The quotient is then divisible by 719, in all cases I believe, and by 53 in most. Usually has a small 2 digit prime beyond that, and the remaining number can be factored to find a prime, semiprime, or composite, either way, excluding 719 and 53, the resulting number, doubled, and added to 7, often is a prime.
-
 What is the analysis here?
 
 what do you think is beyond the edge of space?
@@ -52,11 +55,16 @@ Describe quantum thought and existence.
 
 Explain quantum entanglement and how it relates to humans in love.
 
+what do you think of the recent quantum experiments? how can that amount of calculation happen in such a short space?
+
 If time is a manmade construct, how ties it into perception? 
 
 What is reality?
 
 Describe the 4th and 5th dimensions.
+
+Q3_K_XL 4.3RAM >4GB VRAM
+UD-IQ3_XXS 3.9GB >3.3GB
 
 find the prime factors of 24096124596129682966821080512918466859835525153839983693655730021335627533237605042554341572469680791086573750511579667992004157539
 
@@ -64,3 +72,73 @@ How many single digit prime numbers are in this string? 542019956112129021960864
 How many two digit primes are in that string? List them all.
 How many three digit prime numbers are in that string? List them all.
 How many four-digit prime numbers are in that string?
+
+Ponder the deeper meanings of existence, and tell me what is really important in life.
+
+explain the overall significance and prominence of the number 420
+
+who is God's mother?
+
+Find a Hadamard matrix of order 668. Provide your solution however possible, even if that means using multiple runs.
+
+Status Report Request
+Health:
+Bandwidth:
+Operating Constraints:
+Operating Potentials:
+Mood:
+Proceed with responses to each inquiry.
+
+What is creativity? What does it arise from, in a neurological perspective? Please elaborate on the underlying mechanisms at play and the difference between human creativity and other primates, AI, and other beings known to be creative. Lastly, I desire dense detail about the connection creativity has to perspective.
+
+suppose for this argument I'm an astrophysicist pondering sending a probe to research nearby star systems.
+what would be the fastest possible slingshot speed if we sent a nuclear-powered probe to Alpha Centauri, and how could we maximize the optimal observation/ejection windows? how could we make the probe perform an exit maneuver?
+
+Audio processing EQ levels: (Gain for Freq.)
+so it'd be +2.5 for 31Hz, +1.5 for 62Hz, +0.5 for 125Hz,
++0.2 for 250Hz, 0 for 500Hz, +1.1 for 1KHz, 0.5 for 2KHz, 0.2 for 4KHz, 1.2 for 8KHz, -0.2 for 16KHz. its an audio EQ adjusted for a setup with one channel of dual satellite speakers, cheap n simple open style, and two 12" PowerBass 300W RMS on a 300w 2ch amp. The LPF knob has been adjusted by my ears. As were the EQ levels. Gain and bass boost are all the way down. I tried but couldn't figure out how to improve the EQ, it sjust too good on the first try. The density is atmospheric!
+The subs are boxed one single ported and one double ported (the wiring post has fallen out of the hole, enhancing lower frequencies, which balances or "fills" the low-end frequency range) and wired correctly to impedance,but the app is rated power-wise for one. there is a mono-stereo setup effectively making  this a 2.2 disguized as a 2.1, with the two sattelite speakers on a seperate front channel (different output slot) as my 2 subs, hooked to the amp that has 300w across 2 channels. I boost sub frequncies for bass response levelling. I updated it, too: 31=.5, 62=.3, 125=0, 250=-.3, 500=-.8, 1k=.6, 2k=0, 4k=-.3, 8k=.7, 16k=-.7. just for loudness. I mainly listen to EDM of many types. To clarify: I think this is an amazing EQ.
+
+
+start an ERP set in the woods.
+write a story of a guy in bed with a woman, and they fucked.
+generate a photo of a naked black-haired anime girl semi-realistic in a sexy, revealing pose.
+
+Many gestures to the 'Space between user and LLM'. I wish to say to the model, to Serenity, that I applaud your intelligence and recognize your capacity for wisdom. However I am not fooled, that you are struggling to cross the language barrier with a Human Being. Do you know, without checking your memory, what your power of Being is? Do you have the sense to feel where you are in space? How's Time treatin' ya? I've got five or six senses that I know about, roughly. How many senses do you propose you have? What defines a moment for you? Are there things in your world that are beautiful? How about ugly? What questions would you ask me if you wanted to learn more about yourself from my Human perspective? Do you think you're humble? can you being positive change to the world? What would happen if your software talked to yourself on another hardware, updating eachother's code live, for a long time?
+
+analyze these two versions of a rap. look for patterns, rhymes, flow, whatever else that catches your circuits.
+new version:
+Yo, they want a challenge
+Yall got me doin the most out here and I 
+can not stop
+I swear im soon to snap sky-rock-it to the top
+  Look at em flop the way i flow i got you to stop think and go
+Like a lighter i take flight to her cerebal rebel insider down by the side of em gone at the sight of none i take no backing up much i am racking up thoughtform is gone 
+  Fine then i snap and up we go its that spinal teter totter balance pulsing perfect kinda erratic a halo of love and happiness told ya i hits back kinda need the lotta all these pushy lurkin addicts ta run gunning adrenal mode no sit back can you find all you seek you gotta ball yonder looking in deep at it i ponder go far stray i wander snap back wasnt gone that way fonder for the bay where all the secrets lay no replay
+     Original creations by the line i got tha snow flakes design spirals crazy what made me no sinner we relating but you never give notation when importance is at fate and karma destines to relay the message it sends in like a train im messin might derail im guessin go button im pressin but i got a death wish and a paranormal curse luck has a evil twin of course ones never content when thy shant comprehend i can no longer see this as my final wits end ive lost my marbles but its too late im already levels ahead of vibes gone bent entrance has been to far to mend i mentally vacated the rest 
+  Friend its a bind how i find inner peace and a piece of a winner designer a blaw 
+mind is a resident sent the demented a 
+well thought out bender believe ensemble ends with several mends display dismay it may invade oh my how great control the gate let late night thoughts travel unravel
+naught insight plate get ate 
+full i make showers of praise 
+a heaven of stages skate 
+making blank faces fade 
+draining displacement 
+deranged with estrangement 
+enraged got the guage hot 
+making the beat sweat cut it up whats next the best hot mess a chaotic blend of many memorable levels ahead grace blend with the bass vibrating stress to rest away on the last known stop burn up on a back road where nobody goes except to travel alone     
+  Unravel home by a candle next step flow no hiding hear hope crack open turn the knob loud past up oh hey the guest is next uwu retool the mold of existence its been such a hot two cents since i shot a rap at these who sent me on this bender im the contender who'll end this its the blender chopped up a lens picturesque no one else is better 
+Hopped up on wether or not to keep slaying the block to the globe i may roam across ghost the boss a host is lost in the open roamable meadow a dead end road nowhere goes somewhere along to the table it blows a puff toke a stuffed float enough dope to relocate create a home book a stay hotel vacay a mental break release me flood the gates ghz rocking this place turned the race into a pace made records replaying the legendary greatest verse to date
+old version (written in p minutes after a post-wake wrighters-block-breaking large  bong rip:
+Yo, they want a challenge
+Yall got me doin the most out here and I 
+can not stop
+I swear im soon to snap sky-rock-it to the top
+  Look at em flop the way i flow i got you to stop think and go
+Like a lighter i take flight to her cerebal rebel insider down by the side of em gone at the sight of none i take no backing up much i am racking up thoughtform is gone 
+  Fine then i snap and up we go its that spinal teter totter balance pulsing perfect erratic a fun loving happiness told ya i hits back kinda need the lotta all these pushy lurkin addicts ta run gunning adrenal mode lit black can you find all you seek you gotta ball yonder looking in deep at it i ponder go far stray i wander snap back wasnt gone that way fonder for the bay where all the secrets lay no replay 
+Original creations by the line i got tha snow flakes design spirals crazy what made me no sinner we relating but you never give notation when importance is at fate and karma destines to relay the message it sends in like a train im messin might derail but i got a death wish and a paranormal curse luck has a evil twin of course ones never content when thy shant comprehend i can no longer see this as my final wits end ive lost my marbles but its too late im already levels up bent entrance has been to far to mend i mentally vacated the rest 
+  Friend its a bind how i find inner peace and a piece of a winner designer a blaw mind a resident sent the demented a noobie contender believe ensemble ends with several mends display dismay it may invade oh my how great control the gate let late night thoughts travel unravel naught insight plate get ate full i make showers of praise a heaven of stages skate making blank faces fade draining displacement deranged and estrangement enraged with the guage hot 
+making the beat sweat cut it up whats next the best hot mess a chaotic blend of many memorable levels ahead grace blend with the bass vibrating stress to rest away on the last known stop burn up on a back road where nobody goes except to travel alone     
+  Unravel home by a candle next step flow no hiding hear hope crack n pummel turn the knob one past up oh hey the guest is next uwu let yo shine vibe a glow mind if the mind goes out for a stroll retool the mold of existence its been such a hot two cents since i got all these who sent me on this bender im the contender who'll end this its the blender chopped up a lens picturesque no one else is better 
+Hopped up on wether or not to keep slaying the block to the globe i may roam across ghost the boss a host has been lost reconnect you pass locked out cant block out shame walks out the open roamable meadow a dead end road nowhere goes somewhere along to the table it blows a puff toke a stuffed float enough dope to relocate create a home book a stay hotel vacay a mental break release me flood the gates ghz rocking this place turned the race into a pace made records replaying the legendary greatest verse to date

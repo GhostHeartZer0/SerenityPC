@@ -5,7 +5,6 @@ pyttsx3
 pystray
 Pillow
 accelerate
-bitsandbytes
 fastapi
 uvicorn
 pydantic
@@ -16,4 +15,3 @@ llama-cpp-python==0.3.14
 playwright
 chromadb
 sentence-transformers
-turboquant

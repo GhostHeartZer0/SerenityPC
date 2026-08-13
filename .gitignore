@@ -7,10 +7,13 @@
 __pycache__/
 System/__pycache__/
 Live/__pycache__/
+.serenity_cache/
 *.pyc
 *.db
 *.sqlite
 *.sqlite3
+*.env
+*.env.example
 
 # Logs and temp files
 Logs/
@@ -60,6 +63,7 @@ crash_*.txt
 /Live/t5gemma-2-4b-4b
 /Live/t5gemma-2-1b-1b
 /Live/t5gemma-2-270m-270m
+Models/
 
 # Model weight and binary formats
 *.gguf
@@ -75,6 +79,13 @@ crash_*.txt
 *.tar.gz
 *.tgz
 *.rar
-desktop.ini
-[Dd]esktop.ini
+# Windows OS files
+[dD]esktop.ini
+**/[dD]esktop.ini
+Thumbs.db
+**/Thumbs.db
+
 System/config.json
+Docs/Test Prompts.txt
+System/rgb_state.json
+/setup.py
