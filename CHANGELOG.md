@@ -1,5 +1,9 @@
 # Changelog
 
+## Cleanup & Maintenance (August 2026)
+- **Desktop.ini Removal**: Purged 1,600+ Windows-generated hidden `desktop.ini` files across the workspace.
+- **Venv Batch Launcher & Shortcut**: Added `run.bat` to activate `.venv` before launching `main.py`. Updated `System/shortcuts.py` to point the desktop shortcut target to `run.bat`.
+
 ## Version 1.5.1: Legacy Compatibility & Setup Automation
 - **.venv Auto-Bootstrapping**: Added `ensure_venv()` to `setup.py` to automatically create `.venv` and re-execute within `.venv` if run from system Python. Ensures `.env` exists with legacy configuration. Automatically installs `pip`, `wheel`, `setuptools`, and `ninja` inside `.venv` for reliable C++ builds. Fixed top-level import ordering (`shutil`, `glob`, `re`). Preserves standard `%LOCALAPPDATA%\Temp` during build execution to prevent Windows ACL `Access is denied` errors when `nvcc` invokes MSVC `vcvars64.bat`.
 - **Legacy CUDA Architectures & Build Optimization**: Streamlined CUDA build target architectures to `50;61;86` (Maxwell, Pascal, Ampere), trimming unnecessary targets (`70`, `75`, `80`). Set `CMAKE_BUILD_PARALLEL_LEVEL=4` and `MAX_JOBS=4` to throttle parallel Ninja MSVC/nvcc compilation threads, preventing compiler memory exhaustion and PDB lock timeouts. Implemented `get_short_path()` helper for 8.3 path sanitization.

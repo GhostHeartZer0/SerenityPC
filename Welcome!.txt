@@ -1,6 +1,5 @@
-Welcome to SerenityAI, a locally independent smart chat interface!
-This is SerenityPC, with an android version still in development.
-Although most models can call web search, they function perfectly well once the setup completes.
+This is SerenityPC Local Legacy, a version made for legacy hardware.
+
 
 System Requirements:
 Reccomended:
