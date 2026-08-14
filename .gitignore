@@ -53,6 +53,8 @@ crash_*.txt
 *.lnk
 
 # Large external folders/binaries
+wheels/
+*.whl
 /temp_zip
 /test files
 /llama.cpp

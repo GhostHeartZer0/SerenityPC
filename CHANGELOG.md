@@ -1,6 +1,11 @@
 # Changelog
 
 ## Cleanup & Maintenance (August 2026)
+- **Legacy PC Installation Safeguards**: Added Python environment auto-detection & PATH fallback (`py -3` / `python`) in `run.bat` with clear installation guidance. Streamlined `setup.py` fresh installation messaging for first-time automated setup from local `wheels/`.
+- **Pre-Compiled Wheels Bundle**: Exported compiled wheels (`llama-cpp-python` with CUDA, PyTorch, Transformers, Playwright, ChromaDB, etc.) into `wheels/` for instant offline setup on target GTX 1050 Ti / Windows 10 systems without C++ compile waits.
+- **Setup & Launcher Automation**: Updated `setup.py` and `run.bat` to detect local `wheels/` and auto-bootstrap `.venv` instantly. Added idiot-proof `README.txt`.
+- **Purged Bad Absolute References**: Cleaned hardcoded `C:/Users/ccrg6/...` and `S:/...` local drive references from `System/config.json` and benchmark test scripts, replacing with clean relative workspace paths (`Models/...`).
+- **Venv Path Sanitization**: Sanitized `.venv/pyvenv.cfg` command path to use relative `.venv` path for distribution portability.
 - **Desktop.ini Removal**: Purged 1,600+ Windows-generated hidden `desktop.ini` files across the workspace.
 - **Venv Batch Launcher & Shortcut**: Added `run.bat` to activate `.venv` before launching `main.py`. Updated `System/shortcuts.py` to point the desktop shortcut target to `run.bat`.
 - **Git Branch Setup**: Renamed `public` remote branch to `Legacy` (`origin/Legacy`) and set up tracking.

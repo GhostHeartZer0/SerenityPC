@@ -72,7 +72,12 @@ def ensure_venv():
     if not os.path.exists(py_exe):
         print(f"[*] Creating .venv environment at: {venv_dir}")
         subprocess.check_call([sys.executable, "-m", "venv", venv_dir])
-        subprocess.check_call([py_exe, "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools", "ninja", "--quiet"])
+        wheels_dir = os.path.join(_workspace, "wheels")
+        if os.path.exists(wheels_dir) and os.listdir(wheels_dir):
+            print("  > Installing bootstrapping packages from local wheels...")
+            subprocess.check_call([py_exe, "-m", "pip", "install", "--no-index", "--find-links", wheels_dir, "pip", "wheel", "setuptools", "ninja", "--quiet"])
+        else:
+            subprocess.check_call([py_exe, "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools", "ninja", "--quiet"])
 
     print(f"[*] Relaunching setup.py inside .venv ({py_exe})...")
     subprocess.check_call([py_exe] + sys.argv)
@@ -114,7 +119,20 @@ def inject_cuda_path(cuda_bin_path):
         os.environ["CUDAToolkit_ROOT"] = cuda_root_short
         if os.path.exists(nvcc_path):
             os.environ["CUDACXX"] = nvcc_path
-        os.environ["PATH"] = cuda_bin_short + os.pathsep + os.environ.get("PATH", "")
+
+        # Strip conflicting CUDA toolkits from PATH and prepend selected CUDA
+        paths = os.environ.get("PATH", "").split(os.pathsep)
+        clean_paths = [p for p in paths if not ("CUDA" in p and "NVIDIA GPU Computing Toolkit" in p and cuda_root.lower() not in p.lower())]
+        cuda_nvvp = os.path.join(cuda_root, "libnvvp")
+        clean_paths = [cuda_bin_short, cuda_nvvp] + [p for p in clean_paths if p not in (cuda_bin_short, cuda_nvvp)]
+        os.environ["PATH"] = os.pathsep.join(clean_paths)
+
+        # Clean conflicting CUDA toolkits from INCLUDE and LIB variables
+        for var in ["INCLUDE", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIB", "LIBPATH"]:
+            if var in os.environ:
+                cleaned = [p for p in os.environ[var].split(os.pathsep) if not ("CUDA" in p and "NVIDIA GPU Computing Toolkit" in p and cuda_root.lower() not in p.lower())]
+                os.environ[var] = os.pathsep.join(cleaned)
+
         if hasattr(os, 'add_dll_directory'):
             try:
                 os.add_dll_directory(cuda_bin_path)
@@ -338,6 +356,8 @@ def install_engine(cuda_path, use_source=False, force_pypi=False, build_mode="cu
         cmake_args += f' -T "cuda={cuda_root}"'
 
     env["CMAKE_ARGS"] = cmake_args
+    env["CUDAFLAGS"] = "-allow-unsupported-compiler"
+    env["NVCC_PREPEND_FLAGS"] = "-allow-unsupported-compiler"
     env["FORCE_CMAKE"] = "1"
 
     vcvars = find_vcvars()
@@ -374,6 +394,8 @@ def install_llama_cpp(is_source=False):
     # 1. Prepare Environment Variables
     # We must ensure the current process sees the build tools
     env = os.environ.copy()
+    env["CUDAFLAGS"] = "-allow-unsupported-compiler"
+    env["NVCC_PREPEND_FLAGS"] = "-allow-unsupported-compiler"
     
     # Force CMake to use Ninja if available (much more reliable on Windows)
     if shutil.which("ninja"):
@@ -391,8 +413,8 @@ def install_llama_cpp(is_source=False):
     # If we are doing a source install or local install
     if is_source or os.path.exists(local_src):
         # These are the critical flags for llama-cpp-python
-        env["CMAKE_ARGS"] = "-DGGML_CUDA=on" 
-        print("🛠️  Setting CMAKE_ARGS: -DGGML_CUDA=on")
+        env["CMAKE_ARGS"] = "-DGGML_CUDA=on -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler" 
+        print("🛠️  Setting CMAKE_ARGS: -DGGML_CUDA=on -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler")
 
     try:
         # We use subprocess.run with check=True to catch errors
@@ -489,11 +511,13 @@ def main():
         else:
             status_msg = "⚠️  Installed, but running on CPU (no GPU offloading detected)."
     except Exception as e:
-        status_msg = f"❌ Not installed or unstable ({e})."
+        status_msg = f"❌ Not installed yet ({e})."
         
     print(f"Status: {status_msg}")
+    if not is_installed:
+        print("\n[*] First-time installation detected: Pre-compiled engine wheel will be installed automatically from local wheels directory.")
     print("\nSelect llama-cpp-python Option:")
-    print(" [1] Keep existing installation (Do nothing - Recommended if working)")
+    print(" [1] Fast Install / Keep existing (Recommended)")
     print(" [2] Rebuild/Install from local source folder (llama-cpp-python-src) with GPU acceleration")
     print(" [3] Install default version from PyPI")
     print(" [4] Skip engine setup entirely")
@@ -545,7 +569,12 @@ def main():
     print("\n[STEP 4]: Finalizing Environment...")
     if os.path.exists(REQUIREMENTS_FILE):
         print("  > Updating pip dependencies...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_FILE, "--quiet"])
+        wheels_dir = os.path.join(_workspace, "wheels")
+        if os.path.exists(wheels_dir) and os.listdir(wheels_dir):
+            print("  > Installing from local wheels directory...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--find-links", wheels_dir, "-r", REQUIREMENTS_FILE, "--quiet"])
+        else:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_FILE, "--quiet"])
     
     print("\n[STEP 5]: Setting up Web Automation Driver (Playwright)...")
     try:

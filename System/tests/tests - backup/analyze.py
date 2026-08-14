@@ -1,6 +1,6 @@
 import os, re, json
 
-report_dir = r'c:\Users\ccrg6\Desktop\Desktop\Hub\SerenityPC\System\tests\benchmark_reports'
+report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'benchmark_reports')
 results = {}
 for f in os.listdir(report_dir):
     if not f.endswith('.md'): continue
