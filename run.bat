@@ -1,6 +1,18 @@
 @echo off
+setlocal
 cd /d "%~dp0"
 
+:: Fast-path: Launch existing .venv directly without needing system PATH
+if exist "%~dp0.venv\Scripts\python.exe" (
+    if exist "%~dp0.venv\Scripts\activate.bat" (
+        call "%~dp0.venv\Scripts\activate.bat"
+    )
+    "%~dp0.venv\Scripts\python.exe" "%~dp0main.py" %*
+    if errorlevel 1 pause
+    exit /b %errorlevel%
+)
+
+:: First-time setup fallback: Locate system python to build .venv
 where python >nul 2>&1
 if %errorlevel% equ 0 (
     set "PY_CMD=python"
@@ -20,16 +32,18 @@ if %errorlevel% equ 0 (
     )
 )
 
-if not exist "%~dp0.venv\Scripts\activate.bat" (
-    echo [*] First run detected. Initializing setup...
-    %PY_CMD% "%~dp0setup.py"
-)
+echo [*] First run detected. Initializing setup...
+%PY_CMD% "%~dp0setup.py"
 
-if exist "%~dp0.venv\Scripts\activate.bat" (
-    call "%~dp0.venv\Scripts\activate.bat"
-    python "%~dp0main.py" %*
+if exist "%~dp0.venv\Scripts\python.exe" (
+    if exist "%~dp0.venv\Scripts\activate.bat" (
+        call "%~dp0.venv\Scripts\activate.bat"
+    )
+    "%~dp0.venv\Scripts\python.exe" "%~dp0main.py" %*
 ) else (
     %PY_CMD% "%~dp0main.py" %*
 )
+
+if errorlevel 1 pause
 
 

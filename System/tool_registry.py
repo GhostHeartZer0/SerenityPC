@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import threading
 import subprocess
@@ -219,7 +220,7 @@ tk.Button(root, text='[X] Close', command=root.destroy, bg='#222', fg='white', r
 root.mainloop()"""
                     with open(temp_script, "w", encoding="utf-8") as f:
                         f.write(script_content)
-                    subprocess.Popen(["python", temp_script])
+                    subprocess.Popen([sys.executable, temp_script])
                 
                 threading.Thread(target=spawn_viewer, daemon=True).start()
                 return f"Successfully generated and displayed {req_type} via borderless HUD overlay."

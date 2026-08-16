@@ -1,7 +1,23 @@
+import sys
+import os
+import subprocess
+
+# --- Ensure Virtual Environment (.venv) Runtime ---
+def _ensure_venv():
+    """Ensure running inside .venv; re-executes with .venv python if started with base python."""
+    if sys.prefix == sys.base_prefix:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        is_win = os.name == "nt"
+        venv_py = os.path.join(base_dir, ".venv", "Scripts" if is_win else "bin", "python.exe" if is_win else "python")
+        if os.path.exists(venv_py) and os.path.abspath(sys.executable).lower() != os.path.abspath(venv_py).lower():
+            sys.exit(subprocess.call([venv_py] + sys.argv))
+
+_ensure_venv()
+
 import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox, filedialog, ttk
 import tkinter.font as tkFont
-import threading, traceback, sys, os, json, zlib, time, queue, subprocess, re, atexit, webbrowser, requests, io, faulthandler, struct, random
+import threading, traceback, json, zlib, time, queue, re, atexit, webbrowser, requests, io, faulthandler, struct, random
 try:
     import numpy as np
 except ImportError:
@@ -3118,7 +3134,20 @@ class ChatbotApp:
                         print("[SYNTHESIS] Pass failed or returned None; retaining original draft.")
                 
                 # 3c. TOOL LOOP INTEGRATION (Hardened for standard worker)
-                final_answer = self._run_tool_loop(final_answer, prompt_str, params)
+                has_tool_call = any(t in full_resp.lower() or t in final_answer.lower() for t in ["<ctrl42>call:", "<|tool_call>call:", "<|tool>call:", "call:", "action:", "<execute_tool>", "<executetool>"])
+                if has_tool_call:
+                    target_tool_resp = full_resp if ("<|tool_call>" in full_resp or "<ctrl42>" in full_resp or "call:" in full_resp or "action:" in full_resp or "<execute_tool>" in full_resp or "<executetool>" in full_resp) else final_answer
+                    tool_res = self._run_tool_loop(target_tool_resp, prompt_str, params)
+                    if tool_res:
+                        final_answer = tool_res
+
+                # Safeguard: Post-synthesis Thought Isolation
+                if "<|channel>thought" in final_answer or "<channel|>" in final_answer or "<think>" in final_answer:
+                    extra_think, clean_ans = self._isolate_thought_and_response(final_answer)
+                    if extra_think:
+                        think_log = (think_log + "\n\n" + extra_think).strip()
+                    if clean_ans:
+                        final_answer = clean_ans
                 
                 # 4. LaTeX Artifact Removal
                 final_answer = self._clean_latex_artifacts(final_answer.strip())
@@ -4422,6 +4451,60 @@ class ChatbotApp:
                 self._status_timer = None
             self._status_timer = self.root.after(5000, lambda *args: self._revert_status_label())
 
+    def _isolate_thought_and_response(self, text):
+        """Splits raw model output into (thought_log, clean_answer) using structural boundaries."""
+        if not text:
+            return "", ""
+        
+        closers = [
+            r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+            r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
+        ]
+        
+        all_splits = []
+        for tag_pattern in closers:
+            for m in re.finditer(tag_pattern, text, re.IGNORECASE):
+                all_splits.append(m.end())
+        
+        if not all_splits and ("<think>" in text or "<|channel>thought" in text):
+            all_splits.append(len(text))
+            
+        all_splits.sort()
+        
+        best_split = -1
+        if all_splits:
+            for split in all_splits:
+                remaining = text[split:].strip()
+                if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
+                    continue
+                best_split = split
+                break
+            if best_split == -1:
+                best_split = all_splits[-1]
+                
+        if best_split != -1:
+            think_log = text[:best_split].strip()
+            final_answer = text[best_split:].strip()
+        else:
+            think_log = self._extract_thinking_content(text)
+            final_answer = text
+            if think_log and "<|channel>thought" in text:
+                final_answer = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', text, flags=re.IGNORECASE).strip()
+            elif think_log and "<think>" in text:
+                final_answer = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', text, flags=re.IGNORECASE).strip()
+                
+        structural_tags = [
+            r'<\|?channel>(?:text|thought)?>?', r'<\/\|?channel\|?>', r'<channel\s*\|?>', r'<\/channel\s*\|?>',
+            r'(?:<channel\s*\|?>|<\/channel\s*\|?>)+', r'<think>', r'<\/think>', r'<\|/>', r'<turn/>',
+            r'<\|im_start|>(?:thought|assistant)?', r'<\|im_end|>', r'<\|endoftext|>'
+        ]
+        
+        for tag in structural_tags:
+            final_answer = re.sub(tag, '', final_answer, flags=re.IGNORECASE | re.DOTALL)
+            think_log = re.sub(tag, '', think_log, flags=re.IGNORECASE | re.DOTALL)
+            
+        return think_log.strip(), final_answer.strip()
+
     def _run_tool_loop(self, full_resp, prompt_str, params, depth=0):
         """
         Parses tool calls from model output, executes them, and recursively 
@@ -4433,7 +4516,8 @@ class ChatbotApp:
         # Added support for Gemma-4 'action', 'execute_tool', 'executetool' tags and missing 'call:' prefixes
         call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
         if not call_match:
-            return full_resp
+            _, clean_resp = self._isolate_thought_and_response(full_resp)
+            return clean_resp if clean_resp else full_resp
 
         call_name = call_match.group(1).strip()
         if call_name.lower() in ["readfile", "read_file"]:
@@ -4504,11 +4588,12 @@ class ChatbotApp:
             clean_resp = full_resp
             clean_resp = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', clean_resp, flags=re.IGNORECASE)
             clean_resp = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', clean_resp, flags=re.IGNORECASE)
-            if "<think>" in clean_resp.lower() or "<|channel>thought" in clean_resp.lower():
-                clean_resp = re.sub(r'.*?(?=<ctrl42>|<\|tool_call>)', '', clean_resp, flags=re.IGNORECASE | re.DOTALL)
+            clean_resp = re.sub(r'(?s)<\|think\|>.*?(?:<\/\|think\|>|$)', '', clean_resp, flags=re.IGNORECASE)
+            clean_resp = re.sub(r'(?s)<thought>.*?(?:<\/thought>|$)', '', clean_resp, flags=re.IGNORECASE)
             
-            clean_resp = re.sub(r'^.*?<\|tool_call>', '<|tool_call>', clean_resp, flags=re.IGNORECASE | re.DOTALL)
-            clean_resp = re.sub(r'^.*?<ctrl42>', '<ctrl42>', clean_resp, flags=re.IGNORECASE | re.DOTALL)
+            call_tag_match = re.search(r'(?:<ctrl42>|<\|tool_call>|<\|tool_call\|>|<\|tool>|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>).*', clean_resp, re.DOTALL | re.IGNORECASE)
+            if call_tag_match:
+                clean_resp = call_tag_match.group(0)
             
             if not clean_resp.strip().endswith("<turn|>"):
                 clean_resp = clean_resp.strip() + "<turn|>\n"
@@ -4516,17 +4601,26 @@ class ChatbotApp:
             response_turn = f"<|turn>user\n<|tool_response>response:{call_name}{{value:{oq(observation)}}}<tool_response|><turn|>\n"
             new_prompt = prompt_str + clean_resp + response_turn + "<|turn>model\n"
             
+            synth_params = dict(params)
+            synth_params["max_tokens"] = max(synth_params.get("max_tokens", 512), 2048)
+            if "stop" in synth_params and isinstance(synth_params["stop"], list):
+                synth_params["stop"] = [s for s in synth_params["stop"] if s not in ["<channel|>", "</channel|>"]]
+
             self.process_queue.put({"status": "thinking_status", "content": "Synthesizing tool results..."})
-            new_text = self._run_blocking_inference(new_prompt, params)
+            new_text = self._run_blocking_inference(new_prompt, synth_params)
             
             # 3b. SYNTHESIS SAFETY CHECK (Prevent "0 response" issue)
             if not new_text or len(new_text.strip()) < 5:
                 # If synthesis failed or is empty, try a "forced" synthesis with a stricter prompt
                 forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search results below, provide a helpful answer."
                 forced_prompt = f"Original Query: {prompt_str[-500:]}\n\nTool Results: {observation}\n\nDeliver the final response now."
-                new_text = self._run_blocking_inference([{"role": "system", "content": forced_sys}, {"role": "user", "content": forced_prompt}], params)
+                new_text = self._run_blocking_inference([{"role": "system", "content": forced_sys}, {"role": "user", "content": forced_prompt}], synth_params)
 
-            return self._run_tool_loop(new_text, new_prompt, params, depth=depth+1)
+            res = self._run_tool_loop(new_text, new_prompt, params, depth=depth+1)
+            synth_think, synth_ans = self._isolate_thought_and_response(res)
+            if synth_think:
+                self.process_queue.put({"status": "log_update", "content": f"\n[TOOL REASONING]:\n{synth_think}\n"})
+            return synth_ans if synth_ans else res
             
         except Exception as e:
             return f"{full_resp}\n\nI apologize, but I encountered a system-level error during the synthesis phase: {str(e)}. Please try rephrasing your request."
