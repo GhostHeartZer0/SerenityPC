@@ -369,7 +369,7 @@ class HardwareProfile:
     
     @staticmethod
     def initialize_gpu_acceleration():
-        """Finds the latest CUDA toolkit installation and adds it to the DLL search path."""
+        """Finds CUDA toolkit installation (prioritizing CUDA 12.x) and adds it to the DLL search path."""
         if sys.platform != "win32": return
         
         import glob
@@ -379,23 +379,36 @@ class HardwareProfile:
         if os.path.exists(base_install):
             versions = glob.glob(os.path.join(base_install, "v*")) 
             if versions:
-                cuda_path = os.path.join(sorted(versions)[-1], "bin")
+                v12 = [v for v in versions if os.path.basename(v).startswith("v12")]
+                if v12:
+                    cuda_path = os.path.join(sorted(v12)[-1], "bin")
+                else:
+                    cuda_path = os.path.join(sorted(versions)[-1], "bin")
         
         if not cuda_path:
             cuda_path = os.environ.get('CUDA_PATH') or os.environ.get('CUDA_HOME')
             if cuda_path and not cuda_path.endswith("bin"):
                 cuda_path = os.path.join(cuda_path, "bin")
 
-        if cuda_path and os.path.isdir(cuda_path) and hasattr(os, 'add_dll_directory'):
-            try:
-                os.add_dll_directory(cuda_path)
-                # Also add the lib/x64 path where cublas lives
-                lib_path = os.path.join(os.path.dirname(cuda_path), "lib", "x64")
-                if os.path.exists(lib_path) and os.path.isdir(lib_path):
-                    os.add_dll_directory(lib_path)
-                print(f"[HARDWARE] Apex CUDA Link Established: {cuda_path}")
-            except Exception as e:
-                print(f"[HARDWARE] CUDA DLL Link Failed: {e}")
+        if cuda_path and os.path.isdir(cuda_path):
+            cuda_root = os.path.dirname(cuda_path)
+            # Prepend CUDA bin to PATH and remove conflicting CUDA installations
+            paths = os.environ.get("PATH", "").split(os.pathsep)
+            clean_paths = [p for p in paths if not ("CUDA" in p and "NVIDIA GPU Computing Toolkit" in p and cuda_root.lower() not in p.lower())]
+            if cuda_path not in clean_paths:
+                clean_paths = [cuda_path] + clean_paths
+            os.environ["PATH"] = os.pathsep.join(clean_paths)
+
+            if hasattr(os, 'add_dll_directory'):
+                try:
+                    os.add_dll_directory(cuda_path)
+                    # Also add the lib/x64 path where cublas lives
+                    lib_path = os.path.join(cuda_root, "lib", "x64")
+                    if os.path.exists(lib_path) and os.path.isdir(lib_path):
+                        os.add_dll_directory(lib_path)
+                    print(f"[HARDWARE] Apex CUDA Link Established: {cuda_path}")
+                except Exception as e:
+                    print(f"[HARDWARE] CUDA DLL Link Failed: {e}")
     
     @staticmethod
     def get_cpu_info():

@@ -11,7 +11,5 @@ pydantic
 transformers
 sounddevice
 beautifulsoup4
-llama-cpp-python==0.3.14
 playwright
 chromadb
-sentence-transformers

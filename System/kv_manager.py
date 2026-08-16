@@ -110,30 +110,17 @@ class KVManager:
         return pruned_text
 
 
-class TurboVecIndex:
-    def __init__(self, history_dir):
-        import os
+class HistoryKeywordIndex:
+    """
+    Lightweight keyword-based search index over chat history archives (.history.jsonz).
+    Operates without heavy vector embedding models or external dependencies.
+    """
+    def __init__(self, history_dir: str):
         import threading
         self.history_dir = history_dir
         self._ingested_files = set()
         self.metadata = []
         self.lock = threading.RLock()
-        self.collection = None
-        self.embedder = None
-
-        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-
-        try:
-            import turbovec
-            self.collection = turbovec.TurboQuantIndex(384)
-        except Exception as e:
-            print(f"[TURBOVEC] Failed to initialize TurboQuantIndex: {e}")
-
-        try:
-            from sentence_transformers import SentenceTransformer
-            self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
-        except Exception as e:
-            print(f"[TURBOVEC] Failed to initialize SentenceTransformer: {e}")
 
     def ingest_needed_files(self, active_model_path: Optional[str], active_level: Optional[int], lookup_mode: str):
         import glob
@@ -183,38 +170,27 @@ class TurboVecIndex:
                     with open(f, 'rb') as fp:
                         history = json.loads(zlib.decompress(fp.read()).decode('utf-8'))
                     
-                    texts = []
-                    temp_metadata = []
                     for msg in history:
                         content = msg.get("content", "")
                         if len(content) > 20:
-                            texts.append(content)
-                            temp_metadata.append({
+                            self.metadata.append({
                                 "content": content,
                                 "role": msg.get("role"),
                                 "file": f,
                                 "model": f_model,
                                 "level": f_level
                             })
-                    
-                    if texts and self.embedder is not None and self.collection is not None:
-                        vecs = self.embedder.encode(texts, convert_to_numpy=True)
-                        self.collection.add(vecs.astype(np.float32))
-                        self.metadata.extend(temp_metadata)
-                        newly_ingested += len(texts)
-                    elif texts:
-                        self.metadata.extend(temp_metadata)
-                        newly_ingested += len(texts)
+                            newly_ingested += 1
 
                     self._ingested_files.add(f)
                 except Exception as e:
-                    print(f"[TURBOVEC] Failed to parse history {f}: {e}")
+                    print(f"[HISTORY_SEARCH] Failed to parse history {f}: {e}")
 
             if newly_ingested > 0:
-                print(f"[TURBOVEC] Ingested {newly_ingested} new chunks. Total indexed: {len(self.metadata)}")
+                print(f"[HISTORY_SEARCH] Ingested {newly_ingested} new chunks. Total indexed: {len(self.metadata)}")
 
     def search(self, query: str, top_k: int = 3, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted"):
-        import numpy as np
+        import os
         
         with self.lock:
             self.ingest_needed_files(active_model_path, active_level, lookup_mode)
@@ -226,8 +202,12 @@ class TurboVecIndex:
             if active_model_path:
                 active_model_name = os.path.splitext(os.path.basename(active_model_path))[0].lower()
 
-            mask = np.zeros(len(self.metadata), dtype=bool)
-            for i, meta in enumerate(self.metadata):
+            query_terms = [t for t in query.lower().split() if len(t) > 3]
+            if not query_terms:
+                query_terms = [t for t in query.lower().split() if t]
+
+            scored_res = []
+            for meta in self.metadata:
                 match = False
                 if lookup_mode == "targeted":
                     if active_model_name and meta["model"] == active_model_name and active_level is not None and meta["level"] == active_level:
@@ -240,36 +220,16 @@ class TurboVecIndex:
                         match = True
                 elif lookup_mode == "all":
                     match = True
-                
-                mask[i] = match
 
-            if not np.any(mask):
-                return []
-
-            # If vector search engine is active, perform vector similarity search
-            if self.embedder is not None and self.collection is not None:
-                try:
-                    query_vec = self.embedder.encode([query], convert_to_numpy=True).astype(np.float32)
-                    distances, indices = self.collection.search(query_vec, k=top_k, mask=mask)
-                    
-                    results = []
-                    if len(indices) > 0:
-                        for idx in indices[0]:
-                            if 0 <= idx < len(self.metadata):
-                                results.append(self.metadata[idx]["content"])
-                    return results
-                except Exception as e:
-                    print(f"[TURBOVEC] Vector search failed ({e}), falling back to keyword search.")
-
-            # Fallback keyword search
-            query_terms = [t for t in query.lower().split() if len(t) > 3]
-            scored_res = []
-            for i, meta in enumerate(self.metadata):
-                if mask[i]:
+                if match:
                     c_lower = meta["content"].lower()
                     score = sum(c_lower.count(t) for t in query_terms)
                     if score > 0:
                         scored_res.append((score, meta["content"]))
-            
+
             scored_res.sort(key=lambda x: x[0], reverse=True)
             return [text for _, text in scored_res[:top_k]]
+
+
+# Backwards compatibility alias
+TurboVecIndex = HistoryKeywordIndex

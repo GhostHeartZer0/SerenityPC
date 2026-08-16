@@ -225,9 +225,9 @@ Users of this software must comply with the terms of all applicable licenses lis
    - Copyright (c) Alibaba Cloud / Qwen Team
    - Description: Large language model architecture weights and tokenization.
 
-6. TurboVec & Sentence-Transformers
-   - License: Apache License 2.0 / MIT License
-   - Description: Vector indexing and embedding framework for history search.
+6. History Keyword Search
+   - License: MIT License
+   - Description: Lightweight pure-Python keyword search framework for chat archives.
 
 7. OpenCV & Pillow
    - License: Apache License 2.0 / HPND License

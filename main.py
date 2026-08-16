@@ -50,8 +50,7 @@ from System.serenity_utils import (WidgetLogger, FileAndWidgetLogger, LoadingScr
                             log_uncaught_exception, HardwareProfile, MediaProcessor, SystemMonitor,
                             enable_fault_debugging, ThreadSafeDict, ThreadSafeList, ThinkingDisplay,
                             patch_gguf_architecture, patch_llama_deallocator)
-#from System.ui_watchdog import UIWatchdog #commented out for now to save threads
-from System.kv_manager import KVManager, TurboVecIndex
+from System.kv_manager import KVManager, HistoryKeywordIndex
 from System.tool_registry import GemmaToolRegistry
 from System.settings_ui import open_settings_window, run_auto_detect
 
@@ -202,7 +201,7 @@ atexit.register(kill_engine_on_shutdown)
 # ponytail: ThreadSafeDict, ThreadSafeList, and ThinkingDisplay moved to System/serenity_utils.py
 
 
-# ponytail: GemmaToolRegistry and TurboVecIndex moved to System/tool_registry.py and System/kv_manager.py
+# ponytail: GemmaToolRegistry and HistoryKeywordIndex moved to System/tool_registry.py and System/kv_manager.py
 
 class ChatbotApp:
     if TYPE_CHECKING:
@@ -320,18 +319,18 @@ class ChatbotApp:
         self.dirs = {d: os.path.join(self.script_dir, d) for d in ["Media", "History", "Models", "Logs", "System"]}
         for d in self.dirs.values(): os.makedirs(d, exist_ok=True)
         
+        self.history_index = None
         self.turbo_vec = None
-        threading.Thread(target=self._init_turbovec, daemon=True).start()
+        threading.Thread(target=self._init_history_search, daemon=True).start()
 
-    def _init_turbovec(self):
+    def _init_history_search(self):
         try:
             # We delay loading to not stall UI
-            self.turbo_vec = TurboVecIndex(self.dirs["History"])
-            print("[TURBOVEC] Background initialization complete.")
-        except ImportError as e:
-            print(f"[TURBOVEC] Optional module not installed (pip install turbovec sentence-transformers): {e}")
+            self.history_index = HistoryKeywordIndex(self.dirs["History"])
+            self.turbo_vec = self.history_index
+            print("[HISTORY_SEARCH] Background keyword index initialization complete.")
         except Exception as e:
-            print(f"[TURBOVEC] Background init failed: {e}")
+            print(f"[HISTORY_SEARCH] Background init failed: {e}")
 
         # Start background polling        
         # Support user-preferred 'settings.json' in root or System/
@@ -6383,13 +6382,14 @@ class ChatbotApp:
         if not current_query:
             return {}
 
-        # 2. Semantic Memory Retrieval via TurboVec
+        # 2. History Memory Retrieval via Keyword Search
         text_corpus = ""
-        if getattr(self, 'turbo_vec', None):
+        search_engine = getattr(self, 'history_index', None) or getattr(self, 'turbo_vec', None)
+        if search_engine:
             try:
                 lookup_mode = self.config.get("history_lookup_mode", "targeted")
                 query_with_time = f"{current_query} {datetime.now().strftime('%Y-%m-%d %A')}"
-                memories = self.turbo_vec.search(
+                memories = search_engine.search(
                     query_with_time, 
                     top_k=3, 
                     active_model_path=self.model_path, 
@@ -6399,7 +6399,7 @@ class ChatbotApp:
                 if memories:
                     text_corpus = " ".join(memories).lower()
             except Exception as e:
-                print(f"[TURBOVEC] Logit Bias search failed: {e}")
+                print(f"[HISTORY_SEARCH] Logit Bias search failed: {e}")
                 
         # Fallback to the active query if no historical relevance is found
         if not text_corpus:

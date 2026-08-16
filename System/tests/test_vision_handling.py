@@ -3,14 +3,17 @@ Test: Vision (Image) Handling - Multimodal Content Safety
 Validates that the Gemma prompt builder correctly handles list-type content
 from vision/image messages without crashing on .strip().
 
-Also validates turbovec init graceful degradation.
+Also validates HistoryKeywordIndex search.
 """
 import sys
 import os
 import re
 
 # Add the project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ws = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ws not in sys.path: sys.path.insert(0, _ws)
+_sys_dir = os.path.join(_ws, "System")
+if _sys_dir not in sys.path: sys.path.insert(0, _sys_dir)
 
 def test_multimodal_content_strip_safety():
     """
@@ -141,23 +144,17 @@ def test_edge_cases():
     return True
 
 
-def test_turbovec_graceful_degradation():
-    """Test that turbovec init handles missing module gracefully."""
+def test_history_keyword_index():
+    """Test that HistoryKeywordIndex initializes and searches properly without vector dependencies."""
     print("\n" + "=" * 60)
-    print("TEST: Turbovec Graceful Degradation")
+    print("TEST: History Keyword Index Search")
     print("=" * 60)
     
-    try:
-        import turbovec
-        print("  [INFO] turbovec is installed - module import succeeded")
-        print("  [PASS] No degradation needed")
-    except ImportError as e:
-        print(f"  [INFO] turbovec not installed (expected): {e}")
-        print("  [PASS] ImportError caught correctly - this is the expected graceful path")
-        print("  [INFO] To install: pip install turbovec sentence-transformers")
-    except Exception as e:
-        print(f"  [WARN] Unexpected error type: {type(e).__name__}: {e}")
-    
+    from System.kv_manager import HistoryKeywordIndex
+    index = HistoryKeywordIndex(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "History"))
+    results = index.search("test query", top_k=2, lookup_mode="all")
+    assert isinstance(results, list), "Expected list result from search"
+    print("  [PASS] HistoryKeywordIndex initialized and returned valid list")
     return True
 
 
@@ -220,7 +217,7 @@ if __name__ == "__main__":
     results = []
     results.append(("Multimodal Content Strip Safety", test_multimodal_content_strip_safety()))
     results.append(("Edge Cases", test_edge_cases()))
-    results.append(("Turbovec Graceful Degradation", test_turbovec_graceful_degradation()))
+    results.append(("History Keyword Index Search", test_history_keyword_index()))
     results.append(("prepare_vision_query Return Type", test_prepare_vision_query_return_type()))
     
     print("\n" + "=" * 60)

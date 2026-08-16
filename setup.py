@@ -9,6 +9,11 @@ import time
 import ctypes
 import traceback
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 # --- Localize Temp and Cache Paths ---
 _curr = os.path.abspath(__file__)
 while True:
@@ -238,12 +243,12 @@ def setup_msvc_env():
             os.environ.update(vc_env)
             os.environ["CC"] = "cl"
             os.environ["CXX"] = "cl"
-            print(f"✅ MSVC Compiler Environment initialized ({vcvars}).")
+            print(f"[V] MSVC Compiler Environment initialized ({vcvars}).")
             return True
         else:
-            print(f"⚠️  Found {vcvars} but failed to capture environment.")
+            print(f"[!] Found {vcvars} but failed to capture environment.")
     else:
-        print("❌ Visual Studio MSVC compiler (vcvars64.bat) NOT found.")
+        print("[X] Visual Studio MSVC compiler (vcvars64.bat) NOT found.")
     return False
 
 def check_build_environment():
@@ -260,17 +265,17 @@ def check_build_environment():
     all_passed = True
     for tool, path in checks.items():
         if path:
-            print(f"✅ {tool}: Found at {path}")
+            print(f"[V] {tool}: Found at {path}")
         else:
-            print(f"❌ {tool}: NOT FOUND")
+            print(f"[X] {tool}: NOT FOUND")
             all_passed = False
     
     if not all_passed:
-        print("\n⚠️  WARNING: Some build tools are missing. llama-cpp-python build WILL fail.")
+        print("\n[!] WARNING: Some build tools are missing. llama-cpp-python build WILL fail.")
         print("Ensure Visual Studio (C++ Desktop Dev), CMake, and CUDA Toolkit are installed.")
         print("--------------------------------------------------\n")
     else:
-        print("✅ All critical build tools detected.\n")
+        print("[V] All critical build tools detected.\n")
     return all_passed
 
 import re
@@ -507,11 +512,11 @@ def main():
         is_installed = True
         if llama_cpp.llama_supports_gpu_offload():
             gpu_supported = True
-            status_msg = "✅ Installed and stable (GPU acceleration verified)."
+            status_msg = "[V] Installed and stable (GPU acceleration verified)."
         else:
-            status_msg = "⚠️  Installed, but running on CPU (no GPU offloading detected)."
+            status_msg = "[!] Installed, but running on CPU (no GPU offloading detected)."
     except Exception as e:
-        status_msg = f"❌ Not installed yet ({e})."
+        status_msg = f"[X] Not installed yet ({e})."
         
     print(f"Status: {status_msg}")
     if not is_installed:
@@ -539,6 +544,12 @@ def main():
         skip_reinstall = True
     else:  # choice == "1"
         skip_reinstall = True
+        if not is_installed:
+            wheels_dir = os.path.join(_workspace, "wheels")
+            cuda_wheels = glob.glob(os.path.join(wheels_dir, "llama_cpp_python*.whl"))
+            if cuda_wheels:
+                print(f"[*] Installing pre-compiled CUDA engine wheel ({os.path.basename(cuda_wheels[0])})...")
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-index", "--find-links", wheels_dir, "llama-cpp-python", "--no-deps"])
 
     if not skip_reinstall:
         # Uninstall llama-cpp-python only to prevent caching conflicts
