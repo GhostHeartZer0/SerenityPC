@@ -1,40 +1,55 @@
 # Changelog
 
-## Version 1.6.1
+## Version 1.6.2
 
-### Workspace Hygiene & Cleanup
-- **Purged `desktop.ini` Files**: Recursively stripped all Windows OS `desktop.ini` configuration artifacts across the entire repository and vendor directories.
-
-- **Chat History Appending & Persistence Fix**:
-  - Restored `self.messages` turn appending (`user_msg` and `final_answer`) and `save_history()` directly inside `_finalize_message()` in main.py.
-- **Dynamic Parameter Auto-Adjustment Engine (TODO #4)**:
+- **History Archive Usability **:
+  - Rebuilt the History Archive into a unified search and filter interface in `main.py`.
+  - Added Level filter dropdown (`All Levels`, `Level 1` through `Level 7`), Date filter dropdown (`All Dates`, `Today`, `Yesterday`, `Past 7 Days`, `Past 30 Days`, `Older`), and Sort dropdown (`Newest First`, `Oldest First`, `Name A-Z`, `Name Z-A`, `Size (Largest)`).
+  - Integrated targeted mousewheel scrolling bound strictly to the history canvas on mouse enter/leave, preventing scroll events from bleeding into outer chat/UI widgets.
+  - Implemented real-time archive title search alongside deep full-text background search of compressed `.history.jsonz` message bodies, displaying matched dialogue snippets and highlighting occurrences inside conversation view.
+- **Vision & Image Recognition Alignment **:
+  - Implemented heuristic contour card ROI detection (`crop_active_playing_area`) in `System/vision_handler.py` to isolate card clusters and auto-crop active playing areas from poker/card tables, removing wasted background felt.
+  - Added symbol pixel density enhancement (`enhance_symbol_clarity`) utilizing LAB color space CLAHE and unsharp masking to ensure 6 vs 9 numerals and Heart vs Diamond suit serifs remain crisp.
+  - Configured high-fidelity Lanczos-4 scaling and 4:4:4 chroma JPEG encoding (`IMWRITE_JPEG_SAMPLING_FACTOR_444`) to eliminate red color bleed on card suits.
+- **App Lock & History Encryption **:
+  - Built `VaultManager` in `System/vault_manager.py` with AES-256-GCM authenticated encryption and PBKDF2-HMAC-SHA256 (250,000 rounds) key derivation.
+  - Implemented transactional batch archive migration (`.history.jsonz` <-> `.history.encz`) backed by automatic timestamped backups and instant full rollback if any verification error occurs.
+  - Added loud ALL-CAPS permanent data loss security disclaimer warnings before master password configuration.
+  - Created modal startup lock screen (`show_vault_unlock_modal`) and background inactivity watchdog in `main.py` with dual minutes slider, typeable seconds entry, and quick presets (`Off`, `15s`, `30s`, `45s`, `5m`, `15m`, `30m`).
+  - Added full Security & Vault Settings UI panel in `System/settings_ui.py`.
+- **Pre-Start Splash Realignment**:
+  - Re-aligned `LoadingScreen` geometry in `System/serenity_utils.py` to 360x380, constrained avatar thumbnail scaling bounds to 320x270, and raised splash notification text above canvas items to prevent the "Loading... please wait. This'll only take a minute or two." message from overlapping or being cut off by the avatar image.
+- **Dynamic Parameter Auto-Adjustment Engine**:
   - Implemented intelligent, in-memory domain-specific sampling adjustments in System/modular_registry.py (`DynamicParamRegistry`) and main.py.
   - Automatically lowers temperature and increases `min_p` for Coding and Math tasks; adjusts parameters dynamically for Creative writing and Factual extractions.
   - Non-destructive: preserves the user's permanent settings on disk and includes a Settings UI toggle (`dynamic_params_enabled`).
-- **Modular Registry Pattern (TODO #5)**:
+- **Modular Registry Pattern**:
   - Built reusable, extensible `ModularRegistry` in System/modular_registry.py supporting decorator-based registration (`@registry.register(key)`), metadata tagging, introspection, and safe execution dispatch.
   - Refactored System/tool_registry.py (`GemmaToolRegistry`) to eliminate monolithic `if-elif` chains.
-- **Full Flash Attention Quantized KV Matrix (TODO #1)**:
+- **Full Flash Attention Quantized KV Matrix**:
   - Enabled full KV cache quantization suite across System/settings_ui.py, main.py, and Debate.py: `fp16`, `bf16`, `q8_0`, `q5_1`, `q5_0`, `q4_1`, `q4_0`, `iq4_nl`, and `f32`.
-- **Pip Environment Hygiene (TODO #1b)**:
+- **Pip Environment Hygiene**:
   - Validated strict `.venv` isolation against external global python packages (`ai-edge-litert`, `litert-torch`, `foundry-local-sdk`, `qai-hub`).
-- **Real-Time Diffusion Visual Denoising & Time-Grounding (TODO #2)**:
+- **Real-Time Diffusion Visual Denoising & Time-Grounding**:
   - Updated System/diffusion_wrapper.py with dynamic ANSI clear-screen frame parsing, live step tracking (`Denoising: Step X/Y`), real-time step latency calculation, and ETA telemetry.
-- **Debate Mode Enhancements (TODO #3)**:
+- **Debate Mode Enhancements**:
   - Built `LoadingSpinner` Canvas animation widget for model loading and generation states.
   - Added **Speedy** vs **Simmer** pacing level descriptors (`max_tokens`, `temperature`, tailored debate system instructions).
   - Fixed multi-round crash in Debate.py by enforcing strictly alternating `user`/`assistant` Jinja message histories.
   - Resolved regression where persistence code was misplaced within `_run_self_analysis()`, preventing the active window from accumulating chat context and causing models to forget previous turns.
-- **Markdown, Math & Table Engine Overhaul (TODO #1)**:
+- **Markdown, Math & Table Engine Overhaul**:
   - Rewrote System/markdown_engine.py with a direct non-destructive interval-based parser that eliminates all placeholder strings and null bytes (`\x00`), fixing `CODE.` placeholder rendering and clipboard copy-paste cutoff bugs.
   - Implemented GFM table parsing with aligned Unicode box-drawing grids (`┌─┬─┐`, `│...│`, `├─┼─┤`, `└─┴─┘`) and column alignment handling (`:---`, `:---:`, `---:`).
   - Implemented LaTeX-to-Unicode math converter supporting fractions, roots, summations, integrals, Greek characters, superscripts, and subscripts.
   - Added code block isolation: comments (`#`), multiplication (`*`), and variables (`$`, `_`) inside code blocks are completely protected from inline styling.
   - Disambiguated currency (`$100`) from math equations and `snake_case_variables` from italics.
-- **Thought Channel Protocol Alignment & Real-Time Stream Demuxing (TODO #20)**:
+- **Thought Channel Protocol Alignment & Real-Time Stream Demuxing**:
   - Added lookahead streaming buffer in `_generation_worker` in main.py to prevent partial thought tags (`<|channel>`, `<think>`) from momentarily leaking to the Chat UI on Gemma-4 / Qwen models before demuxing kicks in.
   - Fixed thought/answer separation so direct non-thought responses are never mistakenly classified as thinking logs or re-synthesized.
   - Streamlined real-time demuxing to seamlessly route internal reasoning to background buffers while streaming clean final answers.
+
+## Version 1.6.1
+
 - **Engine Tier & Level Mapping Realignment**:
   - Swapped **Secret** and **Live** engine tier slots:
     - **Engine: Transcendent (Lvl 6)**: Formerly "Live", now assigned to Level 6 (The Transcendent One).
@@ -71,11 +86,15 @@
 - **NVIDIA Nemotron 3.5 Lightning Hybrid SSM/MoE & Partial RoPE**: Added hybrid Mamba2 SSM + MoE auto-detection in `llama-model-loader.cpp` when models are exported under architecture label `"llama"`. Added transparent key fallback (`llama.*` -> `nemotron_h_moe.*`) for hyperparameters and array keys. Relaxed strict `n_rot == n_embd_head_k` equality checks in `llama-model.cpp`, `models/llama.cpp`, and `models/llama-iswa.cpp` to support partial rotary dimensions (`n_rot: 84` with head size `128`).
 - **UI Drag-and-Drop Hook Guard**: Added null and attribute check (`windnd is not None and hasattr(windnd, "hook_dropfiles")`) in `main.py`, preventing startup exceptions on systems without active drag-and-drop extensions.
 
+## Version 1.5.6
+
 ### Python Bindings & Ctypes ABI
 - **DRY Sampler Ctypes ABI Fix**: Fixed memory alignment corruption in sampler chain by adding `n_ctx_train` (`ctypes.c_int32`) to `llama_sampler_init_dry` signature in `llama_cpp.py` and passing `llama_model_n_ctx_train(model.model)` in `_internals.py`.
 - **Penalties Sampler ABI Fix**: Fixed ABI signature mismatch for `llama_sampler_init_penalties` in `llama_cpp.py` and `_internals.py` by removing obsolete leading `n_vocab` argument, eliminating infinite single-token repeat spam (`1111...`, `IIII...`).
 - **Context Params Struct Alignment**: Aligned Python `llama_context_params` `_fields_` with upstream `llama.h`. Removed obsolete `n_outputs_max`/`ctx_other` fields and inserted missing `ctx_type`, resolving memory offset corruption and `"Unsupported ctx type"` failures.
 - **Ctypes Dynamic Symbol Resolution & Safe Deallocator**: Wrapped `getattr(lib, name)` in `_ctypes_extensions.py` within `llama_cpp` with exception handling for missing/optional exported symbols, preventing fatal `AttributeError` import crashes on customized `llama.cpp` builds. Added safe attribute guards to `LlamaModel.close()` in `_internals.py` to prevent deallocator crashes during cleanup of partially initialized models.
+
+## Version 1.5.5
 
 ### Inference, Reasoning Channels & Samplers
 - **Gemma-4 Thought Channel & Clean Answer Delivery**: Verified thought channel extraction and separation (`<|channel>thought...<channel|>`) routing reasoning steps into the UI Thought Log and final answers (`final_answer`) directly to the active Chat tab with zero tag bleed. Added `r'<\|?turn\|?>'` across all structural tag stripping patterns in `main.py`.
@@ -85,6 +104,8 @@
 - **KV Cache Memory Reset & Format Restriction**: Fixed state leakage where previous session tokens remained in VRAM by enforcing clean sequence reset (`seq_id = -1`) in `_internals.py`. Restricted KV cache format options strictly to verified universal formats (`fp16`, `q8_0`, `q4_0`), purging broken/deprecated formats (`q5_1`, `turbo3_tcq`, etc.).
 - **Speculative Drafting Safety & Drafter Auto-Discovery**: Set speculative drafting to default off (`speculative_drafting: false`) with live tier reload upon toggle in Settings UI. Removed silent `LlamaPromptLookupDecoding` fallback in `main.py` when no assistant model is loaded. Added automatic detection for `dflash` and `drafter` keyword filenames in `main.py`.
 - **Vision Projector Guard**: Prevented `Llava15ChatHandler` from attaching to `self.model.chat_handler` during non-multimodal text inference, preventing text context corruption.
+
+## Version 1.5.4
 
 ### Toolchain, Build Orchestration & GPU Acceleration
 - **CUDA 13.3+ MSVC Toolchain Auto-Discovery**: Integrated `get_msvc_env()` to auto-discover and load Visual Studio MSVC environment (`vcvarsall.bat x64`) across `setup.py` and `SETUPfile.py`. Sanitized PATH by stripping conflicting MinGW/w64devkit compilers and legacy CUDA versions.

@@ -313,7 +313,7 @@ class LoadingScreen:
         self.animation_frames = []
         self.current_frame_index = 0
         self.animation_id = None
-        self.width, self.height = 350, 350
+        self.width, self.height = 360, 380
 
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
@@ -324,8 +324,8 @@ class LoadingScreen:
         self.canvas = tk.Canvas(self.root, width=self.width, height=self.height, bg="#000000", highlightthickness=0)
         self.canvas.pack()
         self.load_animation_images()
-        self.canvas.create_text(self.width / 2, self.height - 40, text="Serenity is Awakening...", font=("Open Sans", 11, "bold"), fill="#FFFFFF")
-        self.canvas.create_text(self.width / 2, self.height - 20, text="Loading... please wait. This'll only take a minute or two.", font=("Open Sans", 9, "italic"), fill="#00FFCC")
+        self.canvas.create_text(self.width / 2, self.height - 52, text="Serenity is Awakening...", font=("Open Sans", 11, "bold"), fill="#FFFFFF", tags="splash_text")
+        self.canvas.create_text(self.width / 2, self.height - 24, text="Loading... please wait. This'll only take a minute or two.", font=("Open Sans", 9, "italic"), fill="#00FFCC", tags="splash_text")
         self.root.lift()
         self.root.attributes("-topmost", True)
 
@@ -342,7 +342,7 @@ class LoadingScreen:
                 img_path = os.path.join(image_folder, filename)
                 if not os.path.exists(img_path): continue
                 with Image.open(img_path) as img:
-                    img.thumbnail((self.width, self.height), Image.Resampling.LANCZOS)
+                    img.thumbnail((self.width - 40, self.height - 110), Image.Resampling.LANCZOS)
                     self.animation_frames.append(ImageTk.PhotoImage(img))
         except Exception as e:
             print(f"Animation load error: {e}", file=sys.stderr)
@@ -355,7 +355,8 @@ class LoadingScreen:
         if not self.animation_frames or not self.root.winfo_exists(): return
         frame = self.animation_frames[self.current_frame_index]
         self.canvas.delete("anim")
-        self.canvas.create_image(self.width/2, self.height/2 - 20, image=frame, tags="anim")
+        self.canvas.create_image(self.width / 2, (self.height - 85) / 2 + 10, image=frame, tags="anim")
+        self.canvas.tag_raise("splash_text")
         self.current_frame_index = (self.current_frame_index + 1) % len(self.animation_frames)
         self.animation_id = self.root.after(1000, self.update_animation)
 
@@ -695,6 +696,8 @@ class SystemMonitor:
 
 def log_uncaught_exception(exc_type, exc_value, exc_traceback):
     """Catches fatal app crashes and saves them to error_log.txt"""
+    if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+        return
     error_log_file = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0] if hasattr(sys, 'frozen') else __file__)), "Logs", "error_log.txt")
     try:
         os.makedirs(os.path.dirname(error_log_file), exist_ok=True)

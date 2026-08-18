@@ -10,7 +10,7 @@ import os
 import re
 
 # Add the project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 def test_multimodal_content_strip_safety():
     """
@@ -216,12 +216,69 @@ def test_prepare_vision_query_return_type():
     return True
 
 
+def test_card_playing_area_crop_and_symbol_clarity():
+    """Validates heuristic contour card ROI detection and symbol enhancement."""
+    print("\n" + "=" * 60)
+    print("TEST: Card Playing Area Contour Crop & Symbol Clarity")
+    print("=" * 60)
+    
+    import numpy as np
+    import cv2
+    from System.vision_handler import VisionHandler
+
+    # 1. Test Budget Determination for Card Keywords
+    queries_1120 = [
+        "What is the turn card?",
+        "Is this a 6 of hearts or 9 of diamonds?",
+        "Read the rank and suit on the board",
+        "Check my poker hand"
+    ]
+    for q in queries_1120:
+        b = VisionHandler._determine_visual_budget(q)
+        assert b == 1120, f"Expected budget 1120 for '{q}', got {b}"
+    print("  [PASS] Card keywords properly map to 1120 visual budget")
+
+    # 2. Create synthetic poker table image with cards
+    table_img = np.zeros((720, 1280, 3), dtype=np.uint8)
+    table_img[:] = (35, 120, 35) # Green felt background
+
+    # Draw two cards in center
+    # Card 1: 500, 280 to 570, 380 (width 70, height 100 -> aspect ratio 0.70)
+    cv2.rectangle(table_img, (500, 280), (570, 380), (255, 255, 255), -1)
+    cv2.putText(table_img, "6H", (510, 330), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 200), 2)
+
+    # Card 2: 600, 280 to 670, 380
+    cv2.rectangle(table_img, (600, 280), (670, 380), (255, 255, 255), -1)
+    cv2.putText(table_img, "9D", (610, 330), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 200), 2)
+
+    # 3. Test crop_active_playing_area
+    cropped = VisionHandler.crop_active_playing_area(table_img)
+    assert isinstance(cropped, np.ndarray), "Cropped image must be a numpy ndarray"
+    assert cropped.shape[0] < table_img.shape[0] and cropped.shape[1] < table_img.shape[1], \
+        f"Expected cropped playing area smaller than 1280x720, got {cropped.shape[1]}x{cropped.shape[0]}"
+    print(f"  [PASS] Card table cropped to active area: 1280x720 -> {cropped.shape[1]}x{cropped.shape[0]}")
+
+    # 4. Test enhance_symbol_clarity
+    enhanced = VisionHandler.enhance_symbol_clarity(cropped)
+    assert enhanced.shape == cropped.shape, "Enhanced image shape must match input"
+    print("  [PASS] CLAHE and unsharp masking executed successfully")
+
+    # 5. Non-card fallback test (uniform background with no cards)
+    plain_img = np.zeros((400, 400, 3), dtype=np.uint8)
+    plain_cropped = VisionHandler.crop_active_playing_area(plain_img)
+    assert plain_cropped.shape == plain_img.shape, "Non-card image should remain uncropped"
+    print("  [PASS] Safe fallback on images without cards verified")
+
+    return True
+
+
 if __name__ == "__main__":
     results = []
     results.append(("Multimodal Content Strip Safety", test_multimodal_content_strip_safety()))
     results.append(("Edge Cases", test_edge_cases()))
     results.append(("Turbovec Graceful Degradation", test_turbovec_graceful_degradation()))
     results.append(("prepare_vision_query Return Type", test_prepare_vision_query_return_type()))
+    results.append(("Card Playing Area Crop & Symbol Clarity", test_card_playing_area_crop_and_symbol_clarity()))
     
     print("\n" + "=" * 60)
     print("SUMMARY")
