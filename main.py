@@ -55,6 +55,7 @@ from System.tool_registry import GemmaToolRegistry
 from System.modular_registry import ModularRegistry, DynamicParamRegistry
 from System.markdown_engine import MarkdownEngine
 from System.settings_ui import open_settings_window, run_auto_detect
+from System.vault_manager import VaultManager, DISCLAIMER_WARNING_TEXT
 
 # --- Debugging & Fault Handling ---
 enable_fault_debugging()
@@ -424,6 +425,12 @@ class ChatbotApp:
         self.context_size_config["vision_video_deep"] = 16384
         
         self.kv_manager = None
+        self.vault_manager = VaultManager(
+            history_dir=self.dirs.get("History", os.path.join(self.script_dir, "History")),
+            state_dir=self.dirs.get("System", os.path.join(self.script_dir, "System"))
+        )
+        self._last_user_activity_time = time.time()
+        self._vault_modal_open = False
         self.temp_config = {tier: 0.8 if "vision" not in tier else 0.1 for tier in tier_list}
         self.temp_config["vision_multimodal"] = 1.0 # Gemma-4 Best Practice
         self.temp_config["secret"] = 0.5 # More accurate and focused
@@ -568,6 +575,119 @@ class ChatbotApp:
 
         # Non-blocking, background initialization for TurboVec history indexing
         threading.Thread(target=self._init_turbovec, daemon=True).start()
+
+        # Start Inactivity Watchdog & Startup Lock Verification 
+        self._start_inactivity_watchdog()
+        if hasattr(self, 'vault_manager') and self.vault_manager.is_locked():
+            self.root.after(200, self.show_vault_unlock_modal)
+
+    def _on_user_activity(self, event=None):
+        """Resets the inactivity timer on user interaction."""
+        self._last_user_activity_time = time.time()
+
+    def _start_inactivity_watchdog(self):
+        """Binds user activity listeners and starts the background inactivity watchdog."""
+        try:
+            self.root.bind_all("<Key>", self._on_user_activity, add="+")
+            self.root.bind_all("<Button-1>", self._on_user_activity, add="+")
+            self.root.bind_all("<Button-2>", self._on_user_activity, add="+")
+            self.root.bind_all("<Button-3>", self._on_user_activity, add="+")
+        except Exception: pass
+        self.root.after(3000, self._check_inactivity_lock)
+
+    def _check_inactivity_lock(self):
+        """Checks if inactivity timeout is exceeded and locks vault if active."""
+        if hasattr(self, 'vault_manager') and self.vault_manager.is_lock_enabled():
+            if not self.vault_manager.is_locked() and not self._vault_modal_open:
+                limit_sec = self.vault_manager.get_auto_lock_seconds()
+                if limit_sec > 0:
+                    idle_time = time.time() - self._last_user_activity_time
+                    if idle_time >= limit_sec:
+                        print(f"[VAULT] Inactivity timeout ({limit_sec}s) reached. Locking Serenity Vault.")
+                        self.vault_manager.lock()
+                        self.show_vault_unlock_modal()
+        # Reschedule watchdog
+        if self.root.winfo_exists():
+            self.root.after(3000, self._check_inactivity_lock)
+
+    def show_vault_unlock_modal(self, on_unlock_callback=None):
+        """Displays a modal startup lock / unlock dialog."""
+        if self._vault_modal_open: return
+        self._vault_modal_open = True
+
+        unlock_win = tk.Toplevel(self.root)
+        unlock_win.title("Serenity Vault - Locked")
+        unlock_win.geometry("420x280")
+        unlock_win.config(bg=THEME["bg_color"])
+        unlock_win.transient(self.root)
+        unlock_win.grab_set()
+
+        # Center on parent window
+        try:
+            x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 210
+            y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 140
+            unlock_win.geometry(f"420x280+{x}+{y}")
+        except: pass
+
+        tk.Label(unlock_win, text="🔒 SERENITY VAULT", font=("Segoe UI", 13, "bold"), 
+                 bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(pady=(20, 4))
+
+        tk.Label(unlock_win, text="Enter Master Password to access system & archives:", 
+                 font=("Segoe UI", 9), bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(pady=(0, 15))
+
+        pwd_var = tk.StringVar()
+        pwd_entry = tk.Entry(unlock_win, textvariable=pwd_var, show="*", width=26, 
+                             bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                             insertbackground=THEME["fg_color"], font=("Segoe UI", 11), relief=tk.SUNKEN)
+        pwd_entry.pack(pady=5)
+        pwd_entry.focus_set()
+
+        err_lbl = tk.Label(unlock_win, text="", font=("Segoe UI", 9, "bold"), bg=THEME["bg_color"], fg="#ff4444")
+        err_lbl.pack(pady=4)
+
+        def _try_unlock(event=None):
+            pwd = pwd_var.get().strip()
+            if not pwd:
+                err_lbl.config(text="Password cannot be empty.")
+                return
+
+            if self.vault_manager.unlock(pwd):
+                self._vault_modal_open = False
+                self._last_user_activity_time = time.time()
+                unlock_win.destroy()
+                self._log_and_display("Vault unlocked successfully.")
+                if on_unlock_callback:
+                    on_unlock_callback()
+                else:
+                    self.load_history()
+                    if hasattr(self, 'history_state') and self.history_state.get("view") == "list":
+                        self._render_history_menu()
+            else:
+                err_lbl.config(text="❌ Incorrect master password.")
+                pwd_var.set("")
+                pwd_entry.focus_set()
+
+        pwd_entry.bind("<Return>", _try_unlock)
+        pwd_entry.bind("<KP_Enter>", _try_unlock)
+
+        btn_row = tk.Frame(unlock_win, bg=THEME["bg_color"])
+        btn_row.pack(pady=15)
+
+        tk.Button(btn_row, text="🔓 Unlock", command=_try_unlock,
+                  bg=THEME["button_active_color"], fg=THEME["fg_color"], 
+                  font=("Segoe UI", 9, "bold"), padx=12, pady=3, relief=tk.FLAT).pack(side=tk.LEFT, padx=6)
+
+        def _on_close_modal():
+            if self.vault_manager.is_locked():
+                if messagebox.askyesno("Exit Serenity", "Serenity is locked. Exit application?", parent=unlock_win):
+                    self._vault_modal_open = False
+                    unlock_win.destroy()
+                    self.root.destroy()
+            else:
+                self._vault_modal_open = False
+                unlock_win.destroy()
+
+        unlock_win.protocol("WM_DELETE_WINDOW", _on_close_modal)
 
     def check_gpu_support(self):
         """Final verification of GPU capabilities."""
@@ -1085,8 +1205,20 @@ class ChatbotApp:
         if self.chat_history is not None:
             self.chat_history.pack_forget()
         
-        # Reset to level selection for a fresh entry
-        self.history_state = {"view": "levels", "level": None}
+        # Reset to unified list view
+        if not hasattr(self, 'history_state') or not isinstance(self.history_state, dict):
+            self.history_state = {}
+        self.history_state.setdefault("view", "list")
+        self.history_state.setdefault("level_filter", "All Levels")
+        self.history_state.setdefault("date_filter", "All Dates")
+        self.history_state.setdefault("sort_by", "Newest First")
+        self.history_state.setdefault("search_query", "")
+        self.history_state.setdefault("deep_search_matches", {})
+        if not hasattr(self, '_history_content_cache'):
+            self._history_content_cache = {}
+        if not hasattr(self, '_search_debounce_timer'):
+            self._search_debounce_timer = None
+
         self._render_history_menu()
         
         if self.history_menu_frame is not None:
@@ -1098,29 +1230,28 @@ class ChatbotApp:
             self.btn_active.config(bg=THEME["button_bg_color"], fg="#aaaaaa")
 
     def _render_history_menu(self):
-        """Hierarchical history menu renderer (Refactor 2026)."""
+        """Unified History Archive Renderer with Dropdowns, Date Grouping, and Deep Search."""
         if self.history_menu_frame is None: return
         
         # Clear frame
         for child in self.history_menu_frame.winfo_children():
             child.destroy()
             
-        view = self.history_state["view"]
+        view = self.history_state.get("view", "list")
         
-        # Navigation Bar
+        # Navigation / Control Bar
         nav_bar = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
-        nav_bar.pack(side=tk.TOP, fill=tk.X, pady=5)
+        nav_bar.pack(side=tk.TOP, fill=tk.X, pady=(2, 4))
         
-        if view != "levels":
-            back_btn = tk.Button(nav_bar, text="⬅ Back", command=self._back_history, 
+        if view == "content":
+            back_btn = tk.Button(nav_bar, text="⬅ Back to Archives", command=self._back_history, 
                                 bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT,
-                                font=("Segoe UI", 10, "bold"), cursor="hand2")
+                                font=("Segoe UI", 9, "bold"), cursor="hand2")
             back_btn.pack(side=tk.LEFT, padx=5)
             
-        title = "History Archive"
-        if view == "models": title = f"Archive: Level {self.history_state['level']}"
-        elif view == "content": 
             title = f"Archive: {self.history_state.get('current_display_name', 'Chat Log')}"
+            tk.Label(nav_bar, text=title, font=self.fonts["italic"], bg=THEME["bg_color"], 
+                     fg=THEME["electric_blue"]).pack(side=tk.LEFT, padx=10)
             
             # Action Frame for right-side buttons
             act_frame = tk.Frame(nav_bar, bg=THEME["bg_color"])
@@ -1137,85 +1268,380 @@ class ChatbotApp:
             tk.Button(act_frame, text="🗑️ Delete", command=self._delete_current_archive, 
                       bg="#4a0000", fg="white", relief=tk.FLAT, font=("Segoe UI", 9, "bold"),
                       cursor="hand2").pack(side=tk.LEFT, padx=5)
-        
-        tk.Label(nav_bar, text=title, font=self.fonts["italic"], bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT, padx=10)
 
-        # Content Area
-        content_frame = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
-        content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-        if view == "levels":
-            # Show Unlocked Levels
-            levels = [1, 2, 3, 4, 5]
-            if self.max_persona_level >= 6: levels.append(6)
-            live_path = self.model_paths.get("Live", "")
-            is_live_diffusion = "diffusion" in live_path.lower() if live_path else False
-            if (self.live_agent_process and self.live_agent_process.poll() is None) or is_live_diffusion:
-                levels.append(7)
-                
-            for lvl in levels:
-                btn = tk.Button(content_frame, text=f"Level {lvl}", height=2,
-                               command=lambda l=lvl: self._select_history_level(l),
-                               bg=THEME["widget_bg_color"], fg=THEME["fg_color"], relief=tk.RAISED,
-                               font=self.fonts["main"], cursor="hand2")
-                btn.pack(fill=tk.X, padx=40, pady=8)
-                
-        elif view == "models":
-            lvl = self.history_state["level"]
-            history_dir = self.dirs["History"]
-            try:
-                files = [f for f in os.listdir(history_dir) if f.endswith(f"_lvl{lvl}.history.jsonz")]
-                files.sort(key=lambda f: os.path.getmtime(os.path.join(history_dir, f)), reverse=True)
-            except: files = []
-            
-            if not files:
-                tk.Label(content_frame, text="No history files found for this level.", 
-                         bg=THEME["bg_color"], fg="#888888", font=self.fonts["italic"]).pack(pady=40)
-            else:
-                # Scrollable list for models if there are many
-                canvas = tk.Canvas(content_frame, bg=THEME["bg_color"], highlightthickness=0)
-                scrollbar = tk.Scrollbar(content_frame, orient="vertical", command=canvas.yview)
-                scroll_frame = tk.Frame(canvas, bg=THEME["bg_color"])
-                
-                scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-                chat_frame_width = self.history_menu_frame.winfo_width()-20
-                canvas.create_window((0, 0), window=scroll_frame, anchor="nw", width=chat_frame_width)
-                canvas.configure(yscrollcommand=scrollbar.set)
-                
-                canvas.pack(side="left", fill="both", expand=True)
-                scrollbar.pack(side="right", fill="y")
-
-                for f in files:
-                    display_name = f.replace(f"_lvl{lvl}.history.jsonz", "").replace("-", " ").replace("_", " ")
-                    btn = tk.Button(scroll_frame, text=display_name, height=2, anchor="w", padx=15,
-                                   command=lambda path=os.path.join(history_dir, f): self._load_selected_history(path),
-                                   bg=THEME["widget_bg_color"], fg=THEME["fg_color"], relief=tk.RAISED,
-                                   font=self.fonts["small"], cursor="hand2")
-                    btn.pack(fill=tk.X, padx=10, pady=4)
-                    
-        elif view == "content":
-            # Show the text view
+            # Content Area for Text View
+            content_frame = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
+            content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             self.past_history_view.pack(in_=content_frame, side=tk.TOP, fill="both", expand=True)
+            return
 
-    def _select_history_level(self, lvl):
-        self.history_state["view"] = "models"
-        self.history_state["level"] = lvl
+        # --- LIST VIEW: UNIFIED FILTER & SEARCH CONTROLS ---
+        tk.Label(nav_bar, text="📁 History Archive", font=("Segoe UI", 10, "bold"), 
+                 bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT, padx=6)
+        
+        # Search Entry Bar (Enter to search, Search button, No auto-search)
+        search_frame = tk.Frame(nav_bar, bg=THEME["widget_bg_color"], bd=1, relief=tk.SUNKEN)
+        search_frame.pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        
+        search_var = tk.StringVar(value=self.history_state.get("search_query", ""))
+        search_entry = tk.Entry(search_frame, textvariable=search_var, bg=THEME["widget_bg_color"], 
+                                fg=THEME["fg_color"], insertbackground=THEME["fg_color"], 
+                                relief=tk.FLAT, font=self.fonts["small"])
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4, pady=2)
+        
+        def _execute_search(event=None):
+            q = search_var.get().strip()
+            self.history_state["search_query"] = q
+            self._trigger_history_search(q)
+
+        # Bind Enter key to search
+        search_entry.bind("<Return>", _execute_search)
+        search_entry.bind("<KP_Enter>", _execute_search)
+
+        # Dedicated Search Button
+        btn_search = tk.Button(search_frame, text="🔍 Search", command=_execute_search,
+                               bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT,
+                               font=("Segoe UI", 8, "bold"), cursor="hand2", padx=6, pady=1)
+        btn_search.pack(side=tk.RIGHT, padx=(2, 2))
+        
+        if search_var.get():
+            btn_clear_search = tk.Button(search_frame, text="✕", command=lambda: self._clear_history_search(search_var),
+                                         bg=THEME["widget_bg_color"], fg="#aaaaaa", relief=tk.FLAT, 
+                                         font=("Segoe UI", 8), cursor="hand2", bd=0)
+            btn_clear_search.pack(side=tk.RIGHT, padx=2)
+
+        # Dropdowns Frame
+        filter_frame = tk.Frame(nav_bar, bg=THEME["bg_color"])
+        filter_frame.pack(side=tk.RIGHT, padx=4)
+
+        # 1. Level Filter Dropdown
+        level_options = ["All Levels", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7"]
+        lvl_var = tk.StringVar(value=self.history_state.get("level_filter", "All Levels"))
+        lvl_combo = ttk.Combobox(filter_frame, textvariable=lvl_var, values=level_options, 
+                                 state="readonly", width=11, font=("Segoe UI", 9))
+        lvl_combo.pack(side=tk.LEFT, padx=3)
+        lvl_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("level_filter", lvl_var.get()))
+
+        # 2. Date Separator & Filter Dropdown
+        date_options = ["All Dates", "Today", "Yesterday", "Past 7 Days", "Past 30 Days", "Older"]
+        date_var = tk.StringVar(value=self.history_state.get("date_filter", "All Dates"))
+        date_combo = ttk.Combobox(filter_frame, textvariable=date_var, values=date_options, 
+                                  state="readonly", width=11, font=("Segoe UI", 9))
+        date_combo.pack(side=tk.LEFT, padx=3)
+        date_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("date_filter", date_var.get()))
+
+        # 3. Sort Dropdown
+        sort_options = ["Newest First", "Oldest First", "Name (A-Z)", "Name (Z-A)", "Size (Largest)"]
+        sort_var = tk.StringVar(value=self.history_state.get("sort_by", "Newest First"))
+        sort_combo = ttk.Combobox(filter_frame, textvariable=sort_var, values=sort_options, 
+                                  state="readonly", width=12, font=("Segoe UI", 9))
+        sort_combo.pack(side=tk.LEFT, padx=3)
+        sort_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("sort_by", sort_var.get()))
+
+        # Content Area: Scrollable Canvas with Targeted Mousewheel Binding
+        content_frame = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
+        content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(2, 0))
+
+        canvas = tk.Canvas(content_frame, bg=THEME["bg_color"], highlightthickness=0)
+        scroll_frame = tk.Frame(canvas, bg=THEME["bg_color"])
+        self._history_canvas = canvas
+
+        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        
+        def _on_canvas_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(canvas_window, width=event.width)
+            
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        canvas.bind("<Configure>", _on_canvas_configure)
+        scroll_frame.bind("<Configure>", _on_frame_configure)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # TARGETED SCROLLING: strictly bind mousewheel when entering history widget, unbind on leave
+        self._bind_targeted_history_scroll(canvas, canvas)
+        self._bind_targeted_history_scroll(scroll_frame, canvas)
+
+        # Fetch, Filter, Sort, and Group History Entries
+        entries = self._get_all_history_entries()
+        q = self.history_state.get("search_query", "").lower()
+        lvl_filter = self.history_state.get("level_filter", "All Levels")
+        date_filter = self.history_state.get("date_filter", "All Dates")
+        sort_by = self.history_state.get("sort_by", "Newest First")
+        deep_matches = self.history_state.get("deep_search_matches", {})
+
+        filtered = []
+        for e in entries:
+            # Level Filter
+            if lvl_filter != "All Levels":
+                try:
+                    target_lvl = int(lvl_filter.replace("Level ", ""))
+                    if e.get("level") != target_lvl:
+                        continue
+                except: pass
+            
+            # Date Filter
+            if date_filter != "All Dates" and e.get("date_bucket") != date_filter:
+                continue
+
+            # Search Query (Title + Deep JSONZ match)
+            if q:
+                title_match = q in e.get("display_name", "").lower() or q in e.get("filename", "").lower()
+                deep_match = e.get("path") in deep_matches
+                if not (title_match or deep_match):
+                    continue
+                if deep_match:
+                    e["snippet"] = deep_matches[e["path"]]
+
+            filtered.append(e)
+
+        # Sort entries
+        if sort_by == "Newest First":
+            filtered.sort(key=lambda x: x.get("mtime", 0), reverse=True)
+        elif sort_by == "Oldest First":
+            filtered.sort(key=lambda x: x.get("mtime", 0))
+        elif sort_by == "Name (A-Z)":
+            filtered.sort(key=lambda x: x.get("display_name", "").lower())
+        elif sort_by == "Name (Z-A)":
+            filtered.sort(key=lambda x: x.get("display_name", "").lower(), reverse=True)
+        elif sort_by == "Size (Largest)":
+            filtered.sort(key=lambda x: x.get("size_bytes", 0), reverse=True)
+
+        if not filtered:
+            msg = "No history archives match current filters." if (q or lvl_filter != "All Levels" or date_filter != "All Dates") else "No history files found."
+            tk.Label(scroll_frame, text=msg, bg=THEME["bg_color"], fg="#888888", 
+                     font=self.fonts["italic"]).pack(pady=40)
+            return
+
+        # Render Entries with Date Bucket Separators if sorted by Date
+        current_bucket = None
+        is_date_sorted = sort_by in ["Newest First", "Oldest First"]
+
+        for item in filtered:
+            bucket = item.get("date_bucket", "Other")
+            if is_date_sorted and bucket != current_bucket:
+                current_bucket = bucket
+                sep_frame = tk.Frame(scroll_frame, bg=THEME["bg_color"])
+                sep_frame.pack(fill=tk.X, padx=12, pady=(10, 3))
+                tk.Label(sep_frame, text=f"── {bucket.upper()} ──", bg=THEME["bg_color"], 
+                         fg=THEME["electric_blue"], font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+                self._bind_targeted_history_scroll(sep_frame, canvas)
+
+            # Item Card Container
+            card = tk.Frame(scroll_frame, bg=THEME["widget_bg_color"], bd=1, relief=tk.RAISED, cursor="hand2")
+            card.pack(fill=tk.X, padx=10, pady=3)
+            self._bind_targeted_history_scroll(card, canvas)
+
+            # Header row inside card
+            hdr_row = tk.Frame(card, bg=THEME["widget_bg_color"])
+            hdr_row.pack(fill=tk.X, padx=8, pady=(5, 2))
+            self._bind_targeted_history_scroll(hdr_row, canvas)
+
+            # Level Badge
+            lvl_val = item.get("level")
+            lvl_text = f" L{lvl_val} " if lvl_val is not None else " ARCH "
+            lvl_bg = "#5c007a" if lvl_val in [6, 7] else ("#005a9e" if lvl_val == 5 else "#2a4d3a")
+            badge = tk.Label(hdr_row, text=lvl_text, bg=lvl_bg, fg="white", 
+                             font=("Segoe UI", 8, "bold"), padx=4, pady=1)
+            badge.pack(side=tk.LEFT, padx=(0, 8))
+            self._bind_targeted_history_scroll(badge, canvas)
+
+            # Display Name
+            name_lbl = tk.Label(hdr_row, text=item.get("display_name", "Chat Session"), 
+                                bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                                font=self.fonts["main"], anchor="w")
+            name_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            self._bind_targeted_history_scroll(name_lbl, canvas)
+
+            # Date & Size Subtitle
+            meta_str = f"{item.get('date_str', '')} • {item.get('size_str', '')}"
+            meta_lbl = tk.Label(hdr_row, text=meta_str, bg=THEME["widget_bg_color"], 
+                                fg="#888888", font=("Segoe UI", 8))
+            meta_lbl.pack(side=tk.RIGHT, padx=4)
+            self._bind_targeted_history_scroll(meta_lbl, canvas)
+
+            # Deep Search Snippet Preview (if matched)
+            if item.get("snippet"):
+                snip_frame = tk.Frame(card, bg="#1a2332", bd=0)
+                snip_frame.pack(fill=tk.X, padx=8, pady=(0, 6))
+                self._bind_targeted_history_scroll(snip_frame, canvas)
+                snip_lbl = tk.Label(snip_frame, text=f"💬 {item['snippet']}", bg="#1a2332", 
+                                    fg="#70a5ff", font=("Segoe UI", 8, "italic"), anchor="w", justify="left")
+                snip_lbl.pack(side=tk.LEFT, padx=6, pady=3, fill=tk.X, expand=True)
+                self._bind_targeted_history_scroll(snip_lbl, canvas)
+
+            # Click binding across entire card
+            card_path = item["path"]
+            card.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
+            name_lbl.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
+            badge.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
+            meta_lbl.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
+
+    def _bind_targeted_history_scroll(self, widget, canvas):
+        """Recursively binds targeted mousewheel scrolling so it never bleeds into outer widgets."""
+        def _on_enter(e):
+            canvas.bind_all("<MouseWheel>", lambda evt: canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units"))
+            canvas.bind_all("<Button-4>", lambda evt: canvas.yview_scroll(-1, "units"))
+            canvas.bind_all("<Button-5>", lambda evt: canvas.yview_scroll(1, "units"))
+
+        def _on_leave(e):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        widget.bind("<Enter>", _on_enter, add="+")
+        widget.bind("<Leave>", _on_leave, add="+")
+
+    def _get_all_history_entries(self):
+        """Scans History directory and parses metadata and date categories."""
+        import datetime
+        history_dir = self.dirs.get("History")
+        if not history_dir or not os.path.exists(history_dir):
+            return []
+
+        entries = []
+        now = datetime.datetime.now()
+        today = now.date()
+
+        try:
+            files = [f for f in os.listdir(history_dir) if f.endswith(".history.jsonz") or f.endswith(".history.encz")]
+        except Exception:
+            return []
+
+        for f in files:
+            full_path = os.path.join(history_dir, f)
+            try:
+                mtime = os.path.getmtime(full_path)
+                size_bytes = os.path.getsize(full_path)
+            except Exception:
+                mtime = 0
+                size_bytes = 0
+
+            # Level extraction via regex (supporting both .jsonz and .encz)
+            lvl = None
+            match = re.search(r"_lvl(\d+)\.history\.(?:jsonz|encz)$", f)
+            if match:
+                try: lvl = int(match.group(1))
+                except: lvl = None
+
+            # Clean Display Name
+            display_name = re.sub(r"_lvl\d+\.history\.(?:jsonz|encz)$", "", f).replace("-", " ").replace("_", " ")
+            if f.endswith(".encz"):
+                display_name = f"🔒 {display_name}"
+
+            # Date calculation & grouping bucket
+            dt = datetime.datetime.fromtimestamp(mtime)
+            file_date = dt.date()
+            diff_days = (today - file_date).days
+
+            if diff_days == 0:
+                bucket = "Today"
+            elif diff_days == 1:
+                bucket = "Yesterday"
+            elif diff_days <= 7:
+                bucket = "Past 7 Days"
+            elif diff_days <= 30:
+                bucket = "Past 30 Days"
+            else:
+                bucket = "Older"
+
+            # Formatted size
+            if size_bytes >= 1024 * 1024:
+                size_str = f"{size_bytes / (1024*1024):.1f} MB"
+            elif size_bytes >= 1024:
+                size_str = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_str = f"{size_bytes} B"
+
+            date_str = dt.strftime("%b %d, %Y • %I:%M %p")
+
+            entries.append({
+                "path": full_path,
+                "filename": f,
+                "display_name": display_name,
+                "level": lvl,
+                "mtime": mtime,
+                "datetime": dt,
+                "date_str": date_str,
+                "size_bytes": size_bytes,
+                "size_str": size_str,
+                "date_bucket": bucket
+            })
+
+        return entries
+
+    def _on_history_dropdown_change(self, key, value):
+        self.history_state[key] = value
         self._render_history_menu()
+
+    def _clear_history_search(self, search_var):
+        search_var.set("")
+        self.history_state["search_query"] = ""
+        self.history_state["deep_search_matches"] = {}
+        self._render_history_menu()
+
+    def _trigger_history_search(self, query):
+        """Triggers real-time title filter and launches background deep JSONZ/ENCZ full-text search."""
+        self._render_history_menu()
+        if len(query) >= 2:
+            threading.Thread(target=self._async_deep_history_search, args=(query,), daemon=True).start()
+
+    def _async_deep_history_search(self, query):
+        """Deep Full-Text Search inside raw .history.jsonz and .history.encz message contents."""
+        history_dir = self.dirs.get("History")
+        if not history_dir or not os.path.exists(history_dir): return
+
+        matches = {}
+        q_lower = query.lower()
+
+        try:
+            files = [os.path.join(history_dir, f) for f in os.listdir(history_dir) if f.endswith(".history.jsonz") or f.endswith(".history.encz")]
+        except: return
+
+        for path in files:
+            # Check cached content or decompress/decrypt via vault_manager
+            msgs = self._history_content_cache.get(path)
+            if msgs is None:
+                try:
+                    if hasattr(self, 'vault_manager'):
+                        msgs = self.vault_manager.read_history_messages(path)
+                    else:
+                        import zlib, json
+                        with open(path, "rb") as fp:
+                            msgs = json.loads(zlib.decompress(fp.read()).decode("utf-8"))
+                    self._history_content_cache[path] = msgs
+                except Exception:
+                    continue
+
+            # Search within dialogue contents
+            for m in msgs:
+                content = str(m.get("content", ""))
+                idx = content.lower().find(q_lower)
+                if idx != -1:
+                    start = max(0, idx - 30)
+                    end = min(len(content), idx + len(query) + 40)
+                    snippet = ("..." if start > 0 else "") + content[start:end].replace("\n", " ") + ("..." if end < len(content) else "")
+                    matches[path] = f"[{m.get('role', 'msg').capitalize()}]: {snippet}"
+                    break
+
+        self.root.after(0, self._on_deep_search_completed, query, matches)
+
+    def _on_deep_search_completed(self, query, matches):
+        if self.history_state.get("search_query", "").strip() == query.strip():
+            self.history_state["deep_search_matches"] = matches
+            self._render_history_menu()
 
     def _back_history(self):
-        if self.history_state["view"] == "content":
-            self.past_history_view.pack_forget()
-            self.history_state["view"] = "models"
-        elif self.history_state["view"] == "models":
-            self.history_state["view"] = "levels"
-            self.history_state["level"] = None
+        self.history_state["view"] = "list"
         self._render_history_menu()
 
-    def _load_selected_history(self, path):
-        # Extract display name from path
+    def _load_selected_history(self, path, search_query=None):
+        """Loads selected archive into content text view with search term highlighting and vault support."""
         fname = os.path.basename(path)
-        lvl_suffix = f"_lvl{self.history_state.get('level', '')}.history.jsonz"
-        display_name = fname.replace(lvl_suffix, "").replace("-", " ").replace("_", " ")
+        display_name = re.sub(r"_lvl\d+\.history\.(?:jsonz|encz)$", "", fname).replace("-", " ").replace("_", " ")
+        if fname.endswith(".encz"):
+            display_name = f"🔒 {display_name}"
         
         self.history_state["view"] = "content"
         self.history_state["current_path"] = path
@@ -1223,20 +1649,47 @@ class ChatbotApp:
         
         self.past_history_view.config(state='normal')
         self.past_history_view.delete('1.0', tk.END)
+        self.past_history_view.tag_config("search_match", background="#005a9e", foreground="white")
         
         try:
-            import zlib, json
-            with open(path, 'rb') as f: 
-                msgs = json.loads(zlib.decompress(f.read()).decode('utf-8'))
+            if path in self._history_content_cache:
+                msgs = self._history_content_cache[path]
+            else:
+                if hasattr(self, 'vault_manager'):
+                    msgs = self.vault_manager.read_history_messages(path)
+                else:
+                    import zlib, json
+                    with open(path, 'rb') as f: 
+                        msgs = json.loads(zlib.decompress(f.read()).decode('utf-8'))
+                self._history_content_cache[path] = msgs
             
             for m in msgs: 
-                who = "You" if m['role'] == 'user' else ("Cecilia" if (self.history_state.get('level') in [6, '6'] or m.get('role') == 'cecilia' or m.get('persona') == 'Cecilia') else self._get_persona_label())
+                who = "You" if m['role'] == 'user' else ("Cecilia" if (m.get('role') == 'cecilia' or m.get('persona') == 'Cecilia') else self._get_persona_label())
                 tag = "user" if m['role'] == 'user' else "ai"
                 content = self._clean_latex_artifacts(m['content'])
                 entry = f"{who}: {content}\n{'-'*50}\n\n"
                 self.past_history_view.insert(tk.END, entry, (tag,))
             
-            self.past_history_view.yview_moveto(0.0) # Start from top for long history
+            # Highlight search occurrences if searching
+            if search_query and len(search_query) >= 2:
+                start_pos = '1.0'
+                first_match = None
+                while True:
+                    start_pos = self.past_history_view.search(search_query, start_pos, stopindex=tk.END, nocase=True)
+                    if not start_pos: break
+                    if not first_match: first_match = start_pos
+                    end_pos = f"{start_pos}+{len(search_query)}c"
+                    self.past_history_view.tag_add("search_match", start_pos, end_pos)
+                    start_pos = end_pos
+                if first_match:
+                    self.past_history_view.see(first_match)
+                else:
+                    self.past_history_view.yview_moveto(0.0)
+            else:
+                self.past_history_view.yview_moveto(0.0)
+        except PermissionError:
+            self.past_history_view.insert(tk.END, "🔒 This history file is encrypted.\n\nPlease unlock the Serenity Vault to view this archive.")
+            self.show_vault_unlock_modal(on_unlock_callback=lambda: self._load_selected_history(path, search_query))
         except Exception as e:
             self.past_history_view.insert(tk.END, f"Error loading history: {e}")
             
@@ -1255,6 +1708,8 @@ class ChatbotApp:
         if confirm:
             try:
                 os.remove(path)
+                if hasattr(self, '_history_content_cache') and path in self._history_content_cache:
+                    del self._history_content_cache[path]
                 print(f"[SYSTEM] Deleted history file: {path}")
                 self._back_history()
             except Exception as e:
@@ -1264,24 +1719,21 @@ class ChatbotApp:
         """Toggle edit mode for the history view."""
         current_state = self.past_history_view.cget("state")
         if current_state == "disabled":
-            # Switch to EDIT mode
             self.past_history_view.config(state="normal")
-            self._render_history_menu() # Refresh buttons
+            self._render_history_menu()
         else:
-            # Switch to VIEW mode and SAVE
             self._save_history_edits()
             self.past_history_view.config(state="disabled")
-            self._render_history_menu() # Refresh buttons
+            self._render_history_menu()
 
     def _save_history_edits(self):
-        """Parse the edited text and save it back to the compressed history file."""
+        """Parse the edited text and save it back to the history file via VaultManager."""
         path = self.history_state.get("current_path")
         if not path or not os.path.exists(path): return
         
         raw_text = self.past_history_view.get("1.0", tk.END).strip()
         if not raw_text: return
         
-        # Split by the separator used in _load_selected_history
         separator = "-" * 50
         chunks = raw_text.split(f"\n{separator}\n\n")
         
@@ -1290,7 +1742,6 @@ class ChatbotApp:
             chunk = chunk.strip()
             if not chunk: continue
             
-            # Determine role
             role = "user"
             content = chunk
             if chunk.startswith("You: "):
@@ -1305,10 +1756,9 @@ class ChatbotApp:
             elif chunk.startswith("System: "):
                 role = "system"
                 content = chunk[8:]
-            elif ": " in chunk[:20]: # Try to guess if user changed the name
+            elif ": " in chunk[:20]:
                 parts = chunk.split(": ", 1)
                 content = parts[1]
-                # Default role mapping
                 if parts[0].lower() in ["you", "user"]: role = "user"
                 elif parts[0].lower() in ["serenity", "cecilia", "assistant", "ai"]: role = "assistant"
                 elif parts[0].lower() == "system": role = "system"
@@ -1318,10 +1768,15 @@ class ChatbotApp:
         if not new_msgs: return
         
         try:
-            import zlib, json
-            compressed_data = zlib.compress(json.dumps(new_msgs).encode('utf-8'))
-            with open(path, 'wb') as f:
-                f.write(compressed_data)
+            if hasattr(self, 'vault_manager'):
+                self.vault_manager.write_history_messages(path, new_msgs)
+            else:
+                import zlib, json
+                compressed_data = zlib.compress(json.dumps(new_msgs).encode('utf-8'))
+                with open(path, 'wb') as f:
+                    f.write(compressed_data)
+            if hasattr(self, '_history_content_cache'):
+                self._history_content_cache[path] = new_msgs
             print(f"[SYSTEM] Saved edits to history: {path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save edits: {e}")
@@ -2023,7 +2478,7 @@ class ChatbotApp:
                         fname = os.path.basename(path)
                         if ext in ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']:
                             budget = VisionHandler._determine_visual_budget(user_msg)
-                            b64 = VisionHandler.encode_image(path, budget=budget)
+                            b64 = VisionHandler.encode_image(path, budget=budget, query=user_msg)
                             if b64:
                                 content_list.append({"type": "text", "text": f"[Attached Image: {fname} ({path})]"})
                                 content_list.append({
@@ -4653,7 +5108,7 @@ class ChatbotApp:
                         
                         if ext in ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']:
                             # Image - Use determined budget
-                            b64 = VisionHandler.encode_image(video_path, budget=budget)
+                            b64 = VisionHandler.encode_image(video_path, budget=budget, query=user_msg)
                             if b64:
                                 prompt_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
                         elif ext in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
@@ -5435,15 +5890,25 @@ class ChatbotApp:
         self._log_and_display("All models offloaded. VRAM Cleared.")
 
     def get_history_path(self): 
-        return os.path.join(self.dirs["History"], f"{os.path.splitext(os.path.basename(self.model_path))[0]}_lvl{self.active_persona_level}.history.jsonz") if self.model_path else None
+        if not self.model_path: return None
+        base = f"{os.path.splitext(os.path.basename(self.model_path))[0]}_lvl{self.active_persona_level}.history"
+        p_enc = os.path.join(self.dirs["History"], f"{base}.encz")
+        p_jsonz = os.path.join(self.dirs["History"], f"{base}.jsonz")
+        if os.path.exists(p_enc): return p_enc
+        if os.path.exists(p_jsonz): return p_jsonz
+        ext = ".encz" if (hasattr(self, 'vault_manager') and self.vault_manager.is_lock_enabled()) else ".jsonz"
+        return os.path.join(self.dirs["History"], f"{base}{ext}")
 
     def save_history(self):
         if self.config.get("ghost_mode", False):
             return
         if not (path := self.get_history_path()) or not self.messages: return
         try:
-            with open(path, 'wb') as f:
-                f.write(zlib.compress(json.dumps(self.messages).encode('utf-8')))
+            if hasattr(self, 'vault_manager'):
+                self.vault_manager.write_history_messages(path, self.messages)
+            else:
+                with open(path, 'wb') as f:
+                    f.write(zlib.compress(json.dumps(self.messages).encode('utf-8')))
         except Exception as e:
             print(f"History save error: {e}", file=sys.stderr)
 
@@ -5509,8 +5974,11 @@ class ChatbotApp:
         
         if (path := self.get_history_path()) and os.path.exists(path):
             try:
-                with open(path, 'rb') as f: 
-                    self.messages = json.loads(zlib.decompress(f.read()).decode('utf-8'))
+                if hasattr(self, 'vault_manager'):
+                    self.messages = self.vault_manager.read_history_messages(path)
+                else:
+                    with open(path, 'rb') as f: 
+                        self.messages = json.loads(zlib.decompress(f.read()).decode('utf-8'))
                 
                 if self.messages and self.messages[-1].get('role') == 'user': 
                     self.messages.pop()
@@ -5527,6 +5995,8 @@ class ChatbotApp:
                 # Option 1: Keep past history in Archive tab, start active chat fresh
                 self.clear_chat_ui()
                 self._log_and_display("Archive Updated.")
+            except PermissionError:
+                self._log_and_display("Archive is encrypted. Unlock vault to access.")
             except: 
                 self._log_and_display("Archive load failed.")
 
@@ -6287,7 +6757,10 @@ if __name__ == "__main__":
         # Start checking
         root.after(50, check_libraries)
         root.mainloop()
-    except Exception as e: log_uncaught_exception(type(e), e, e.__traceback__)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        log_uncaught_exception(type(e), e, e.__traceback__)
     finally:
         if SYSTEM_MONITOR_LOADED and nvidia_ml: 
             try: nvidia_ml.nvmlShutdown()

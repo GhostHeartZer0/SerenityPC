@@ -327,13 +327,130 @@ class VisionHandler:
         elif not isinstance(query, str):
             query = str(query) if query is not None else ""
         q = query.lower()
-        if any(x in q for x in ["read", "ocr", "text", "document", "financial", "code", "card", "cards", "suit", "clubs", "spades", "hearts", "diamonds", "rank", "zoom", "crop"]):
+        if any(x in q for x in [
+            "read", "ocr", "text", "document", "financial", "code", 
+            "card", "cards", "suit", "clubs", "spades", "hearts", "diamonds", 
+            "rank", "zoom", "crop", "poker", "blackjack", "table", "flop", 
+            "turn", "river", "hand", "dealer", "6-heart", "9-diamond", "board"
+        ]):
             return 1120
         if any(x in q for x in ["detail", "small", "identify", "examine", "micro"]):
             return 560
         if any(x in q for x in ["summarize", "overview", "thumbnail", "quick"]):
             return 140
         return 280 # Standard APEX Balanced budget
+
+    @staticmethod
+    def crop_active_playing_area(image_input, padding=0.06):
+        """
+        [HEURISTIC CONTOUR CARD ROI DETECTION]
+        Isolates active cards and playing area from poker/card tables,
+        eliminating wasted background felt and maximizing symbol pixel density.
+        """
+        import cv2
+        import numpy as np
+
+        if isinstance(image_input, str):
+            img = cv2.imread(image_input)
+        elif isinstance(image_input, np.ndarray):
+            img = image_input
+        else:
+            return image_input
+
+        if img is None or img.size == 0:
+            return image_input
+
+        h, w = img.shape[:2]
+        if h < 50 or w < 50:
+            return img
+
+        # 1. Convert to grayscale & compute edge gradients
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        # 2. Canny edge detector + morphological closing to seal card perimeters
+        edges = cv2.Canny(blurred, 30, 150)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+
+        # 3. Find card candidate contours with hierarchy
+        contours, _ = cv2.findContours(closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        card_boxes = []
+        img_area = float(h * w)
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            # Cards generally occupy between 0.1% and 35% of total table area
+            if area < (img_area * 0.001) or area > (img_area * 0.40):
+                continue
+
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            aspect = float(cw) / float(ch) if ch > 0 else 0
+
+            # Standard card aspect ratio is ~1.4 (portrait ~0.55-0.90, landscape ~1.15-1.75)
+            is_card_aspect = (0.55 <= aspect <= 0.90) or (1.15 <= aspect <= 1.75)
+            # Also allow square-ish tilted cards or small clusters
+            is_card_cluster = (0.45 <= aspect <= 2.2) and (area >= img_area * 0.002)
+
+            if is_card_aspect or is_card_cluster:
+                card_boxes.append((x, y, x + cw, y + ch))
+
+        if not card_boxes:
+            # No clear card contours isolated; return original image safely
+            return img
+
+        # 4. Compute bounding envelope of all detected card regions
+        min_x = min(box[0] for box in card_boxes)
+        min_y = min(box[1] for box in card_boxes)
+        max_x = max(box[2] for box in card_boxes)
+        max_y = max(box[3] for box in card_boxes)
+
+        # 5. Apply safety padding margin around playing area
+        pad_x = int((max_x - min_x) * padding)
+        pad_y = int((max_y - min_y) * padding)
+
+        crop_x1 = max(0, min_x - pad_x)
+        crop_y1 = max(0, min_y - pad_y)
+        crop_x2 = min(w, max_x + pad_x)
+        crop_y2 = min(h, max_y + pad_y)
+
+        # Ensure cropped region has meaningful dimension
+        if (crop_x2 - crop_x1) >= 40 and (crop_y2 - crop_y1) >= 40:
+            cropped = img[crop_y1:crop_y2, crop_x1:crop_x2]
+            print(f"[APEX] Card Playing Area Auto-Cropped: {w}x{h} -> {cropped.shape[1]}x{cropped.shape[0]} (Envelope: ({crop_x1},{crop_y1})-({crop_x2},{crop_y2}))")
+            return cropped
+
+        return img
+
+    @staticmethod
+    def enhance_symbol_clarity(img_np):
+        """
+        [SYMBOL PIXEL DENSITY & EDGE CLARITY]
+        Applies CLAHE on L-channel in LAB space + high-frequency unsharp masking
+        to make 6 vs 9 numerals and Heart vs Diamond suit symbols sharply distinct.
+        """
+        import cv2
+        import numpy as np
+
+        if img_np is None or img_np.size == 0:
+            return img_np
+
+        try:
+            # 1. LAB color space CLAHE for local contrast on suit & rank boundaries
+            lab = cv2.cvtColor(img_np, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l_enhanced = clahe.apply(l)
+            lab_enhanced = cv2.merge((l_enhanced, a, b))
+            bgr_contrast = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+
+            # 2. Unsharp masking to crisp suit edges and number serifs
+            gaussian = cv2.GaussianBlur(bgr_contrast, (0, 0), 2.0)
+            sharpened = cv2.addWeighted(bgr_contrast, 1.35, gaussian, -0.35, 0)
+            return sharpened
+        except Exception as e:
+            print(f"[APEX] Symbol enhancement non-fatal fallback: {e}")
+            return img_np
 
     @staticmethod
     def prepare_vision_query(user_query, is_deep_cook=False, is_scout=False):
@@ -355,12 +472,28 @@ class VisionHandler:
             return f"[VISUAL_BUDGET: {budget}]\n{q_text}", budget
 
     @staticmethod
-    def encode_image(image_path, budget=280):
-        """Encodes image with scaling optimized for the target token budget."""
+    def encode_image(image_path, budget=280, auto_crop_cards=True, query=None):
+        """Encodes image with scaling, card contour auto-crop, and symbol clarity optimization."""
         import cv2, base64
         import os
         img = cv2.imread(image_path)
         if img is None: return None
+
+        # Check if query or budget dictates card crop & symbol enhancement
+        is_card_target = (budget >= 1120)
+        if query:
+            is_card_target = is_card_target or any(k in str(query).lower() for k in [
+                "card", "cards", "suit", "hearts", "diamonds", "spades", "clubs", 
+                "rank", "poker", "blackjack", "table", "flop", "turn", "river", "hand"
+            ])
+
+        # 1. Auto-crop to active playing area if card target
+        if auto_crop_cards and is_card_target:
+            img = VisionHandler.crop_active_playing_area(img)
+
+        # 2. Enhance symbol clarity for card/OCR budgets
+        if is_card_target or budget >= 560:
+            img = VisionHandler.enhance_symbol_clarity(img)
         
         # Mapping budgets to target resolutions (Approximate for Gemma-4)
         budget_map = {
@@ -375,9 +508,16 @@ class VisionHandler:
         h, w = img.shape[:2]
         if max(h, w) > max_dim:
             scale = max_dim / max(h, w)
-            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            # Use Lanczos-4 interpolation for crisp symbol and edge preservation
+            interp = cv2.INTER_LANCZOS4 if is_card_target else cv2.INTER_AREA
+            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=interp)
 
-        _, buffer = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        # Encode with quality 98 and 4:4:4 sampling factor to eliminate red chroma blur on hearts/diamonds
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 98]
+        if hasattr(cv2, 'IMWRITE_JPEG_SAMPLING_FACTOR'):
+            encode_params.extend([cv2.IMWRITE_JPEG_SAMPLING_FACTOR, getattr(cv2, 'IMWRITE_JPEG_SAMPLING_FACTOR_444', 0)])
+
+        _, buffer = cv2.imencode(".jpg", img, encode_params)
         return base64.b64encode(buffer).decode("utf-8")
 
     @staticmethod

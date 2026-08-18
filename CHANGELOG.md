@@ -5,8 +5,23 @@
 ### Workspace Hygiene & Cleanup
 - **Purged `desktop.ini` Files**: Recursively stripped all Windows OS `desktop.ini` configuration artifacts across the entire repository and vendor directories.
 
-- **Chat History Appending & Persistence Fix**:
-  - Restored `self.messages` turn appending (`user_msg` and `final_answer`) and `save_history()` directly inside `_finalize_message()` in main.py.
+- **History Archive Usability (TODO #6)**:
+  - Rebuilt the History Archive into a unified search and filter interface in `main.py`.
+  - Added Level filter dropdown (`All Levels`, `Level 1` through `Level 7`), Date filter dropdown (`All Dates`, `Today`, `Yesterday`, `Past 7 Days`, `Past 30 Days`, `Older`), and Sort dropdown (`Newest First`, `Oldest First`, `Name A-Z`, `Name Z-A`, `Size (Largest)`).
+  - Integrated targeted mousewheel scrolling bound strictly to the history canvas on mouse enter/leave, preventing scroll events from bleeding into outer chat/UI widgets.
+  - Implemented real-time archive title search alongside deep full-text background search of compressed `.history.jsonz` message bodies, displaying matched dialogue snippets and highlighting occurrences inside conversation view.
+- **Vision & Image Recognition Alignment (TODO #7)**:
+  - Implemented heuristic contour card ROI detection (`crop_active_playing_area`) in `System/vision_handler.py` to isolate card clusters and auto-crop active playing areas from poker/card tables, removing wasted background felt.
+  - Added symbol pixel density enhancement (`enhance_symbol_clarity`) utilizing LAB color space CLAHE and unsharp masking to ensure 6 vs 9 numerals and Heart vs Diamond suit serifs remain crisp.
+  - Configured high-fidelity Lanczos-4 scaling and 4:4:4 chroma JPEG encoding (`IMWRITE_JPEG_SAMPLING_FACTOR_444`) to eliminate red color bleed on card suits.
+- **App Lock & History Encryption (TODO #19)**:
+  - Built `VaultManager` in `System/vault_manager.py` with AES-256-GCM authenticated encryption and PBKDF2-HMAC-SHA256 (250,000 rounds) key derivation.
+  - Implemented transactional batch archive migration (`.history.jsonz` <-> `.history.encz`) backed by automatic timestamped backups and instant full rollback if any verification error occurs.
+  - Added loud ALL-CAPS permanent data loss security disclaimer warnings before master password configuration.
+  - Created modal startup lock screen (`show_vault_unlock_modal`) and background inactivity watchdog in `main.py` with dual minutes slider, typeable seconds entry, and quick presets (`Off`, `15s`, `30s`, `45s`, `5m`, `15m`, `30m`).
+  - Added full Security & Vault Settings UI panel in `System/settings_ui.py`.
+- **Pre-Start Splash Realignment (TODO #23)**:
+  - Re-aligned `LoadingScreen` geometry in `System/serenity_utils.py` to 360x380, constrained avatar thumbnail scaling bounds to 320x270, and raised splash notification text above canvas items to prevent the "Loading... please wait. This'll only take a minute or two." message from overlapping or being cut off by the avatar image.
 - **Dynamic Parameter Auto-Adjustment Engine (TODO #4)**:
   - Implemented intelligent, in-memory domain-specific sampling adjustments in System/modular_registry.py (`DynamicParamRegistry`) and main.py.
   - Automatically lowers temperature and increases `min_p` for Coding and Math tasks; adjusts parameters dynamically for Creative writing and Factual extractions.
