@@ -87,3 +87,4 @@ Thumbs.db
 System/config.json
 Docs/Test Prompts.txt
 System/rgb_state.json
+/setup.py

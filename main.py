@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox, filedialog, ttk
 import tkinter.font as tkFont
-import threading, traceback, sys, os, json, zlib, time, queue, subprocess, re, atexit, webbrowser, requests, io, faulthandler, struct, random
+import threading, traceback, sys, os, json, zlib, time, queue, subprocess, re, atexit, webbrowser, io, faulthandler, struct, random
 try:
     import numpy as np
 except ImportError:
@@ -28,7 +28,6 @@ def setup_localized_environment():
     os.environ["TRITON_CACHE_DIR"] = triton_cache
     os.environ["TORCH_EXTENSIONS_DIR"] = torch_ext_dir
     os.environ["PYTHONPYCACHEPREFIX"] = pycache_dir
-    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 setup_localized_environment()
 if TYPE_CHECKING:
@@ -321,17 +320,6 @@ class ChatbotApp:
         for d in self.dirs.values(): os.makedirs(d, exist_ok=True)
         
         self.turbo_vec = None
-        threading.Thread(target=self._init_turbovec, daemon=True).start()
-
-    def _init_turbovec(self):
-        try:
-            # We delay loading to not stall UI
-            self.turbo_vec = TurboVecIndex(self.dirs["History"])
-            print("[TURBOVEC] Background initialization complete.")
-        except ImportError as e:
-            print(f"[TURBOVEC] Optional module not installed (pip install turbovec sentence-transformers): {e}")
-        except Exception as e:
-            print(f"[TURBOVEC] Background init failed: {e}")
 
         # Start background polling        
         # Support user-preferred 'settings.json' in root or System/
@@ -568,6 +556,9 @@ class ChatbotApp:
 
         # Non-blocking, lazy query for RGB support
         self._check_rgb_support_async()
+
+        # Non-blocking, background initialization for TurboVec history indexing
+        threading.Thread(target=self._init_turbovec, daemon=True).start()
 
     def check_gpu_support(self):
         """Final verification of GPU capabilities."""
@@ -2441,7 +2432,7 @@ class ChatbotApp:
                             break
 
                 proj_path = adjacent_proj or self._find_projector_for_model(self.model_path)
-                if proj_path and os.path.exists(proj_path) and (has_active_multimedia or self.config.get("image_handling") == "native"):
+                if proj_path and os.path.exists(proj_path) and has_active_multimedia:
                     try:
                         from llama_cpp.llama_chat_format import Llava15ChatHandler
                         chat_handler = Llava15ChatHandler(clip_model_path=proj_path, verbose=True)
@@ -2523,6 +2514,7 @@ class ChatbotApp:
             use_flash = params.pop('flash_attn', True)
             
             # Resolve dynamic KV cache types from config/specs
+            # Resolve validated universal KV cache types
             import llama_cpp as lcpp
             cache_map = {
                 "f32": getattr(lcpp, "GGML_TYPE_F32", 0),
@@ -2530,26 +2522,21 @@ class ChatbotApp:
                 "fp16": getattr(lcpp, "GGML_TYPE_F16", 1),
                 "q8_0": getattr(lcpp, "GGML_TYPE_Q8_0", 8),
                 "q4_0": getattr(lcpp, "GGML_TYPE_Q4_0", 2),
-                "q4_1": getattr(lcpp, "GGML_TYPE_Q4_1", 3),
-                "q5_0": getattr(lcpp, "GGML_TYPE_Q5_0", 6),
-                "q5_1": getattr(lcpp, "GGML_TYPE_Q5_1", 7),
-                "q6_0": getattr(lcpp, "GGML_TYPE_Q6_K", 14),
-                "turbo3_tcq": getattr(lcpp, "GGML_TYPE_Q3_K", 11),
-                "tq3": getattr(lcpp, "GGML_TYPE_Q3_K", 11),
-                "turbo3": getattr(lcpp, "GGML_TYPE_Q3_K", 11),
-                "turbo2_tcq": getattr(lcpp, "GGML_TYPE_Q2_K", 10),
-                "tq2": getattr(lcpp, "GGML_TYPE_Q2_K", 10),
-                "turbo2": getattr(lcpp, "GGML_TYPE_Q2_K", 10),
-                "tq4": getattr(lcpp, "GGML_TYPE_Q4_K", 12),
-                "turbo4": getattr(lcpp, "GGML_TYPE_Q4_K", 12),
             }
             
-            # Retrieve independent K/V Cache selections from config, falling back to params or defaults
+            # Retrieve independent K/V Cache selections from config, strictly constrained to universally supported types
+            UNIVERSAL_KV = {"fp16", "f16", "q8_0", "q4_0", "f32"}
             k_fmt = self.config.get("k_cache_type", params.pop("cache_type_k", "q8_0")).lower()
-            v_fmt = self.config.get("v_cache_type", params.pop("cache_type_v", "q4_0")).lower()
+            v_fmt = self.config.get("v_cache_type", params.pop("cache_type_v", "q8_0")).lower()
+            if k_fmt not in UNIVERSAL_KV:
+                print(f"[APEX] Warning: Unsupported K cache format '{k_fmt}'. Falling back to 'q8_0'.")
+                k_fmt = "q8_0"
+            if v_fmt not in UNIVERSAL_KV:
+                print(f"[APEX] Warning: Unsupported V cache format '{v_fmt}'. Falling back to 'q8_0'.")
+                v_fmt = "q8_0"
             
             t_k = cache_map.get(k_fmt, getattr(lcpp, "GGML_TYPE_Q8_0", 8))
-            t_v = cache_map.get(v_fmt, getattr(lcpp, "GGML_TYPE_Q4_0", 2))
+            t_v = cache_map.get(v_fmt, getattr(lcpp, "GGML_TYPE_Q8_0", 8))
             
             is_kv_quantized = (t_k != getattr(lcpp, "GGML_TYPE_F16", 1)) or (t_v != getattr(lcpp, "GGML_TYPE_F16", 1))
             is_gemma_family = "gemma" in (self.model_path.lower() if self.model_path else "")
@@ -2592,21 +2579,35 @@ class ChatbotApp:
             # Speculative MTP Drafting Setup
             draft_model = None
             mtp_model_path = None
-            if self.config.get("speculative_drafting", True) and not target_tier.startswith("vision_") and not chat_handler:
+            if self.config.get("speculative_drafting", False) and not target_tier.startswith("vision_") and not chat_handler:
                 assistant_path = None
                 mtp_mapping = self.config.get("mtp_mapping", {})
                 
                 # 1. Check persistent MTP mapping first
+                norm_main = os.path.normcase(os.path.abspath(self.model_path)) if self.model_path else ""
                 if self.model_path in mtp_mapping and os.path.exists(mtp_mapping[self.model_path]):
-                    assistant_path = mtp_mapping[self.model_path]
+                    cand = mtp_mapping[self.model_path]
+                    if norm_main and os.path.normcase(os.path.abspath(cand)) != norm_main:
+                        assistant_path = cand
+                    else:
+                        del mtp_mapping[self.model_path]
+                        self.config["mtp_mapping"] = mtp_mapping
+                        if hasattr(self, 'save_config'):
+                            self.save_config()
                 else:
-                    # 2. Search for assistant model in same directory
+                    # 2. Search for assistant model in same directory (excluding main model itself)
                     if self.model_path:
                         model_dir = os.path.dirname(self.model_path)
                         if os.path.exists(model_dir):
                             for f in os.listdir(model_dir):
-                                if f.lower().endswith(".gguf") and any(k in f.lower() for k in ["assistant", "mtp"]):
-                                    assistant_path = os.path.join(model_dir, f)
+                                cand_path = os.path.join(model_dir, f)
+                                if (
+                                    f.lower().endswith(".gguf")
+                                    and norm_main
+                                    and os.path.normcase(os.path.abspath(cand_path)) != norm_main
+                                    and any(k in f.lower() for k in ["assistant", "mtp", "dflash", "drafter"])
+                                ):
+                                    assistant_path = cand_path
                                     break
                     
                     # 3. Drafter MTPicker (Registration Wizard)
@@ -2625,7 +2626,7 @@ class ChatbotApp:
                                     filetypes=[("GGUF Models", "*.gguf")],
                                     initialdir=os.path.dirname(self.model_path)
                                 )
-                                if selected_path:
+                                if selected_path and os.path.normcase(os.path.abspath(selected_path)) != norm_main:
                                     assistant_path = selected_path
                                     mtp_mapping[self.model_path] = assistant_path
                                     self.config["mtp_mapping"] = mtp_mapping
@@ -2634,19 +2635,22 @@ class ChatbotApp:
                         except Exception as gui_err:
                             print(f"[ENGINE] MTPicker GUI failed: {gui_err}")
                 
-                if assistant_path and os.path.exists(assistant_path):
-                    mtp_model_path = assistant_path
-                    print(f"[ENGINE] Speculative MTP assistant model mapped: {os.path.basename(assistant_path)}")
-                
-                # 4. Fallback to prompt lookup decoding if no assistant model is found
-                if mtp_model_path is None:
+                if assistant_path and os.path.exists(assistant_path) and os.path.normcase(os.path.abspath(assistant_path)) != norm_main:
                     try:
-                        from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
-                        pred_tokens = 8 if n_layers > 0 else 2
-                        draft_model = LlamaPromptLookupDecoding(num_pred_tokens=pred_tokens)
-                        print(f"[ENGINE] Speculative drafting enabled: LlamaPromptLookupDecoding(num_pred_tokens={pred_tokens})")
-                    except Exception as spec_err:
-                        print(f"[ENGINE] Failed to initialize prompt lookup speculative draft model: {spec_err}")
+                        from System.gguf_draft_model import GgufDraftModel
+                        draft_model = GgufDraftModel(assistant_path, n_gpu_layers=0, n_ctx=min(n_ctx, 4096))
+                        msg = f"[MTP] Speculative GGUF assistant model loaded: {os.path.basename(assistant_path)}"
+                        print(f"[ENGINE] {msg}")
+                        self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
+                        self.process_queue.put({"status": "log_update", "content": f"\n{msg}\n"})
+                    except Exception as draft_err:
+                        err_msg = f"[MTP] Failed to load GgufDraftModel ({draft_err}). Speculative drafting disabled."
+                        print(f"[ENGINE] {err_msg}")
+                        self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {err_msg}"})
+                        draft_model = None
+                else:
+                    # Pure MTP / companion model drafting only: No speculative prompt lookup decoding fallback
+                    draft_model = None
 
             is_diffusion = "diffusion" in self.model_path.lower()
             try:
@@ -2662,31 +2666,58 @@ class ChatbotApp:
                     )
                     print(f"[ENGINE] Diffusion model detected. Initializing DiffusionCLIWrapper.")
                 else:
-                    patch_gguf_architecture(self.model_path)
-                    model = Llama(
-                        model_path=self.model_path, 
-                        n_gpu_layers=n_layers,       # Dynamic HAO
-                    n_ctx=n_ctx,                 # Dynamic Context Window
-                    n_threads=HardwareProfile.get_optimal_threads(), # Dynamic physical/logical core allocation
-                    n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
-                    n_ubatch=512,                # Increased for Parallel Prefill performance on i7-12700KF
-                    n_keep=resolved_n_keep,      # FIXED: Preserves system prompt and visual structures in KV Cache
-                    n_seq_max=1,                 # Explicit single sequence for max memory savings
-                    chat_handler=chat_handler,
-                    chat_format=resolved_format, # FIXED: Prevents template collisions on Gemma-4 structures
-                    verbose=True, 
-                    use_mmap=True,               # i7 handles kernel mapping
-                    flash_attn=use_flash,        # Dynamic Flash Attention
-                    type_k=t_k, type_v=t_v,      # Dynamic KV Quantization
-                    offload_kqv=not no_kv_offload,
-                    logits_all=False,                            # DISABLED: Prevents n_ctx * vocab_size (98k x 262k) 96GB float32 OOM array allocation
-                    tensor_split=None,
-                    rpc_servers=None,
-                    override_tensors=override_tensors,
-                    draft_model=draft_model,      # Fallback Drafting
-                    mtp_model_path=mtp_model_path, # True MTP Drafting
-                    **params
-                )
+                    try:
+                        model = Llama(
+                            model_path=self.model_path, 
+                            n_gpu_layers=n_layers,       # Dynamic HAO
+                            n_ctx=n_ctx,                 # Dynamic Context Window
+                            n_threads=HardwareProfile.get_optimal_threads(), # Dynamic physical/logical core allocation
+                            n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
+                            n_ubatch=512,                # Increased for Parallel Prefill performance on i7-12700KF
+                            n_keep=resolved_n_keep,      # FIXED: Preserves system prompt and visual structures in KV Cache
+                            n_seq_max=1,                 # Explicit single sequence for max memory savings
+                            chat_handler=chat_handler,
+                            chat_format=resolved_format, # FIXED: Prevents template collisions on Gemma-4 structures
+                            verbose=True, 
+                            use_mmap=True,               # i7 handles kernel mapping
+                            flash_attn=use_flash,        # Dynamic Flash Attention
+                            type_k=t_k, type_v=t_v,      # Dynamic KV Quantization
+                            offload_kqv=not no_kv_offload,
+                            logits_all=False,                            # DISABLED: Prevents n_ctx * vocab_size (98k x 262k) 96GB float32 OOM array allocation
+                            tensor_split=None,
+                            rpc_servers=None,
+                            override_tensors=override_tensors,
+                            draft_model=draft_model,      # Speculative GgufDraftModel or PromptLookup
+                            **params
+                        )
+                    except Exception as init_err:
+                        if draft_model is not None:
+                            print(f"[ENGINE] Drafter initialization failed ({init_err}). Retrying without draft model...")
+                            model = Llama(
+                                model_path=self.model_path, 
+                                n_gpu_layers=n_layers,
+                                n_ctx=n_ctx,
+                                n_threads=HardwareProfile.get_optimal_threads(),
+                                n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
+                                n_ubatch=512,
+                                n_keep=resolved_n_keep,
+                                n_seq_max=1,
+                                chat_handler=chat_handler,
+                                chat_format=resolved_format,
+                                verbose=True, 
+                                use_mmap=True,
+                                flash_attn=use_flash,
+                                type_k=t_k, type_v=t_v,
+                                offload_kqv=not no_kv_offload,
+                                logits_all=False,
+                                tensor_split=None,
+                                rpc_servers=None,
+                                override_tensors=override_tensors,
+                                draft_model=None,
+                                **params
+                            )
+                        else:
+                            raise init_err
             except Exception as e:
                 err_msg = f"CRITICAL: Llama initialization failed: {e}"
                 self.process_queue.put({"status": "diag_log_update", "content": err_msg})
@@ -2711,7 +2742,7 @@ class ChatbotApp:
                     print(f"[APEX] VRAM Floor Check Failed: {e}")
 
             # --- GGUF KV Cache Benchmark ---
-            if not is_diffusion:
+            if not is_diffusion and self.config.get("benchmark_enabled", False):
                 try:
                     print(f"[BENCHMARK] Running GGUF KV Cache Benchmark...")
                     start_b = time.time()
@@ -2768,6 +2799,24 @@ class ChatbotApp:
                 except Exception as be:
                     print(f"[BENCHMARK] GGUF Benchmark failed: {be}")
 
+            # --- Tokenizer BOS Verification ---
+            try:
+                bos_id = model.token_bos() if hasattr(model, 'token_bos') else -1
+                eos_id = model.token_eos() if hasattr(model, 'token_eos') else -1
+                print(f"[ENGINE] Tokenizer BOS Verification: BOS ID={bos_id} (Valid: {bos_id != -1}), EOS ID={eos_id}")
+                self.process_queue.put({
+                    "status": "diag_log_update",
+                    "content": f"[ENGINE] Tokenizer BOS Verified: BOS ID={bos_id} (Valid: {bos_id != -1}) | EOS ID={eos_id}"
+                })
+            except Exception as tok_err:
+                print(f"[ENGINE] BOS Verification check: {tok_err}")
+
+            if draft_model is not None and assistant_path:
+                self.process_queue.put({
+                    "status": "diag_log_update",
+                    "content": f"[MTP] Speculative Decoding Active: Assistant={os.path.basename(assistant_path)}"
+                })
+
             if self.stop_process.is_set(): return
             self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
 
@@ -2796,6 +2845,11 @@ class ChatbotApp:
                         logits_all=False,            # DISABLED: Prevents n_ctx * vocab_size array allocation
                         tensor_split=None,
                     )
+                    try:
+                        bos_id = model.token_bos() if hasattr(model, 'token_bos') else -1
+                        eos_id = model.token_eos() if hasattr(model, 'token_eos') else -1
+                        print(f"[ENGINE] Tokenizer BOS Verification (Retry): BOS ID={bos_id} (Valid: {bos_id != -1}), EOS ID={eos_id}")
+                    except Exception: pass
                     if self.stop_process.is_set(): return
                     self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
                     return
@@ -2829,9 +2883,12 @@ class ChatbotApp:
                 )
                 sys_content += grounding_rule
 
-            is_gemma = "gemma" in self.model_path.lower()
-            has_chat_handler = (getattr(self.model, "chat_handler", None) is not None) or self._ensure_chat_handler()
+            is_gemma = "gemma" in (self.model_path or "").lower()
             has_multimodal_content = any(isinstance(m.get("content"), list) for m in temp_messages)
+            if has_multimodal_content:
+                self._ensure_chat_handler()
+            elif hasattr(self.model, "chat_handler") and self.model.chat_handler is not None:
+                self.model.chat_handler = None
             
             # Setup Inference Params
             params = self._get_inference_params(temp_messages)
@@ -2840,436 +2897,191 @@ class ChatbotApp:
                 if "<turn|>" not in params.get("stop", []):
                     params.setdefault("stop", []).append("<turn|>")
                             
-                sys_clean = sys_content.strip()
-                def official_q(s): return f"<|\"|>{s}<|\"|>"
+            sys_clean = sys_content.strip()
+            def official_q(s): return f"<|\"|>{s}<|\"|>"
 
-                # Gemma-4: Tool definitions injection (Template-Aligned)
-                tool_defs = self.tool_registry.get_gemma_declarations(self.active_persona_level)
-                tools = self.tool_registry.get_definitions(self.active_persona_level)
-                if tools:
-                    tool_defs += "\n" # Gemma-4 alignment safety
-                    sys_clean += f"\n[TOOL CALLING RULE]: If the user's request requires information you do not have (e.g. weather, news, file content), you MUST immediately output a tool call tag. DO NOT provide a final answer, summarize your plan, or explain why you are searching in the final response. EXECUTE it using this format: <|tool_call>call:tool_name{{arg1:{official_q('value1')}}}<tool_call|>"
-                    sys_clean += "\n[PERMISSION]: You are an autonomous agent. You have PERMISSION to execute any tool call immediately when needed. Do NOT ask for permission or wait for further instructions before calling a tool."
-                
-                # Level 3+ or Deep Cook need the thought channel constraint
-                is_diffusion = "diffusion" in self.model_path.lower()
-                if not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
-                    if is_gemma:
-                        sys_clean += (
-                            "\n[CRITICAL RESTRICTION]: Complete ALL internal analysis, planning, and tone-checks inside your thought channel before transitioning to the final response."
-                            " Keep thoughts extremely concise, direct, and structured."
-                        )
-                    else:
-                        sys_clean += (
-                            "\n[CRITICAL RESTRICTION]: You MUST begin your response by opening the thought channel. Complete ALL internal analysis, planning, and tone-checks inside that channel before closing it."
-                            "\nNote: The thought channel is already opened for you with '<think>'. Write your thoughts directly, and close the channel with '</think>' when transitioning to the final response. DO NOT output '</think>' early. Keep thoughts extremely concise, direct, and structured. Do not repeat instructions, constraints, or write conversational filler (e.g., 'Wait', 'Actually', 'Let me see') in your thoughts. Cut straight to analyzing the input and planning actions."
-                        )
-                elif self.active_persona_level == 2:
-                    sys_clean += "\n[SEARCH PROTOCOL]: If you need information, output a tool call IMMEDIATELY. Do not explain your reasoning unless the search fails."
-                
-                # Gemma-4: Enable logic mode via <|think|> at start of system prompt for high levels
-                thinking_tag = "<|think|>\n" if (self.active_persona_level >= 3 or self.state.get("deep_cook")) else ""
-                # Reconstruct sys_content for both the manual prompt builder and fallback blocks
-                sys_content = f"{thinking_tag}{sys_clean}\n{tool_defs}".strip()
+            # Programmatic Tool Calling (PTC) definitions injection (arXiv:2608.06370v1)
+            tools = self.tool_registry.get_definitions(self.active_persona_level)
+            if tools and self.active_persona_level >= 2:
+                tool_defs = self.tool_registry.get_python_stubs(self.active_persona_level)
+                sys_clean += f"\n[PROGRAMMATIC TOOL CALLING]: To retrieve live data or execute system actions, invoke tools via Python function calls (e.g. `web_search(query='...')`).\n{tool_defs}"
 
-            if is_gemma and not (has_multimodal_content and has_chat_handler):
-                prompt_str = f"<|turn>system\n{sys_content}\n<turn|>\n"
-
-                            
-                is_diffusion = "diffusion" in self.model_path.lower()
-                
-                # TriAttention KV Pruning
-                if is_diffusion:
-                     # Diffusion architectures allocate massive contiguous ubatches. Limit history strictly.
-                     processed_msgs = temp_messages[-6:]
-                elif self.kv_manager and TRI_ATTENTION_ENABLED:
-                     processed_msgs = self.kv_manager.enforce_kv_budget(temp_messages)
+            # Level 3+ or Deep Cook need the thought channel constraint
+            is_diffusion = "diffusion" in self.model_path.lower()
+            if not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
+                if is_gemma:
+                    sys_clean = f"<|think|>\n{sys_clean}"
                 else:
-                     processed_msgs = temp_messages[-12:]
-                            
-                for m in processed_msgs:
-                    role = "model" if m["role"] == "assistant" else m["role"]
-                    raw_content = m["content"]
-                    
-                    # MULTIMODAL SAFETY: If content is a list (vision/image messages),
-                    # extract only the text parts for the Gemma prompt string builder.
-                    if isinstance(raw_content, list):
-                        text_parts = []
-                        for part in raw_content:
-                            if isinstance(part, dict):
-                                if part.get("type") == "text":
-                                    text_parts.append(part.get("text", ""))
-                                elif part.get("type") == "image_url":
-                                    text_parts.append("[image]")  # Placeholder for prompt context
-                                elif part.get("type") == "input_audio":
-                                    text_parts.append("[audio]")
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        content = " ".join(text_parts).strip()
-                    else:
-                        content = str(raw_content).strip() if raw_content else ""
-                    
-                    # HF Template alignment: Strip previous thoughts from the context window (Gemma-4 Official Rule)
-                    if role == "model":
-                        content = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', content, flags=re.IGNORECASE)
-                        content = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', content, flags=re.IGNORECASE)
-                        content = re.sub(r'<\|think\|>.*?(?:<\/\|think\|>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
-                        content = re.sub(r'<thought(?:>|\b).*?(?:<\/thought>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
-                        content = content.strip()
-                    
-                    # Append ALL messages (user AND model) to the prompt
-                    prompt_str += f"<|turn>{role}\n{content}<turn|>\n"
-                
-                # Start the model's response turn
-                prompt_str += "<|turn>model\n"
-                if not is_gemma and not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
-                    prompt_str += "<think>\n"
+                    sys_clean += (
+                        "\n[CRITICAL RESTRICTION]: You MUST begin your response by opening the thought channel. Complete ALL internal analysis, planning, and tone-checks inside that channel before closing it."
+                        "\nNote: The thought channel is already opened for you with '<think>'. Write your thoughts directly, and close the channel with '</think>' when transitioning to the final response. DO NOT output '</think>' early. Keep thoughts extremely concise, direct, and structured. Do not repeat instructions, constraints, or write conversational filler (e.g., 'Wait', 'Actually', 'Let me see') in your thoughts. Cut straight to analyzing the input and planning actions."
+                    )
+            elif self.active_persona_level == 2:
+                sys_clean += "\n[SEARCH PROTOCOL]: If you need live information, invoke a search tool immediately."
+            
+            sys_content = sys_clean
 
-                            
-                status_text = "Analyzing logical momentum..." if self.active_persona_level >= 3 else "Direct Strike: Pre-computing..."
-                
-                # Wit-Layer: Batching Message
-                self.process_queue.put({"status": "thinking_status", "content": status_text})
-                
-                # APEX GIL-SAFETY: We use internal streaming even for "non-streaming" responses.
-                # This ensures the background thread yields to the UI thread between tokens.
-                full_resp = ""
-                history_len = len(prompt_str) - len(sys_clean) - len(tool_defs)
-                print(f"[INFERENCE] Prompt breakdown -> sys_clean: {len(sys_clean)}, tool_defs: {len(tool_defs)}, history/other: {history_len}")
-                print(f"[INFERENCE] Prefill phase starting. Prompt length: {len(prompt_str)} chars.")
-                gen_iterator = self.model(prompt_str, stream=True, echo=False, **params)
-                
-                for chunk in gen_iterator:
-                    if self.stop_process.is_set():
-                        break
-                    token_text = chunk["choices"][0]["text"]
-                    full_resp += token_text
-                    
-                    # Heartbeat for UI & Real-time streaming delivery
-                    self.process_queue.put({"status": "streaming", "content": token_text})
-                    time.sleep(0.001) 
-                    
-                    # Loop Mitigation: Check for infinite repetition loops
-                    if len(full_resp) > 200 and self._detect_repetition(full_resp):
-                        self.process_queue.put({"status": "diag_log_update", "content": "[RUNTIME] Repetition loop detected! Breaking inference stream to preserve sanity."})
-                        print("[RUNTIME] Repetition loop detected! Breaking inference stream.")
-                        break 
-                
-                # Re-format as a response object for usage/diag extraction below
-                response = {"choices": [{"text": full_resp, "finish_reason": "stop"}], "usage": {}}
-                
-                # --- DIAGNOSTICS TELEMETRY ---
-                diag_msg = f"--- GENERATION DIAGNOSTICS ---\n"
-                diag_msg += f"Finish Reason: {response['choices'][0].get('finish_reason', 'N/A')}\n"
-                usage = response.get('usage', {})
-                diag_msg += f"Tokens Used: {usage.get('completion_tokens', 'N/A')} (Total: {usage.get('total_tokens', 'N/A')})\n"
-                diag_msg += f"Raw Output Length: {len(full_resp)} characters\n"
-                
-                # Extract and list all structural tags found
-                tags = re.findall(r'<[^>]+>', full_resp)
-                if tags:
-                    diag_msg += f"Generated Tags: {', '.join(tags)}\n"
-                    
-                diag_msg += "------------------------------"
-                self.process_queue.put({"status": "diag_log_update", "content": diag_msg})
-                
-                # --- GEMMA-4 HARMONIZATION PATCH (Background) ---
-                # 1. Telemetry Extraction
-                match_deep = re.search(r'\[DEEPLOG:(.*?)\]', full_resp, re.IGNORECASE | re.DOTALL)
-                if match_deep:
-                    extracted_log = match_deep.group(1).strip()
-                    full_resp = re.sub(r'\[DEEPLOG:.*?\]', '', full_resp, flags=re.IGNORECASE | re.DOTALL).strip()
-                    log_path = os.path.join(self.dirs["Logs"], "subconscious_journal.txt")
+            # TriAttention KV Pruning
+            is_diffusion = "diffusion" in self.model_path.lower()
+            if is_diffusion:
+                # Diffusion architectures allocate massive contiguous ubatches. Limit history strictly.
+                processed_msgs = temp_messages[-6:]
+            elif self.kv_manager and TRI_ATTENTION_ENABLED:
+                processed_msgs = self.kv_manager.enforce_kv_budget(temp_messages)
+            else:
+                processed_msgs = temp_messages[-12:]
+                        
+            # Multi-turn thought pruning to avoid feeding previous thoughts back into history
+            cleaned_msgs = []
+            for m in processed_msgs:
+                role = "assistant" if m.get("role") in ("assistant", "model") else m.get("role")
+                content = m.get("content")
+                if role == "assistant" and isinstance(content, str):
+                    content = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', content, flags=re.IGNORECASE)
+                    content = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', content, flags=re.IGNORECASE)
+                    content = re.sub(r'<\|think\|>.*?(?:<\/\|think\|>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
+                    content = re.sub(r'<thought(?:>|\b).*?(?:<\/thought>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
+                    content = content.strip()
+                cleaned_msgs.append({"role": role, "content": content})
+            processed_msgs = cleaned_msgs
+
+            msgs = [{"role": "system", "content": sys_content}] + processed_msgs
+
+            # BOS & Tokenizer Verification Log
+            if hasattr(self.model, 'token_bos'):
+                bos_id = self.model.token_bos()
+                print(f"[INFERENCE] Native Jinja Chat: BOS verified (ID={bos_id})")
+
+            status_text = "Analyzing logical momentum..." if self.active_persona_level >= 3 else "Direct Strike: Pre-computing..."
+            self.process_queue.put({"status": "thinking_status", "content": status_text})
+            
+            # GIL-Safety: Internal Streaming via Native Embedded Jinja Template
+            full_resp = ""
+            gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
+            for chunk in gen_iterator:
+                if self.stop_process.is_set(): break
+                if "content" in chunk["choices"][0]["delta"]:
+                    txt = chunk["choices"][0]["delta"]["content"]
+                    full_resp += txt
+                    self.process_queue.put({"status": "streaming", "content": txt})
+                time.sleep(0.001) # Heartbeat for UI
+
+                # Loop Mitigation: Check for infinite repetition loops
+                if len(full_resp) > 200 and self._detect_repetition(full_resp):
+                    self.process_queue.put({"status": "diag_log_update", "content": "[RUNTIME] Repetition loop detected! Breaking inference stream to preserve sanity."})
+                    print("[RUNTIME] Repetition loop detected! Breaking inference stream.")
+                    break
+
+            think_log = ""
+            final_answer = full_resp.strip()
+            
+            # Telemetry Extraction (subconscious / prime chronicles)
+            match_deep = re.search(r'\[DEEPLOG:(.*?)\]', final_answer, flags=re.IGNORECASE | re.DOTALL)
+            if match_deep:
+                extracted_log = match_deep.group(1).strip()
+                final_answer = re.sub(r'\[DEEPLOG:.*?\]', '', final_answer, flags=re.IGNORECASE | re.DOTALL).strip()
+                log_path = os.path.join(self.dirs["Logs"], "subconscious_journal.txt")
+                try:
                     with open(log_path, "a", encoding="utf-8") as f:
                         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {extracted_log}\n")
+                except Exception: pass
 
-                match_prime = re.search(r'\[PRIME_MEMORY:(.*?)\]', full_resp, re.IGNORECASE | re.DOTALL)
-                if match_prime:
-                    extracted_prime = match_prime.group(1).strip()
-                    full_resp = re.sub(r'\[PRIME_MEMORY:.*?\]', '', full_resp, flags=re.IGNORECASE | re.DOTALL).strip()
-                    prime_path = os.path.join(self.dirs["System"], ".prime_chronicles.txt")
+            match_prime = re.search(r'\[PRIME_MEMORY:(.*?)\]', final_answer, flags=re.IGNORECASE | re.DOTALL)
+            if match_prime:
+                extracted_prime = match_prime.group(1).strip()
+                final_answer = re.sub(r'\[PRIME_MEMORY:.*?\]', '', final_answer, flags=re.IGNORECASE | re.DOTALL).strip()
+                prime_path = os.path.join(self.dirs["System"], ".prime_chronicles.txt")
+                try:
                     with open(prime_path, "a", encoding="utf-8") as f:
                         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {extracted_prime}\n")
+                except Exception: pass
 
-                # 2. Advanced Scout & Split (Gemma-4 Optimized)
-                closers = [
-                    r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
-                    r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
-                ]
-
-                all_splits = []
-                for tag_pattern in closers:
-                    # MISSION: Search the entire response to find ALL potential boundaries
-                    # (Removed the 15k limit to handle ultra-long Deep Cook reasoning)
-                    for m in re.finditer(tag_pattern, full_resp, re.IGNORECASE):
-                        all_splits.append(m.end())
-                
-                # Structural Fallback: If no explicit closer, check if model started with thought but stopped at turn closer
-                if not all_splits and ("<think>" in full_resp or "<|channel>thought" in full_resp):
-                    # Check for implicit end-of-thought at the very end of the string
-                    all_splits.append(len(full_resp))
-
-                all_splits.sort()
-                
-                best_split = -1
-                if all_splits:
-                    # MISSION: Find the most logical split point (Smart Splitter)
-                    # We want the split that leaves a non-empty final answer and is not followed by more thoughts.
-                    for split in all_splits:
-                        remaining = full_resp[split:].strip()
-                        # If there's another thought block starting after this closer, this isn't the final boundary.
-                        if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
-                            continue
-                        
-                        # We found a split that leaves a response, and no more thoughts follow.
-                        best_split = split
-                        break
-                    
-                    # Fallback to the absolute last split if no "clean" split was identified
-                    if best_split == -1:
-                        best_split = all_splits[-1]
-                
-                if best_split != -1:
-                    think_log = full_resp[:best_split].strip()
-                    final_answer = full_resp[best_split:].strip()
-                else:
-                    # --- APEX FIX: EMERGENCY SPLIT ---
-                    was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
-                    
-                    if was_thinking_expected:
-                        headers = r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Response|Final Verdict|Final Answer)[\s:]+'
-                        parts = re.split(headers, full_resp)
-                        if len(parts) > 1:
-                            think_log = parts[0].strip()
-                            final_answer = parts[-1].strip()
-                        else:
-                            # Attempt heuristic extraction
-                            think_log = self._extract_thinking_content(full_resp) 
-                            if think_log and len(think_log) < len(full_resp) * 0.9:
-                                # MISSION: Safely isolate the final answer even if multiple blocks were found
-                                # Find the end of the very last identified thought block in the raw response
-                                last_thought_end = 0
-                                # Search for ALL common block patterns, including open tags (ending at $)
-                                block_patterns = r'(?s)<think>.*?(?:<\/think>|$)|<thought>.*?(?:<\/thought>|$)|\[DRAFT\].*?(?:\[\/DRAFT\]|$)|<\|channel>thought.*?(?:<\/\|?channel\|?>|$)'
-                                for m in re.finditer(block_patterns, full_resp, re.IGNORECASE):
-                                    last_thought_end = max(last_thought_end, m.end())
-                                
-                                if last_thought_end > 0:
-                                    think_log = full_resp[:last_thought_end].strip()
-                                    final_answer = full_resp[last_thought_end:].strip()
-                                else:
-                                    # Fallback to standard replace
-                                    final_answer = full_resp.replace(think_log, "", 1).strip()
-                            else:
-                                # If extraction is ambiguous, treat the whole thing as thinking 
-                                # and trigger synthesis to get a clean answer.
-                                think_log = full_resp
-                                final_answer = ""
-                    else:
-                        think_log = ""
-                        final_answer = full_resp
-
-                # 3. Structural Cleaning (Enhanced for Qwen/Gemma-4)
-                structural_tags = [
-                    r'<\|?channel>(?:text|thought)?>?', r'<\/\|?channel\|?>', r'<channel\s*\|?>', r'<\/channel\s*\|?>',
-                    r'(?:<channel\s*\|?>|<\/channel\s*\|?>)+', r'<think>', r'<\/think>', r'<\|/>', r'<turn/>',
-                    r'<\|im_start|>(?:thought|assistant)?', r'<\|im_end|>', r'<\|endoftext|>'
-                ]
-
-                for tag in structural_tags:
-                    final_answer = re.sub(tag, '', final_answer, flags=re.IGNORECASE | re.DOTALL)
-                    think_log = re.sub(tag, '', think_log, flags=re.IGNORECASE | re.DOTALL)
-                
-                # 3b. SYNTHESIS FALLBACK (Hardened with Budget Recovery Mode)
-                clean_answer = final_answer.strip()
-                was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
-                finish_reason = response["choices"][0].get("finish_reason", "")
-                rec_mode = self.config.get("budget_recovery_mode", "wrapup")
-                
-                needs_synthesis = False
-                if rec_mode != "off":
-                    if was_thinking_expected and len(clean_answer) < 15 and len(think_log) > 50:
-                        needs_synthesis = True
-                    elif "length" in str(finish_reason) and was_thinking_expected and len(clean_answer) < 20:
-                        needs_synthesis = True
-                
-                if needs_synthesis and self.active_persona_level > 1:
-                    reasoning_source = think_log if think_log else full_resp
-                    if rec_mode == "wrapup":
-                        instr = "Wrap up your thoughts and provide the final answer immediately based on the reasoning above."
-                    elif rec_mode == "respond":
-                        instr = "Provide your final response now based on the reasoning above."
-                    elif rec_mode == "autocont":
-                        instr = "Continue your thought process and complete your output seamlessly."
-                    else:
-                        instr = "Synthesize a clear final response."
-                    
-                    if self.active_persona_level == 6:
-                        self.process_queue.put({"status": "thinking_status", "content": "Cecilia is gathering her thoughts..."})
-                        synthesized = self._perform_level6_synthesis(user_message, reasoning_source)
-                    else:
-                        self.process_queue.put({"status": "thinking_status", "content": "Synthesizing final response..."})
-                        synthesized = self._perform_final_synthesis(user_message, reasoning_source, prompt_override=instr)
-                    
-                    if synthesized:
-                        final_answer = synthesized.strip()
-                        for tag in structural_tags:
-                            final_answer = re.sub(tag, '', final_answer, flags=re.IGNORECASE | re.DOTALL)
-                    else:
-                        print("[SYNTHESIS] Pass failed or returned None; retaining original draft.")
-                
-                # 3c. TOOL LOOP INTEGRATION (Hardened for standard worker)
-                final_answer = self._run_tool_loop(final_answer, prompt_str, params)
-                
-                # 4. LaTeX Artifact Removal
-                final_answer = self._clean_latex_artifacts(final_answer.strip())
-                if not final_answer and full_resp:
-                    raw_fallback = full_resp.strip()
-                    for tag in structural_tags:
-                        raw_fallback = re.sub(tag, '', raw_fallback, flags=re.IGNORECASE | re.DOTALL)
-                    final_answer = raw_fallback.strip()
-                
-                # 5. Delivery
-                self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
-                print(f"[INFERENCE] Generation complete. Final response length: {len(final_answer)} chars.")
-                self.process_queue.put({
-                    "status": "session_finished",
-                    "user_msg": user_message,
-                    "think_log": think_log.strip(),
-                    "final_answer": final_answer.strip(),
-                    "is_error": False
-                })
-                return
+            # Advanced Scout & Split
+            closers = [
+                r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+                r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
+            ]
+            all_splits = []
+            for tag_pattern in closers:
+                for m in re.finditer(tag_pattern, final_answer, re.IGNORECASE):
+                    all_splits.append(m.end())
+            
+            if not all_splits and ("<think>" in final_answer or "<|channel>thought" in final_answer):
+                all_splits.append(len(final_answer))
+            
+            all_splits.sort()
+            best_split = -1
+            if all_splits:
+                for split in all_splits:
+                    remaining = final_answer[split:].strip()
+                    if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
+                        continue
+                    best_split = split
+                    break
+                if best_split == -1:
+                    best_split = all_splits[-1]
+            
+            if best_split != -1:
+                think_log = final_answer[:best_split].strip()
+                final_answer = final_answer[best_split:].strip()
             else:
-                if self.kv_manager and TRI_ATTENTION_ENABLED:
-                    processed_msgs = self.kv_manager.enforce_kv_budget(temp_messages)
-                else:
-                    processed_msgs = temp_messages[-12:]
-                
-                # Multi-turn thought pruning for Gemma models to avoid feeding thoughts back into history
-                if is_gemma:
-                    cleaned_msgs = []
-                    for m in processed_msgs:
-                        role = m.get("role")
-                        content = m.get("content")
-                        if role == "assistant" and isinstance(content, str):
-                            content = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', content, flags=re.IGNORECASE)
-                            content = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', content, flags=re.IGNORECASE)
-                            content = re.sub(r'<\|think\|>.*?(?:<\/\|think\|>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
-                            content = re.sub(r'<thought(?:>|\b).*?(?:<\/thought>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
-                            content = content.strip()
-                        cleaned_msgs.append({"role": role, "content": content})
-                    processed_msgs = cleaned_msgs
-
-                msgs = [{"role": "system", "content": sys_content}] + processed_msgs
-                self.process_queue.put({"status": "thinking_status", "content": "Almost there... batching the response."})
-                
-                # GIL-Safety: Internal Streaming
-                full_resp = ""
-                gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
-                for chunk in gen_iterator:
-                    if self.stop_process.is_set(): break
-                    if "content" in chunk["choices"][0]["delta"]:
-                        txt = chunk["choices"][0]["delta"]["content"]
-                        full_resp += txt
-                        self.process_queue.put({"status": "streaming", "content": txt})
-                    time.sleep(0.001) # Heartbeat for UI
-                
-                think_log = ""
-                final_answer = full_resp.strip()
-                
-                # If we are running a Gemma model with multimodal handler, perform the same robust thought isolation/splitting
-                if is_gemma:
-                    match_deep = re.search(r'\[DEEPLOG:(.*?)\]', final_answer, flags=re.IGNORECASE | re.DOTALL)
-                    if match_deep:
-                        extracted_log = match_deep.group(1).strip()
-                        final_answer = re.sub(r'\[DEEPLOG:.*?\]', '', final_answer, flags=re.IGNORECASE | re.DOTALL).strip()
-                        
-                    match_prime = re.search(r'\[PRIME_MEMORY:(.*?)\]', final_answer, flags=re.IGNORECASE | re.DOTALL)
-                    if match_prime:
-                        extracted_prime = match_prime.group(1).strip()
-                        final_answer = re.sub(r'\[PRIME_MEMORY:.*?\]', '', final_answer, flags=re.IGNORECASE | re.DOTALL).strip()
-                        prime_path = os.path.join(self.dirs["System"], ".prime_chronicles.txt")
-                        try:
-                            with open(prime_path, "a", encoding="utf-8") as f:
-                                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {extracted_prime}\n")
-                        except Exception: pass
-
-                    closers = [
-                        r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
-                        r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
-                    ]
-                    all_splits = []
-                    for tag_pattern in closers:
-                        for m in re.finditer(tag_pattern, final_answer, re.IGNORECASE):
-                            all_splits.append(m.end())
-                    
-                    if not all_splits and ("<think>" in final_answer or "<|channel>thought" in final_answer):
-                        all_splits.append(len(final_answer))
-                    
-                    all_splits.sort()
-                    best_split = -1
-                    if all_splits:
-                        for split in all_splits:
-                            remaining = final_answer[split:].strip()
-                            if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
-                                continue
-                            best_split = split
-                            break
-                        if best_split == -1:
-                            best_split = all_splits[-1]
-                    
-                    if best_split != -1:
-                        think_log = final_answer[:best_split].strip()
-                        final_answer = final_answer[best_split:].strip()
+                was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
+                if was_thinking_expected:
+                    headers = r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Response|Final Verdict|Final Answer)[\s:]+'
+                    parts = re.split(headers, final_answer)
+                    if len(parts) > 1:
+                        think_log = parts[0].strip()
+                        final_answer = parts[-1].strip()
                     else:
-                        was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
-                        if was_thinking_expected:
-                            headers = r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Response|Final Verdict|Final Answer)[\s:]+'
-                            parts = re.split(headers, final_answer)
-                            if len(parts) > 1:
-                                think_log = parts[0].strip()
-                                final_answer = parts[-1].strip()
+                        think_log = self._extract_thinking_content(final_answer)
+                        if think_log and len(think_log) < len(final_answer) * 0.9:
+                            last_thought_end = 0
+                            block_patterns = r'(?s)<think>.*?(?:<\/think>|$)|<thought>.*?(?:<\/thought>|$)|\[DRAFT\].*?(?:\[\/DRAFT\]|$)|<\|channel>thought.*?(?:<\/\|?channel\|?>|$)'
+                            for m in re.finditer(block_patterns, final_answer, re.IGNORECASE):
+                                last_thought_end = max(last_thought_end, m.end())
+                            if last_thought_end > 0:
+                                think_log = final_answer[:last_thought_end].strip()
+                                final_answer = final_answer[last_thought_end:].strip()
                             else:
-                                think_log = self._extract_thinking_content(final_answer)
-                                if think_log and len(think_log) < len(final_answer) * 0.9:
-                                    last_thought_end = 0
-                                    block_patterns = r'(?s)<think>.*?(?:<\/think>|$)|<thought>.*?(?:<\/thought>|$)|\[DRAFT\].*?(?:\[\/DRAFT\]|$)|<\|channel>thought.*?(?:<\/\|?channel\|?>|$)'
-                                    for m in re.finditer(block_patterns, final_answer, re.IGNORECASE):
-                                        last_thought_end = max(last_thought_end, m.end())
-                                    if last_thought_end > 0:
-                                        think_log = final_answer[:last_thought_end].strip()
-                                        final_answer = final_answer[last_thought_end:].strip()
-                                    else:
-                                        final_answer = final_answer.replace(think_log, "", 1).strip()
-                                else:
-                                    think_log = final_answer
-                                    final_answer = ""
-                    
-                    # Heuristic fallback synthesis if model got stuck
-                    was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
-                    if was_thinking_expected and not final_answer.strip() and len(think_log) > 200:
-                        self.process_queue.put({"status": "thinking_status", "content": "[PROCESS] Synthesizing Final Answer..."})
-                        synthesized = self._perform_final_synthesis(user_message, think_log)
-                        if synthesized:
-                            final_answer = synthesized.strip()
+                                final_answer = final_answer.replace(think_log, "", 1).strip()
+                        else:
+                            think_log = final_answer
+                            final_answer = ""
+            
+            # Heuristic fallback synthesis if model got stuck in thinking
+            was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
+            if was_thinking_expected and not final_answer.strip() and len(think_log) > 200:
+                self.process_queue.put({"status": "thinking_status", "content": "[PROCESS] Synthesizing Final Answer..."})
+                synthesized = self._perform_final_synthesis(user_message, think_log)
+                if synthesized:
+                    final_answer = synthesized.strip()
 
-                    # Strip wrapper tags
-                    think_log = re.sub(r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>', '', think_log).strip()
-                    final_answer = re.sub(r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>', '', final_answer).strip()
+            # Tool Execution Check in Standard Generation
+            if tools and self.active_persona_level >= 2:
+                has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\(.*?\)', final_answer, re.DOTALL | re.IGNORECASE)
+                has_tag_tool = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{', final_answer, re.DOTALL | re.IGNORECASE)
+                if has_py_tool or has_tag_tool:
+                    self.process_queue.put({"status": "thinking_status", "content": "Executing tool..."})
+                    final_answer = self._run_tool_loop(final_answer, msgs, params)
 
-                final_answer = self._clean_latex_artifacts(final_answer.strip())
-                if not final_answer and full_resp:
-                    final_answer = full_resp.strip()
-                
-                self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
-                self.process_queue.put({
-                    "status": "session_finished",
-                    "user_msg": user_message,
-                    "think_log": think_log.strip(),
-                    "final_answer": final_answer.strip(),
-                    "is_error": False
-                })
+            # Strip wrapper tags and residual tool markers
+            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>'
+            think_log = re.sub(tag_clean_pattern, '', think_log).strip()
+            final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+
+            final_answer = self._clean_latex_artifacts(final_answer.strip())
+            if not final_answer and full_resp:
+                final_answer = re.sub(tag_clean_pattern, '', full_resp).strip()
+            
+            self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
+            print(f"[INFERENCE] Generation complete. Final response length: {len(final_answer)} chars.")
+            self.process_queue.put({
+                "status": "session_finished",
+                "user_msg": user_message,
+                "think_log": think_log.strip(),
+                "final_answer": final_answer.strip(),
+                "is_error": False
+            })
         except Exception as e:
             traceback.print_exc()
             self.process_queue.put({"status": "error", "content": str(e)})
@@ -3309,25 +3121,11 @@ class ChatbotApp:
                     params["min_p"] = 0.02
                 
                 if is_gemma:
-                    for req_stop in ["<turn|>", "<|turn>", "<|file_separator|>", "<eos>"]:
-                        if req_stop not in params.get("stop", []):
-                            params.setdefault("stop", []).append(req_stop)
-                    
-                    # Gemma-4: Tool definitions injection for Deep Cook (Template-Aligned)
                     tool_defs = self.tool_registry.get_gemma_declarations(self.active_persona_level)
-                    sys_msg += (
-                        "\n[CRITICAL RESTRICTION]: You will begin in a reasoning block using '<think>'. You must complete ALL planning, tone adjustments, and technical notes INSIDE that block."
-                        "\nWhen you are all ready to generate the response, you MUST close the thought channel with '</think>', followed immediately by your polished final response. DO NOT output '</think>' early during thinking."
-                    )
-                    
-                    # FORCED THINKING MODALITY (Gemma-4 Official)
-                    # We inject <|think|> into system and <think> into model turn.
-                    prompt_str = f"<|turn>system\n{sys_msg}\n{tool_defs}<turn|>\n<|turn>user\nTask: {prompt}<turn|>\n<|turn>model\n<think>\n"
-                    stream = self.model(prompt_str, stream=True, echo=False, **params)
-                else:
-                    # Standard logic for non-Gemma models
-                    msgs = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
-                    stream = self.model.create_chat_completion(messages=msgs, stream=True, **params)
+                    sys_msg = f"{sys_msg}\n{tool_defs}".strip()
+                
+                msgs = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
+                stream = self.model.create_chat_completion(messages=msgs, stream=True, **params)
                 
                 if ctype:
                     self.process_queue.put({
@@ -3343,14 +3141,9 @@ class ChatbotApp:
                 tag_buffer = ""
                 for chunk in stream:
                     if self.stop_process.is_set(): raise InterruptedError()
-                    if is_gemma:
-                        ch = chunk.get('choices', [{}])[0]
-                        c = ch.get('text', "")
-                        if ch.get('finish_reason'): last_finish_reason = ch.get('finish_reason')
-                    else:
-                        ch = chunk.get('choices', [{}])[0]
-                        c = ch.get('delta', {}).get("content", "")
-                        if ch.get('finish_reason'): last_finish_reason = ch.get('finish_reason')
+                    ch = chunk.get('choices', [{}])[0]
+                    c = ch.get('delta', {}).get("content", "") or ch.get('text', "")
+                    if ch.get('finish_reason'): last_finish_reason = ch.get('finish_reason')
                     if c: 
                         result_text += c
                         tag_buffer += c
@@ -4431,66 +4224,87 @@ class ChatbotApp:
         if depth > 3:
             return f"{full_resp}\n\n[SYSTEM]: Tool recursion limit reached. Truncating response."
 
-        # Added support for Gemma-4 'action', 'execute_tool', 'executetool' tags and missing 'call:' prefixes
+    def _run_tool_loop(self, full_resp, prompt_str, params, depth=0):
+        """
+        Parses tool calls from model output (supporting Programmatic Tool Calling Python syntax
+        and legacy tags), executes them, and recursively generates the final answer.
+        Max depth 3 to prevent runaway inference.
+        """
+        if depth > 3:
+            return f"{full_resp}\n\n[SYSTEM]: Tool recursion limit reached. Truncating response."
+
+        call_name = None
+        args = {}
+
+        # 1. Programmatic Tool Calling (PTC) - Python syntax (e.g. web_search("..."), read_file(path="..."))
+        py_match = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\((.*?)\)(?:\s*```)?', full_resp, re.DOTALL | re.IGNORECASE)
+        # 2. Legacy / Tag-based Tool Calls
         call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
-        if not call_match:
+
+        if py_match:
+            call_name = py_match.group(1).strip().lower()
+            raw_args = py_match.group(2).strip()
+            if raw_args:
+                import ast
+                try:
+                    expr = ast.parse(f"{call_name}({raw_args})", mode="eval")
+                    if isinstance(expr.body, ast.Call):
+                        for kw in expr.body.keywords:
+                            args[kw.arg] = ast.literal_eval(kw.value)
+                        if expr.body.args:
+                            if call_name == "web_search": args["query"] = ast.literal_eval(expr.body.args[0])
+                            elif call_name == "read_file": args["path"] = ast.literal_eval(expr.body.args[0])
+                            elif call_name == "generate_image": args["prompt"] = ast.literal_eval(expr.body.args[0])
+                except Exception:
+                    clean_str = raw_args.strip('\'" ')
+                    if call_name == "web_search": args["query"] = clean_str
+                    elif call_name == "read_file": args["path"] = clean_str
+                    elif call_name == "generate_image": args["prompt"] = clean_str
+        elif call_match:
+            call_name = call_match.group(1).strip()
+            if call_name.lower() in ["readfile", "read_file"]:
+                call_name = "read_file"
+            args_raw = call_match.group(2).strip()
+            
+            clean_args = args_raw.replace('<|"|>', '"').replace('<|"', '"').replace('"|>', '"').strip()
+            if clean_args.startswith("{") and clean_args.endswith("}"):
+                clean_args = clean_args[1:-1].strip()
+                
+            is_json_format = not clean_args or clean_args.strip().startswith('"')
+            if is_json_format:
+                try:
+                    args = json.loads("{" + clean_args + "}")
+                except Exception: pass
+
+            if not args and clean_args:
+                try:
+                    kv_pattern = r'(?m)^\s*["\']?([\w_]+)["\']?\s*[:=]\s*(.*?)\s*(?:,|$)'
+                    matches = re.finditer(kv_pattern, clean_args)
+                    for m in matches:
+                        key = m.group(1).strip()
+                        val = m.group(2).strip().strip('"\'')
+                        if val: args[key] = val
+                    if not args:
+                        fixed = re.sub(r'(?<!["\'])(\b\w+\b)(?!["\'])\s*:', r'"\1":', clean_args)
+                        fixed = re.sub(r',\s*$', '', fixed.strip())
+                        args = json.loads("{" + fixed + "}")
+                except Exception:
+                    try:
+                        bare_val = re.sub(r'^.*?:\s*', '', clean_args).strip().strip('"\'')
+                        if bare_val:
+                            if call_name == "web_search": args["query"] = bare_val
+                            elif call_name == "read_file": args["path"] = bare_val
+                    except Exception: pass
+
+        if not call_name:
             return full_resp
 
-        call_name = call_match.group(1).strip()
-        if call_name.lower() in ["readfile", "read_file"]:
-            call_name = "read_file"
-        args_raw = call_match.group(2).strip()
-        
-        # Robust Argument Parsing (Template-Aware)
-        # MISSION: Handle Gemma-4 <|"|> quotes and unquoted JSON keys from reasoning models
-        clean_args = args_raw.replace('<|"|>', '"').replace('<|"', '"').replace('"|>', '"').strip()
-        if clean_args.startswith("{") and clean_args.endswith("}"):
-            clean_args = clean_args[1:-1].strip()
-            
-        args = {}
-        # Multi-stage JSON recovery
-        # Prevent VS Code debugger from halting on expected JSONDecodeErrors
-        is_json_format = not clean_args or clean_args.strip().startswith('"')
-        
-        if is_json_format:
-            try:
-                # Stage 1: Standard JSON (Fast path)
-                args = json.loads("{" + clean_args + "}")
-            except Exception:
-                pass
-
-        if not args and clean_args:
-            try:
-                # Stage 2: Key-Value Pair Extraction Fallback (Robust path)
-                # MISSION: Handle unquoted keys and unquoted string values from logic models
-                kv_pattern = r'(?m)^\s*["\']?([\w_]+)["\']?\s*[:=]\s*(.*?)\s*(?:,|$)'
-                matches = re.finditer(kv_pattern, clean_args)
-                for m in matches:
-                    key = m.group(1).strip()
-                    val = m.group(2).strip().strip('"\'')
-                    if val: args[key] = val
-                
-                if not args:
-                    # Stage 3: Quote unquoted keys (Traditional fallback)
-                    fixed = re.sub(r'(?<!["\'])(\b\w+\b)(?!["\'])\s*:', r'"\1":', clean_args)
-                    fixed = re.sub(r',\s*$', '', fixed.strip())
-                    args = json.loads("{" + fixed + "}")
-            except Exception:
-                try:
-                    # Stage 4: Bare value extraction (for single-arg tools)
-                    bare_val = re.sub(r'^.*?:\s*', '', clean_args).strip().strip('"\'')
-                    if bare_val:
-                        if call_name == "web_search": args["query"] = bare_val
-                        elif call_name == "read_file": args["path"] = bare_val
-                except Exception:
-                    pass # Absolute failure
-        
         # Inform UI
         self.process_queue.put({"status": "thinking_status", "content": f"Executing tool: {call_name}"})
         self.process_queue.put({"status": "tool_log_update", "content": f"\n[{time.strftime('%H:%M:%S')}] Executing: {call_name}\nArgs: {args}"})
         
         try:
-            # 1. ATTEMPT EXECUTION (TIGHT WRAP)
+            # 1. ATTEMPT EXECUTION
             try:
                 observation = self.tool_registry.execute(call_name, args)
             except Exception as e:
@@ -4499,33 +4313,28 @@ class ChatbotApp:
 
             self.process_queue.put({"status": "tool_log_update", "content": f"Result: \n{str(observation)[:200]}..."})
             
-            def oq(s): return f"<|\"|>{s}<|\"|>"
-            
-            # 2. CHAT TEMPLATE ALIGNMENT
+            # 2. CHAT SYNTHESIS
             clean_resp = full_resp
             clean_resp = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', clean_resp, flags=re.IGNORECASE)
             clean_resp = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', clean_resp, flags=re.IGNORECASE)
-            if "<think>" in clean_resp.lower() or "<|channel>thought" in clean_resp.lower():
-                clean_resp = re.sub(r'.*?(?=<ctrl42>|<\|tool_call>)', '', clean_resp, flags=re.IGNORECASE | re.DOTALL)
             
-            clean_resp = re.sub(r'^.*?<\|tool_call>', '<|tool_call>', clean_resp, flags=re.IGNORECASE | re.DOTALL)
-            clean_resp = re.sub(r'^.*?<ctrl42>', '<ctrl42>', clean_resp, flags=re.IGNORECASE | re.DOTALL)
-            
-            if not clean_resp.strip().endswith("<turn|>"):
-                clean_resp = clean_resp.strip() + "<turn|>\n"
-            
-            response_turn = f"<|turn>user\n<|tool_response>response:{call_name}{{value:{oq(observation)}}}<tool_response|><turn|>\n"
-            new_prompt = prompt_str + clean_resp + response_turn + "<|turn>model\n"
+            forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search / tool results below, provide a direct, helpful answer to the user's original query."
+            if isinstance(prompt_str, list):
+                new_prompt = list(prompt_str) + [
+                    {"role": "assistant", "content": f"Executed tool `{call_name}` with args: {json.dumps(args)}"},
+                    {"role": "user", "content": f"[TOOL RESULT ({call_name})]:\n{observation}\n\nDeliver the final response now based on these results."}
+                ]
+            else:
+                new_prompt = [
+                    {"role": "system", "content": forced_sys},
+                    {"role": "user", "content": f"Original Query Context:\n{prompt_str[-500:]}\n\nTool Results ({call_name}):\n{observation}\n\nDeliver the final response now."}
+                ]
             
             self.process_queue.put({"status": "thinking_status", "content": "Synthesizing tool results..."})
             new_text = self._run_blocking_inference(new_prompt, params)
             
-            # 3b. SYNTHESIS SAFETY CHECK (Prevent "0 response" issue)
             if not new_text or len(new_text.strip()) < 5:
-                # If synthesis failed or is empty, try a "forced" synthesis with a stricter prompt
-                forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search results below, provide a helpful answer."
-                forced_prompt = f"Original Query: {prompt_str[-500:]}\n\nTool Results: {observation}\n\nDeliver the final response now."
-                new_text = self._run_blocking_inference([{"role": "system", "content": forced_sys}, {"role": "user", "content": forced_prompt}], params)
+                new_text = f"Tool Result for `{call_name}`:\n{observation}"
 
             return self._run_tool_loop(new_text, new_prompt, params, depth=depth+1)
             
@@ -6020,8 +5829,7 @@ class ChatbotApp:
         self.root.destroy()
         
     def load_params(self, tier):
-        """Loads tier-specific inference parameters if available, otherwise falls back to system defaults."""
-        # Try tier-specific params first, then global params
+        """Loads tier-specific inference parameters, auto-populating params.json if missing."""
         params_files = [f"params_{tier}.json", "params.json"]
         loaded = False
         
@@ -6029,8 +5837,10 @@ class ChatbotApp:
             path = os.path.join(self.dirs["System"], p_file)
             if os.path.exists(path):
                 try: 
-                    with open(path) as f: 
-                        self.params = json.load(f)
+                    with open(path, "r", encoding="utf-8") as f: 
+                        data = json.load(f)
+                    if isinstance(data, dict) and data:
+                        self.params = data
                         print(f"[APEX] Loaded inference overrides from: {p_file}")
                         loaded = True
                         break
@@ -6038,8 +5848,32 @@ class ChatbotApp:
                     print(f"Warning: Failed to load {p_file}: {e}")
         
         if not loaded:
-            self.params = {}
-            print(f"[APEX] No inference overrides found for {tier}. Using engine defaults.")
+            stops = [s.strip() for s in self.stop_strings_config.get(tier, "").split(",") if s.strip()]
+            for st in ["<turn|>", "<|turn>", "<|end_of_turn|>", "<eos>", "<|im_end|>", "<|eot_id|>", "You:", "Serenity:"]:
+                if st not in stops:
+                    stops.append(st)
+            
+            default_params = {
+                "stop": stops,
+                "temperature": self.temp_config.get(tier, 0.8),
+                "min_p": self.min_p_config.get(tier, 0.05),
+                "repeat_penalty": self.repeat_penalty_config.get(tier, 1.0),
+                "presence_penalty": self.presence_penalty_config.get(tier, 0.0),
+                "frequency_penalty": self.frequency_penalty_config.get(tier, 0.0),
+                "top_k": self.top_k_config.get(tier, 64),
+                "top_p": self.top_p_config.get(tier, 0.95),
+                "dry_multiplier": 0.0,
+                "disable_fim_autoswap": True
+            }
+            default_path = os.path.join(self.dirs["System"], "params.json")
+            try:
+                with open(default_path, "w", encoding="utf-8") as f:
+                    json.dump(default_params, f, indent=2)
+                self.params = default_params
+                print(f"[APEX] Populated default params.json for tier: {tier}")
+            except Exception as e:
+                self.params = default_params
+                print(f"[APEX] Warning: Could not write params.json: {e}")
 
     def _fit_image_aspect(self, img, target_w=350, target_h=350):
         orig_w, orig_h = img.size
@@ -6254,7 +6088,7 @@ class ChatbotApp:
         if "auto_vram_offload" not in self.config:
             self.config["auto_vram_offload"] = False
         if "speculative_drafting" not in self.config:
-            self.config["speculative_drafting"] = True
+            self.config["speculative_drafting"] = False
         if "history_lookup_mode" not in self.config:
             self.config["history_lookup_mode"] = "targeted"
         if "k_cache_type" not in self.config:
@@ -6356,70 +6190,6 @@ class ChatbotApp:
         }
         with open(self.config_file, 'w') as f: json.dump(data, f, indent=4)
 
-    def _calculate_active_logit_bias(self, context_data):
-        """Analyzes semantically relevant historical memories to identify thematic keywords and build a dynamic logit_bias dict."""
-        if not hasattr(self, 'model') or not self.model:
-            return {}
-        
-        # 1. Extract the user's current query for vector search
-        current_query = ""
-        if isinstance(context_data, list):
-            # Look backwards for the most recent user message
-            for m in reversed(context_data):
-                if isinstance(m, dict) and m.get("role") == "user":
-                    content = m.get("content", "")
-                    if isinstance(content, list):
-                        # Handle multimodal content lists
-                        for part in content:
-                            if part.get("type") == "text":
-                                current_query += " " + part.get("text", "")
-                    elif isinstance(content, str):
-                        current_query = content
-                    break
-        elif isinstance(context_data, str):
-            current_query = context_data[-1000:]
-            
-        current_query = current_query.strip().lower()
-        if not current_query:
-            return {}
-
-        # 2. Semantic Memory Retrieval via TurboVec
-        text_corpus = ""
-        if getattr(self, 'turbo_vec', None):
-            try:
-                lookup_mode = self.config.get("history_lookup_mode", "targeted")
-                query_with_time = f"{current_query} {datetime.now().strftime('%Y-%m-%d %A')}"
-                memories = self.turbo_vec.search(
-                    query_with_time, 
-                    top_k=3, 
-                    active_model_path=self.model_path, 
-                    active_level=self.active_persona_level, 
-                    lookup_mode=lookup_mode
-                )
-                if memories:
-                    text_corpus = " ".join(memories).lower()
-            except Exception as e:
-                print(f"[TURBOVEC] Logit Bias search failed: {e}")
-                
-        # Fallback to the active query if no historical relevance is found
-        if not text_corpus:
-            text_corpus = current_query
-        
-        # 3. Extract words and filter stop words/short words
-        words = set([w for w in text_corpus.split() if len(w) > 4])
-        
-        logit_bias = {}
-        for w in words:
-            try:
-                # Use model.tokenize if available to extract token IDs to bias
-                tokens = self.model.tokenize(w.encode("utf-8"), add_bos=False)
-                for t in tokens:
-                    logit_bias[t] = 1.0  # slight bump
-            except Exception:
-                pass
-            
-        return logit_bias
-
     def _get_inference_params(self, temp_messages=None):
         """Builds the parameter dictionary for llama-cpp-python inference."""
         print(f"[INFERENCE] Retrieving parameters for tier: {self.current_model_tier}")
@@ -6436,7 +6206,7 @@ class ChatbotApp:
             "temperature": self.temp_config.get(self.current_model_tier, 1.0), # Gemma-4 Official
             "top_p": self.top_p_config.get(self.current_model_tier, 0.95),
             "min_p": self.min_p_config.get(self.current_model_tier, 0.05),
-            "repeat_penalty": self.repeat_penalty_config.get(self.current_model_tier, 1.0), # Gemma-4 recommendation
+            "repeat_penalty": self.repeat_penalty_config.get(self.current_model_tier, 1.15) if self.repeat_penalty_config.get(self.current_model_tier, 1.0) == 1.0 else self.repeat_penalty_config.get(self.current_model_tier, 1.15),
             "frequency_penalty": self.frequency_penalty_config.get(self.current_model_tier, 0.0),
             "presence_penalty": self.presence_penalty_config.get(self.current_model_tier, 0.0),
             "stop": stops,
@@ -6455,7 +6225,8 @@ class ChatbotApp:
             inf_params["max_tokens"] = max(256, calculated_max)
 
         
-        # Overlay with params.json values if loaded
+        # Live hot-reload and overlay with params.json values if present
+        self.load_params(self.current_model_tier)
         if hasattr(self, "params") and self.params:
             override_params = dict(self.params)
             
@@ -6476,12 +6247,6 @@ class ChatbotApp:
         }
         
         filtered_params = {k: v for k, v in inf_params.items() if k in supported_keys}
-        
-        # Support active logit bias tracking for context recursion
-        if temp_messages:
-            lb = self._calculate_active_logit_bias(temp_messages)
-            if lb:
-                filtered_params["logit_bias"] = lb
         
         dropped = set(inf_params.keys()) - set(filtered_params.keys())
         if dropped:
@@ -6689,7 +6454,7 @@ class ChatbotApp:
     def _get_history_usage_label(self):
         val = self.config.get("history_usage", "all")
         if val == "current_window":
-            return "📚 Hist: Session"
+            return "📚 Hist: Window"
         elif val == "off":
             return "📚 Hist: Off"
         return "📚 Hist: All"
@@ -6705,12 +6470,49 @@ class ChatbotApp:
     def toggle_history_usage(self):
         modes = ["all", "current_window", "off"]
         current = self.config.get("history_usage", "all")
+        if current not in modes:
+            current = "all"
         next_idx = (modes.index(current) + 1) % len(modes)
         next_mode = modes[next_idx]
         self.config["history_usage"] = next_mode
         self.save_config()
         self.history_usage_button.config(text=self._get_history_usage_label(), fg=self._get_history_usage_color())
-        self._log_and_display(f"History usage set to: {next_mode.upper()}")
+        label_disp = "CURRENT WINDOW" if next_mode == "current_window" else next_mode.upper()
+        self._log_and_display(f"History usage set to: {label_disp}")
+
+    def _init_turbovec(self):
+        try:
+            cfg = getattr(self, "config", {}) or {}
+            mode = cfg.get("turbovec_mode", "fallback")
+            self.turbo_vec = TurboVecIndex(self.dirs["History"], mode=mode)
+            if mode != "off":
+                lookup_mode = cfg.get("history_lookup_mode", "targeted")
+                model_p = getattr(self, "model_path", None)
+                lvl = getattr(self, "active_persona_level", 1)
+                self.turbo_vec.ingest_needed_files(model_p, lvl, lookup_mode)
+            print(f"[TURBOVEC] Background initialization complete (Mode: {mode.upper()}).")
+        except ImportError as e:
+            print(f"[TURBOVEC] Optional module not installed: {e}")
+        except Exception as e:
+            print(f"[TURBOVEC] Background init failed: {e}")
+
+    def soft_reload_turbovec(self):
+        """Soft-reloads the TurboVec subsystem without restarting or dropping models."""
+        cfg = getattr(self, "config", {}) or {}
+        mode = cfg.get("turbovec_mode", "fallback")
+        def _reload():
+            try:
+                print(f"[TURBOVEC] Soft reloading TurboVec subsystem (Target Mode: {mode.upper()})...")
+                self.turbo_vec = TurboVecIndex(self.dirs["History"], mode=mode)
+                if mode != "off":
+                    lookup_mode = cfg.get("history_lookup_mode", "targeted")
+                    model_p = getattr(self, "model_path", None)
+                    lvl = getattr(self, "active_persona_level", 1)
+                    self.turbo_vec.ingest_needed_files(model_p, lvl, lookup_mode)
+                print(f"[TURBOVEC] Soft reload complete.")
+            except Exception as e:
+                print(f"[TURBOVEC] Soft reload error: {e}")
+        threading.Thread(target=_reload, daemon=True).start()
 
 sys.excepthook = log_uncaught_exception
 
