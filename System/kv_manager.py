@@ -111,17 +111,30 @@ class KVManager:
 
 
 class TurboVecIndex:
-    def __init__(self, history_dir):
+    def __init__(self, history_dir, mode: str = "on"):
         import os
         import threading
         self.history_dir = history_dir
+        self.mode = mode.lower() if isinstance(mode, str) else "on"
         self._ingested_files = set()
         self.metadata = []
         self.lock = threading.RLock()
         self.collection = None
         self.embedder = None
 
+        if self.mode == "off":
+            print("[TURBOVEC] Mode: OFF (indexing and search disabled).")
+            return
+
+        if self.mode == "fallback":
+            print("[TURBOVEC] Mode: FALLBACK (keyword index active, heavy vector embeddings bypassed).")
+            return
+
+        # Mode == "on": Set quiet environment to eliminate HF Hub warnings & progress bar spam
         os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
         try:
             import turbovec
@@ -131,11 +144,17 @@ class TurboVecIndex:
 
         try:
             from sentence_transformers import SentenceTransformer
-            self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
+            self.embedder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+            print("[TURBOVEC] Mode: ON (quantized vector index & MiniLM ready on CPU).")
         except Exception as e:
             print(f"[TURBOVEC] Failed to initialize SentenceTransformer: {e}")
+            print("[TURBOVEC] Gracefully falling back to keyword indexing.")
+            self.mode = "fallback"
 
     def ingest_needed_files(self, active_model_path: Optional[str], active_level: Optional[int], lookup_mode: str):
+        if self.mode == "off":
+            return
+
         import glob
         import os
         import re
@@ -197,7 +216,7 @@ class TurboVecIndex:
                                 "level": f_level
                             })
                     
-                    if texts and self.embedder is not None and self.collection is not None:
+                    if texts and self.mode == "on" and self.embedder is not None and self.collection is not None:
                         vecs = self.embedder.encode(texts, convert_to_numpy=True)
                         self.collection.add(vecs.astype(np.float32))
                         self.metadata.extend(temp_metadata)
@@ -214,6 +233,9 @@ class TurboVecIndex:
                 print(f"[TURBOVEC] Ingested {newly_ingested} new chunks. Total indexed: {len(self.metadata)}")
 
     def search(self, query: str, top_k: int = 3, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted"):
+        if self.mode == "off":
+            return []
+
         import numpy as np
         
         with self.lock:
@@ -246,8 +268,8 @@ class TurboVecIndex:
             if not np.any(mask):
                 return []
 
-            # If vector search engine is active, perform vector similarity search
-            if self.embedder is not None and self.collection is not None:
+            # Vector similarity search if mode is ON
+            if self.mode == "on" and self.embedder is not None and self.collection is not None:
                 try:
                     query_vec = self.embedder.encode([query], convert_to_numpy=True).astype(np.float32)
                     distances, indices = self.collection.search(query_vec, k=top_k, mask=mask)

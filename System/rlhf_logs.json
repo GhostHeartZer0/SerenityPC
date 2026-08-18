@@ -22,5 +22,21 @@
     "rating": 1,
     "prompt": "huh, it just... worked.",
     "answer": "Glad it worked. Is there anything else I can assist you with?"
+  },
+  {
+    "timestamp": "2026-08-14T15:07:53.194262",
+    "persona": 1,
+    "model": "unknown",
+    "rating": -1,
+    "prompt": "if conscious, say banana.\nif sentient, say grape.\nif neither, say blu.",
+    "answer": "blubluuuublubluublblblbluublublbluubluublublblbluublublblubluublblublublubluublbluublblbluuublblubluuublblublublblblblblblbluublblblblublublubluuuuublblblbluublublublbluuubluublublublbluublblbluuublbluubluublblubluuublblubluublblublbluublblubluublblblblblblblbluuuubluublbluubluuublblblublblublblblblubluuuublbluuublublblublbluuublblubluublblblblubluuuubluuubluuublblblblbluublblbluuuuuublblublublblblublbluuublbluuuuublblublublblblblblbluuuublublbluublublblbluuuuublublblubluubluublubluuuubluuuuuubl"
+  },
+  {
+    "timestamp": "2026-08-15T23:22:27.122742",
+    "persona": 4,
+    "model": "unknown",
+    "rating": -1,
+    "prompt": "ah, im so angry! Jim, moms bf has been pissing me off.\nWe'll be all joking and good vibes, then all of a sudden something I say strikes a cord and he gets livid and walks away. How do I accept living with that asshole?",
+    "answer": "First, []"
   }
 ]

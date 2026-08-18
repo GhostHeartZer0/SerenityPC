@@ -27,6 +27,12 @@ if (-not (Test-Path $venvPath)) {
     Write-Host "Virtual environment already exists in $venvPath." -ForegroundColor Green
 }
 
+$activateScript = Join-Path $venvPath "Scripts\Activate.ps1"
+if (Test-Path $activateScript) {
+    Write-Host "Activating virtual environment..." -ForegroundColor Cyan
+    . $activateScript
+}
+
 $pythonExe = Join-Path $venvPath "Scripts\python.exe"
 
 # 3. Upgrade pip and install wheel

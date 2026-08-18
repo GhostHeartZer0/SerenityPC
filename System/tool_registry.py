@@ -277,6 +277,37 @@ root.mainloop()"""
         if level < 5: return [self.tools[0], self.tools[2], self.tools[3]]
         return self.tools
 
+    def get_python_stubs(self, level: int = 1) -> str:
+        """Generates typed Python function stubs for Programmatic Tool Calling (PTC - arXiv:2608.06370v1)."""
+        tools = self.get_definitions(level)
+        if not tools:
+            return ""
+        stubs = ["# Available Tools (Programmatic Tool Calling - execute via Python function call):"]
+        for t in tools:
+            f = t["function"]
+            name = f["name"]
+            desc = f["description"]
+            params = f.get("parameters", {}).get("properties", {})
+            req = f.get("parameters", {}).get("required", [])
+            
+            args_list = []
+            for p_name, p_info in params.items():
+                p_type = p_info.get("type", "str")
+                py_type = "str"
+                if p_type in ("integer", "int"): py_type = "int"
+                elif p_type in ("array", "list"): py_type = "list"
+                elif p_type in ("object", "dict"): py_type = "dict"
+                elif p_type in ("boolean", "bool"): py_type = "bool"
+                
+                if p_name in req:
+                    args_list.append(f"{p_name}: {py_type}")
+                else:
+                    args_list.append(f"{p_name}: {py_type} = None")
+            
+            args_str = ", ".join(args_list)
+            stubs.append(f"def {name}({args_str}):\n    \"\"\"{desc}\"\"\"\n    ...")
+        return "\n\n".join(stubs)
+
     def get_gemma_declarations(self, level: int) -> str:
         """Generates Gemma-4 official template-aligned tool declarations string."""
         def official_q(s): return f"<|\"|>{s}<|\"|>"
@@ -293,3 +324,4 @@ root.mainloop()"""
         if tools:
             tool_defs += "\n"
         return tool_defs
+

@@ -6,8 +6,8 @@ for f in os.listdir(report_dir):
     if not f.endswith('.md'): continue
     model = f.replace('_report.md', '')
     
-    # Filter out 'assistant', 'MTP', and 'mmproj' models
-    if "assistant" in model.lower() or "mtp" in model.lower() or "mmproj" in model.lower():
+    # Filter out 'assistant', 'MTP', 'dflash', and 'mmproj' models
+    if any(k in model.lower() for k in ["assistant", "mtp", "dflash", "drafter", "mmproj"]):
         continue
         
     path = os.path.join(report_dir, f)

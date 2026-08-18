@@ -892,7 +892,7 @@ def interactive_menu():
             for current_dir, _, files in os.walk(db_dir):
                 for f in files:
                     # Skip unwanted models
-                    if "mmproj" in f.lower() or "assistant" in f.lower() or "mtp" in f.lower():
+                    if any(k in f.lower() for k in ["mmproj", "assistant", "mtp", "dflash", "drafter"]):
                         continue
                     if f.endswith(".gguf") or f.endswith(".bin"):
                         models.append(os.path.join(current_dir, f))

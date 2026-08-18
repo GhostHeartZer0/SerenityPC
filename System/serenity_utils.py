@@ -15,10 +15,13 @@ import traceback
 import threading
 import faulthandler
 import psutil
-try:
-    import pynvml as nvidia_ml
-except ImportError:
-    nvidia_ml = None
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", category=FutureWarning)
+    try:
+        import pynvml as nvidia_ml
+    except ImportError:
+        nvidia_ml = None
 from PIL import Image, ImageTk
 from serenity_resources import ANIMATION_SEQUENCE, MEDIA_DIR, THEME
 import struct
@@ -151,18 +154,18 @@ def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_ar
                 else:
                     print(f"[GGUF PATCH] Cannot patch architecture string: '{target_arch}' is longer than '{orig_arch}'")
 
-            # Patch any string metadata values matching gemma4 or gemma3 to gemma2 (e.g., tokenizer.ggml.model)
-            # Patch tokenizer model string if it's incorrectly set to a gemma variant (llama.cpp uses 'llama' for SPM tokenizers)
-            for rec in kv_records:
-                k_str, val_str_p, val_str_l, val_s = rec[2], rec[5], rec[6], rec[7]
-                if k_str == "tokenizer.ggml.model" and val_s and val_s.lower() in ["gemma4", "gemma3", "gemma2", "gemma"] and val_str_p is not None:
-                    new_val = "llama"
-                    new_val_bytes = new_val.encode("utf-8")
-                    if len(new_val_bytes) <= val_str_l:
-                        f.seek(val_str_p + 8)
-                        f.write(new_val_bytes + b"\x00" * (val_str_l - len(new_val_bytes)))
-                        print(f"[GGUF PATCH] Patched tokenizer string '{k_str}': '{val_s}' -> '{new_val}'")
-                        patched_anything = True
+            # Auto-heal: If tokenizer.ggml.model was previously corrupted to 'llama' on a Gemma model, restore it back to 'gemma4' or 'gemma'
+            if "gemma" in orig_arch_lower:
+                for rec in kv_records:
+                    k_str, val_str_p, val_str_l, val_s = rec[2], rec[5], rec[6], rec[7]
+                    if k_str == "tokenizer.ggml.model" and val_s and "llama" in val_s.lower() and val_str_p is not None:
+                        new_val = "gemma4" if val_str_l >= 6 else "gemma"
+                        new_val_bytes = new_val.encode("utf-8")
+                        if len(new_val_bytes) <= val_str_l:
+                            f.seek(val_str_p + 8)
+                            f.write(new_val_bytes + b"\x00" * (val_str_l - len(new_val_bytes)))
+                            print(f"[GGUF RESTORE] Restored '{k_str}' back to '{new_val}' (was corrupted to '{val_s}')")
+                            patched_anything = True
 
             # Patch key prefixes if the detected prefix doesn't match the target architecture
             if detected_prefix and f"{detected_prefix}." != f"{target_arch}.":

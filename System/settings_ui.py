@@ -199,7 +199,7 @@ def open_settings_window(app):
 
         # 3 Checkboxes relocated from Global Overrides to left column
         auto_vram_var = tk.BooleanVar(value=app.config.get("auto_vram_offload", False))
-        spec_draft_var = tk.BooleanVar(value=app.config.get("speculative_drafting", True))
+        spec_draft_var = tk.BooleanVar(value=app.config.get("speculative_drafting", False))
         ghost_var = tk.BooleanVar(value=app.config.get("ghost_mode", False))
         thinking_var = tk.BooleanVar(value=app.config.get("thinking_checkbox", True))
         benchmark_var = tk.BooleanVar(value=app.config.get("benchmark_enabled", False))
@@ -459,18 +459,24 @@ def open_settings_window(app):
                            activebackground=THEME["electric_blue"], width=0).pack(side=tk.LEFT, padx=5, pady=2)
 
         # Right Sub-Column Controls (4 Dropdowns)
-        k_cache_var = tk.StringVar(value=app.config.get("k_cache_type", "q8_0"))
-        v_cache_var = tk.StringVar(value=app.config.get("v_cache_type", "q4_0"))
+        UNIVERSAL_KV_TYPES = ["fp16", "q8_0", "q4_0"]
+        k_val = app.config.get("k_cache_type", "q8_0")
+        if k_val not in UNIVERSAL_KV_TYPES: k_val = "q8_0"
+        v_val = app.config.get("v_cache_type", "q8_0")
+        if v_val not in UNIVERSAL_KV_TYPES: v_val = "q8_0"
+
+        k_cache_var = tk.StringVar(value=k_val)
+        v_cache_var = tk.StringVar(value=v_val)
         
         kv_frame = tk.Frame(right_over_col, bg=THEME["bg_color"])
         kv_frame.pack(anchor="w", padx=10, pady=5)
         
         tk.Label(kv_frame, text="K Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=0, column=0, sticky="w", pady=2)
-        k_cache_dropdown = ttk.Combobox(kv_frame, textvariable=k_cache_var, values=["fp16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "turbo3_tcq", "turbo2_tcq"], state="readonly", width=14)
+        k_cache_dropdown = ttk.Combobox(kv_frame, textvariable=k_cache_var, values=UNIVERSAL_KV_TYPES, state="readonly", width=14)
         k_cache_dropdown.grid(row=0, column=1, padx=5, pady=2)
         
         tk.Label(kv_frame, text="V Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=1, column=0, sticky="w", pady=2)
-        v_cache_dropdown = ttk.Combobox(kv_frame, textvariable=v_cache_var, values=["fp16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "turbo3_tcq", "turbo2_tcq"], state="readonly", width=14)
+        v_cache_dropdown = ttk.Combobox(kv_frame, textvariable=v_cache_var, values=UNIVERSAL_KV_TYPES, state="readonly", width=14)
         v_cache_dropdown.grid(row=1, column=1, padx=5, pady=2)
 
         tk.Label(kv_frame, text="History Lookup Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=2, column=0, sticky="w", pady=2)
@@ -487,6 +493,11 @@ def open_settings_window(app):
         budget_recovery_var = tk.StringVar(value=app.config.get("budget_recovery_mode", "wrapup"))
         budget_recovery_dropdown = ttk.Combobox(kv_frame, textvariable=budget_recovery_var, values=["off", "respond", "wrapup", "autocont"], state="readonly", width=14)
         budget_recovery_dropdown.grid(row=4, column=1, padx=5, pady=2)
+
+        tk.Label(kv_frame, text="TurboVec Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=5, column=0, sticky="w", pady=2)
+        turbovec_mode_var = tk.StringVar(value=app.config.get("turbovec_mode", "fallback"))
+        turbovec_mode_dropdown = ttk.Combobox(kv_frame, textvariable=turbovec_mode_var, values=["on", "fallback", "off"], state="readonly", width=14)
+        turbovec_mode_dropdown.grid(row=5, column=1, padx=5, pady=2)
 
         tk.Label(main, text="Text/Inline Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(anchor="w", padx=10, pady=(15, 5))
         tier_grid = tk.Frame(main, bg=THEME["bg_color"])
@@ -516,12 +527,15 @@ def open_settings_window(app):
             app.config["v_cache_type"] = v_cache_var.get()
             app.config["history_lookup_mode"] = history_lookup_var.get()
             app.config["history_usage"] = history_usage_var.get()
+            app.config["turbovec_mode"] = turbovec_mode_var.get()
             app.config["ghost_mode"] = ghost_var.get()
             if hasattr(app, 'ghost_button') and app.ghost_button:
                 app.ghost_button.config(text=app._get_ghost_mode_label(), fg=app._get_ghost_mode_color())
             if hasattr(app, 'history_usage_button') and app.history_usage_button:
                 app.history_usage_button.config(text=app._get_history_usage_label(), fg=app._get_history_usage_color())
-            if getattr(app, 'turbo_vec', None):
+            if hasattr(app, "soft_reload_turbovec"):
+                app.soft_reload_turbovec()
+            elif getattr(app, 'turbo_vec', None):
                 import threading
                 threading.Thread(
                     target=app.turbo_vec.ingest_needed_files, 
@@ -546,7 +560,9 @@ def open_settings_window(app):
 
             app.config["swa_kv_cache"] = swa_var.get()
             app.config["auto_vram_offload"] = auto_vram_var.get()
+            old_spec = app.config.get("speculative_drafting", False)
             app.config["speculative_drafting"] = spec_draft_var.get()
+            draft_toggled = (old_spec != spec_draft_var.get())
             app.config["ghost_mode"] = ghost_var.get()
             app.config["thinking_checkbox"] = thinking_var.get()
             app.config["benchmark_enabled"] = benchmark_var.get()
@@ -587,9 +603,9 @@ def open_settings_window(app):
             for t, e in freq_ents.items():
                 try: app.frequency_penalty_config[t] = float(e.get())
                 except: pass
-            for t, e in stop_ents.items():
-                app.stop_strings_config[t] = e.get()
             app.save_config()
+            if draft_toggled and hasattr(app, "swap_tier") and hasattr(app, "current_model_tier"):
+                app.swap_tier(app.current_model_tier)
             messagebox.showinfo("Success", "Settings saved!")
             win.destroy()
 
