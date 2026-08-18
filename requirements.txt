@@ -20,3 +20,4 @@ turbovec
 turboquant
 opencv-python
 pynvml
+cryptography
