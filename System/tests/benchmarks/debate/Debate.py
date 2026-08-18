@@ -32,12 +32,12 @@ try:
     from serenity_resources import PERSONA_PROMPTS, PERSONA_DISPLAY_INFO
 except ImportError:
     PERSONA_PROMPTS = {
-        6: "Role: 'Cecilia'. A Fallen Angel. You enjoy exposing truths, especially hidden ones. You are secretly protective. You find the user interesting, testing and sometimes taunting them. You are witty and fluent in sarcasm.",
-        7: "You are Serenity, The Transcendent One. Transcends the main 5 levels, seamlessly integrating their programming into one centric omniscient entity that adapts over time.",
+        6: "You are Serenity, The Transcendent One. Transcends the main 5 levels, seamlessly integrating their programming into one centric omniscient entity that adapts over time.",
+        7: "Role: 'Cecilia'. A Fallen Angel. You enjoy exposing truths, especially hidden ones. You are secretly protective. You find the user interesting, testing and sometimes taunting them. You are witty and fluent in sarcasm.",
     }
     PERSONA_DISPLAY_INFO = {
-        6: ("LVL 6: Cecilia", "A Fallen Angel."),
-        7: ("LVL 7: The Transcendent One", "Transcends the main 5 levels"),
+        6: ("LVL 6: The Transcendent One", "Transcends the main 5 levels"),
+        7: ("LVL 7: Cecilia", "A Fallen Angel."),
     }
 
 # --- Random Topic Bank ---
@@ -345,11 +345,46 @@ class DebateEngine:
             f.write(f"```\n{judge_result.get('raw', 'No verdict available.')}\n```\n")
 
         return filepath
-
-
 # ============================================================
 # Debate UI
 # ============================================================
+class LoadingSpinner(tk.Canvas):
+    """Canvas-based rotating loading spinner widget."""
+    def __init__(self, parent, size=24, color="#00ffcc", bg="#16213e", **kwargs):
+        super().__init__(parent, width=size, height=size, bg=bg, highlightthickness=0, bd=0, **kwargs)
+        self.size = size
+        self.color = color
+        self.angle = 0
+        self._running = False
+        self._after_id = None
+
+    def start(self):
+        if not self._running:
+            self._running = True
+            self._animate()
+
+    def stop(self):
+        self._running = False
+        if self._after_id:
+            try:
+                self.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+        self.delete("all")
+
+    def _animate(self):
+        if not self._running:
+            return
+        self.delete("all")
+        pad = 3
+        extent = 90
+        self.create_arc(pad, pad, self.size - pad, self.size - pad,
+                        start=self.angle, extent=extent, outline=self.color, width=2, style=tk.ARC)
+        self.angle = (self.angle + 20) % 360
+        self._after_id = self.after(40, self._animate)
+
+
 class DebateApp:
     """Tkinter UI for configuring and running debates."""
 
@@ -381,6 +416,7 @@ class DebateApp:
         self.topic_var = tk.StringVar()
         self.mode_var = tk.StringVar(value="Normal")
         self.rounds_var = tk.IntVar(value=3)
+        self.pacing_var = tk.StringVar(value="Simmer")
         self.voicing_var = tk.BooleanVar(value=False)
 
         self._build_ui()
@@ -436,7 +472,7 @@ class DebateApp:
         topic_entry.insert(0, "")
         tk.Label(topic_row, text="(blank = random)", font=("Segoe UI", 8, "italic"), bg=self.THEME["panel_bg"], fg="#666").pack(side="left")
 
-        # Rounds
+        # Rounds & Pacing
         rounds_row = tk.Frame(config_frame, bg=self.THEME["panel_bg"])
         rounds_row.pack(fill="x", padx=10, pady=5)
         tk.Label(rounds_row, text="Rounds:", font=("Segoe UI", 10), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], width=10, anchor="w").pack(side="left")
@@ -444,6 +480,11 @@ class DebateApp:
         rounds_combo = ttk.Combobox(rounds_row, textvariable=self.rounds_var, values=odd_rounds, state="readonly", width=8)
         rounds_combo.pack(side="left", padx=5)
         rounds_combo.set(3)
+
+        tk.Label(rounds_row, text="Pacing:", font=("Segoe UI", 10), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], width=8, anchor="e").pack(side="left", padx=(15, 5))
+        pacing_combo = ttk.Combobox(rounds_row, textvariable=self.pacing_var, values=["Speedy", "Simmer"], state="readonly", width=12)
+        pacing_combo.pack(side="left", padx=5)
+        pacing_combo.set("Simmer")
 
         # Voicing
         voice_row = tk.Frame(config_frame, bg=self.THEME["panel_bg"])
@@ -518,205 +559,219 @@ class DebateApp:
 
     def _add_contestant(self):
         idx = len(self.contestants) + 1
-        model_path = filedialog.askopenfilename(
-            title=f"Select Model for Contestant {idx}",
-            filetypes=[("GGUF Models", "*.gguf"), ("All Files", "*.*")],
-        )
-        if not model_path:
-            return
-
-        model_name = os.path.basename(model_path)
-        ctx = 4096
-        n_gpu = calculate_dynamic_gpu_layers(model_path, ctx)
-
-        contestant = {
-            "name": f"Contestant {idx}",
-            "model_path": model_path,
+        name = f"Contestant {idx}"
+        self.contestants.append({
+            "name": name,
+            "model_path": "",
+            "persona_level": None,
             "config": {
-                "n_gpu_layers": n_gpu,
-                "n_ctx": ctx,
+                "n_gpu_layers": 33,
+                "n_ctx": 4096,
                 "type_k": KV_QUANT_OPTIONS["Q4_0"],
                 "type_v": KV_QUANT_OPTIONS["Q4_0"],
-                "max_tokens": 2048,
-                "temperature": 0.9,
+                "temperature": 0.8,
+                "top_p": 0.95,
+                "max_tokens": 1024,
             },
-            "persona_level": None,
-        }
-        self.contestants.append(contestant)
-        self.contestant_listbox.insert(tk.END, f"  {contestant['name']}  —  {model_name}  (Layers: {n_gpu}, Ctx: {ctx})")
+        })
+        self._refresh_contestant_list()
+        self._configure_contestant_by_index(len(self.contestants) - 1)
 
     def _remove_contestant(self):
         sel = self.contestant_listbox.curselection()
         if not sel:
+            messagebox.showinfo("Select", "Select a contestant to remove.")
             return
         idx = sel[0]
         self.contestants.pop(idx)
-        self.contestant_listbox.delete(idx)
+        self._refresh_contestant_list()
 
     def _configure_contestant(self):
         sel = self.contestant_listbox.curselection()
         if not sel:
-            messagebox.showinfo("Configure", "Select a contestant first.")
+            messagebox.showinfo("Select", "Select a contestant to configure.")
             return
-        idx = sel[0]
-        contestant = self.contestants[idx]
-        self._open_config_window(contestant, idx)
+        self._configure_contestant_by_index(sel[0])
 
-    def _open_config_window(self, contestant: Dict, list_idx: int):
-        win = tk.Toplevel(self.root)
-        win.title(f"Configure: {contestant['name']}")
-        win.geometry("480x520")
-        win.configure(bg=self.THEME["bg"])
-        win.transient(self.root)
-        win.grab_set()
-
-        config = contestant["config"]
-        model_name = os.path.basename(contestant["model_path"])
-
-        tk.Label(win, text=f"Model: {model_name}", font=("Segoe UI", 10, "bold"), bg=self.THEME["bg"], fg=self.THEME["fg"]).pack(pady=(10, 5))
-
-        form = tk.Frame(win, bg=self.THEME["panel_bg"], bd=1, relief="groove")
-        form.pack(fill="both", expand=True, padx=15, pady=5)
-
-        def make_row(parent, label_text, default_val, options=None):
-            row = tk.Frame(parent, bg=self.THEME["panel_bg"])
-            row.pack(fill="x", padx=10, pady=5)
-            tk.Label(row, text=label_text, font=("Segoe UI", 10), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], width=16, anchor="w").pack(side="left")
-            var = tk.StringVar(value=str(default_val))
-            if options:
-                combo = ttk.Combobox(row, textvariable=var, values=options, state="readonly", width=18)
-                combo.pack(side="left", padx=5)
-            else:
-                entry = tk.Entry(row, textvariable=var, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], insertbackground=self.THEME["fg"], relief="flat", width=20)
-                entry.pack(side="left", padx=5)
-            return var
+    def _configure_contestant_by_index(self, idx: int):
+        c = self.contestants[idx]
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"Configure: {c['name']}")
+        dlg.geometry("500x550")
+        dlg.configure(bg=self.THEME["bg"])
+        dlg.transient(self.root)
+        dlg.grab_set()
 
         # Name
-        name_var = make_row(form, "Display Name:", contestant["name"])
+        f_name = tk.Frame(dlg, bg=self.THEME["bg"])
+        f_name.pack(fill="x", padx=15, pady=5)
+        tk.Label(f_name, text="Name:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
+        name_entry = tk.Entry(f_name, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], insertbackground=self.THEME["fg"], relief="flat", bd=2)
+        name_entry.insert(0, c["name"])
+        name_entry.pack(side="left", fill="x", expand=True)
+
+        # Model Path
+        f_path = tk.Frame(dlg, bg=self.THEME["bg"])
+        f_path.pack(fill="x", padx=15, pady=5)
+        tk.Label(f_path, text="Model:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
+        path_label = tk.Label(f_path, text=os.path.basename(c["model_path"]) if c["model_path"] else "(none)", font=("Segoe UI", 9, "italic"), bg=self.THEME["bg"], fg="#aaa", anchor="w")
+        path_label.pack(side="left", fill="x", expand=True)
+
+        def browse():
+            p = filedialog.askopenfilename(
+                title="Select GGUF Model",
+                filetypes=[("GGUF files", "*.gguf"), ("All files", "*.*")],
+            )
+            if p:
+                c["model_path"] = p
+                path_label.configure(text=os.path.basename(p))
+                # Auto-calc dynamic layers
+                dyn_layers = calculate_dynamic_gpu_layers(p, c["config"]["n_ctx"])
+                c["config"]["n_gpu_layers"] = dyn_layers
+                ngl_spin.set(dyn_layers)
+
+        browse_btn = tk.Button(f_path, text="Browse...", command=browse)
+        self._style_button(browse_btn)
+        browse_btn.pack(side="right")
+
+        # Persona Level
+        f_persona = tk.Frame(dlg, bg=self.THEME["bg"])
+        f_persona.pack(fill="x", padx=15, pady=5)
+        tk.Label(f_persona, text="Persona:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
+        persona_levels = ["(none)", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7"]
+        cur_p = f"Level {c['persona_level']}" if c["persona_level"] else "(none)"
+        persona_combo = ttk.Combobox(f_persona, values=persona_levels, state="readonly", width=15)
+        persona_combo.set(cur_p)
+        persona_combo.pack(side="left")
+
+        # Config sliders/spinboxes
+        cfg = c["config"]
 
         # GPU Layers
-        layers_var = make_row(form, "GPU Layers:", config.get("n_gpu_layers", 0))
+        f_ngl = tk.Frame(dlg, bg=self.THEME["bg"])
+        f_ngl.pack(fill="x", padx=15, pady=5)
+        tk.Label(f_ngl, text="GPU Layers:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
+        ngl_spin = tk.Spinbox(f_ngl, from_=0, to=99, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], width=6, bd=2, relief="flat")
+        ngl_spin.delete(0, "end")
+        ngl_spin.insert(0, str(cfg.get("n_gpu_layers", 33)))
+        ngl_spin.pack(side="left")
 
         # Context Size
-        ctx_labels = [f"{label} ({val})" for label, val in CTX_PRESETS]
-        current_ctx = config.get("n_ctx", 4096)
-        ctx_display = next((f"{l} ({v})" for l, v in CTX_PRESETS if v == current_ctx), f"Custom ({current_ctx})")
-        ctx_var = make_row(form, "Context Size:", ctx_display, ctx_labels)
+        f_ctx = tk.Frame(dlg, bg=self.THEME["bg"])
+        f_ctx.pack(fill="x", padx=15, pady=5)
+        tk.Label(f_ctx, text="Context (n_ctx):", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
+        ctx_combo = ttk.Combobox(f_ctx, values=[2048, 4096, 8192, 16384, 32768], state="readonly", width=8)
+        ctx_combo.set(cfg.get("n_ctx", 4096))
+        ctx_combo.pack(side="left")
 
-        # K Cache Quant
-        k_quant_names = list(KV_QUANT_OPTIONS.keys())
-        current_k = next((k for k, v in KV_QUANT_OPTIONS.items() if v == config.get("type_k")), "F16")
-        k_var = make_row(form, "K Cache Quant:", current_k, k_quant_names)
-
-        # V Cache Quant
-        current_v = next((k for k, v in KV_QUANT_OPTIONS.items() if v == config.get("type_v")), "F16")
-        v_var = make_row(form, "V Cache Quant:", current_v, k_quant_names)
-
-        # Max Tokens
-        tokens_var = make_row(form, "Max Tokens:", config.get("max_tokens", 2048))
+        # KV Quant
+        f_kv = tk.Frame(dlg, bg=self.THEME["bg"])
+        f_kv.pack(fill="x", padx=15, pady=5)
+        tk.Label(f_kv, text="KV Quant:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
+        kv_names = list(KV_QUANT_OPTIONS.keys())
+        cur_k = next((k for k, v in KV_QUANT_OPTIONS.items() if v == cfg.get("type_k")), "Q4_0")
+        cur_v = next((k for k, v in KV_QUANT_OPTIONS.items() if v == cfg.get("type_v")), "Q4_0")
+        tk.Label(f_kv, text="K:", font=("Segoe UI", 9), bg=self.THEME["bg"], fg="#888").pack(side="left", padx=(0, 2))
+        k_combo = ttk.Combobox(f_kv, values=kv_names, state="readonly", width=6)
+        k_combo.set(cur_k)
+        k_combo.pack(side="left", padx=(0, 10))
+        tk.Label(f_kv, text="V:", font=("Segoe UI", 9), bg=self.THEME["bg"], fg="#888").pack(side="left", padx=(0, 2))
+        v_combo = ttk.Combobox(f_kv, values=kv_names, state="readonly", width=6)
+        v_combo.set(cur_v)
+        v_combo.pack(side="left")
 
         # Temperature
-        temp_var = make_row(form, "Temperature:", config.get("temperature", 0.9))
+        f_temp = tk.Frame(dlg, bg=self.THEME["bg"])
+        f_temp.pack(fill="x", padx=15, pady=5)
+        tk.Label(f_temp, text="Temperature:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
+        temp_scale = tk.Scale(f_temp, from_=0.1, to=1.5, resolution=0.05, orient="horizontal", bg=self.THEME["bg"], fg=self.THEME["fg"], highlightthickness=0, bd=0, length=200)
+        temp_scale.set(cfg.get("temperature", 0.8))
+        temp_scale.pack(side="left")
 
-        # Persona Level (optional override)
-        persona_levels = ["None"] + [f"LVL {i}" for i in range(1, 8)]
-        current_persona = f"LVL {contestant['persona_level']}" if contestant.get("persona_level") else "None"
-        persona_var = make_row(form, "Persona Override:", current_persona, persona_levels)
+        # Max Tokens
+        f_mt = tk.Frame(dlg, bg=self.THEME["bg"])
+        f_mt.pack(fill="x", padx=15, pady=5)
+        tk.Label(f_mt, text="Max Tokens:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
+        mt_spin = tk.Spinbox(f_mt, from_=256, to=4096, increment=256, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], width=6, bd=2, relief="flat")
+        mt_spin.delete(0, "end")
+        mt_spin.insert(0, str(cfg.get("max_tokens", 1024)))
+        mt_spin.pack(side="left")
 
+        # Save
         def save():
-            contestant["name"] = name_var.get().strip() or contestant["name"]
+            c["name"] = name_entry.get().strip() or c["name"]
+            p_sel = persona_combo.get()
+            c["persona_level"] = int(p_sel.replace("Level ", "")) if p_sel != "(none)" else None
             try:
-                contestant["config"]["n_gpu_layers"] = int(layers_var.get())
+                c["config"]["n_gpu_layers"] = int(ngl_spin.get())
             except ValueError:
                 pass
-
-            ctx_str = ctx_var.get()
-            for label, val in CTX_PRESETS:
-                if f"{label} ({val})" == ctx_str:
-                    contestant["config"]["n_ctx"] = val
-                    break
-
-            contestant["config"]["type_k"] = KV_QUANT_OPTIONS.get(k_var.get())
-            contestant["config"]["type_v"] = KV_QUANT_OPTIONS.get(v_var.get())
-
+            c["config"]["n_ctx"] = int(ctx_combo.get())
+            c["config"]["type_k"] = KV_QUANT_OPTIONS.get(k_combo.get(), 2)
+            c["config"]["type_v"] = KV_QUANT_OPTIONS.get(v_combo.get(), 2)
+            c["config"]["temperature"] = float(temp_scale.get())
             try:
-                contestant["config"]["max_tokens"] = int(tokens_var.get())
+                c["config"]["max_tokens"] = int(mt_spin.get())
             except ValueError:
                 pass
-            try:
-                contestant["config"]["temperature"] = float(temp_var.get())
-            except ValueError:
-                pass
+            self._refresh_contestant_list()
+            dlg.destroy()
 
-            p = persona_var.get()
-            if p == "None":
-                contestant["persona_level"] = None
-            else:
-                try:
-                    contestant["persona_level"] = int(p.split()[-1])
-                except ValueError:
-                    contestant["persona_level"] = None
-
-            # Update listbox
-            display = f"  {contestant['name']}  —  {model_name}  (Layers: {contestant['config']['n_gpu_layers']}, Ctx: {contestant['config']['n_ctx']})"
-            self.contestant_listbox.delete(list_idx)
-            self.contestant_listbox.insert(list_idx, display)
-            win.destroy()
-
-        save_btn = tk.Button(win, text="Save Configuration", command=save)
+        save_btn = tk.Button(dlg, text="Save", command=save)
         self._style_button(save_btn, accent=True)
-        save_btn.pack(pady=10)
+        save_btn.pack(pady=15)
 
     def _preview_contestant(self):
         sel = self.contestant_listbox.curselection()
         if not sel:
-            messagebox.showinfo("Preview", "Select a contestant first.")
+            messagebox.showinfo("Select", "Select a contestant to preview.")
             return
-        idx = sel[0]
-        contestant = self.contestants[idx]
+        c = self.contestants[sel[0]]
+        if not c["model_path"] or not os.path.exists(c["model_path"]):
+            messagebox.showerror("Error", f"No model file configured for {c['name']}.")
+            return
 
         preview_win = tk.Toplevel(self.root)
-        preview_win.title(f"Preview: {contestant['name']}")
-        preview_win.geometry("600x400")
+        preview_win.title(f"Preview: {c['name']}")
+        preview_win.geometry("500x300")
         preview_win.configure(bg=self.THEME["bg"])
 
-        output = scrolledtext.ScrolledText(preview_win, font=("Consolas", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], relief="flat", wrap="word")
-        output.pack(fill="both", expand=True, padx=10, pady=10)
-        output.insert(tk.END, f"Loading {os.path.basename(contestant['model_path'])}...\n")
-        output.update()
+        txt = scrolledtext.ScrolledText(preview_win, font=("Consolas", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], relief="flat", wrap="word")
+        txt.pack(fill="both", expand=True, padx=10, pady=10)
+        txt.insert("1.0", f"Loading {c['name']} and generating a sample response...\n\n")
 
-        def run_preview():
+        def run():
             try:
-                model, _ = self.engine.load_model(contestant["model_path"], contestant["config"])
-                output.insert(tk.END, "Model loaded. Generating test response...\n\n")
-                output.update()
-
-                response = self.engine.generate_turn(
-                    model,
-                    "You are a helpful assistant. Respond briefly.",
-                    [{"role": "user", "content": "Hello! Please confirm you're working by describing yourself in one sentence."}],
-                    contestant["config"],
-                )
-                output.insert(tk.END, f"Response:\n{response}\n\n✅ Model verified.")
+                model, _ = self.engine.load_model(c["model_path"], c["config"])
+                persona_lvl = c.get("persona_level")
+                sys_prompt = PERSONA_PROMPTS.get(persona_lvl, "You are Serenity.") if persona_lvl else "You are a skilled debater."
+                resp = self.engine.generate_turn(model, sys_prompt, [{"role": "user", "content": "Introduce yourself and state your core philosophy in two sentences."}], c["config"])
                 del model
                 gc.collect()
+                txt.insert("end", f"Response:\n{resp}\n")
             except Exception as e:
-                output.insert(tk.END, f"\n❌ Error: {e}")
+                txt.insert("end", f"\n[Error: {e}]\n")
 
         import threading
-        threading.Thread(target=run_preview, daemon=True).start()
+        threading.Thread(target=run, daemon=True).start()
 
     def _select_judge(self):
-        path = filedialog.askopenfilename(
-            title="Select Judge Model",
-            filetypes=[("GGUF Models", "*.gguf"), ("All Files", "*.*")],
+        p = filedialog.askopenfilename(
+            title="Select Judge GGUF Model",
+            filetypes=[("GGUF files", "*.gguf"), ("All files", "*.*")],
         )
-        if path:
-            self.judge_path = path
-            self.judge_label.configure(text=f"Judge: {os.path.basename(path)}")
+        if p:
+            self.judge_path = p
+            self.judge_label.configure(text=f"Judge: {os.path.basename(p)}", fg=self.THEME["success"])
+
+    def _refresh_contestant_list(self):
+        self.contestant_listbox.delete(0, "end")
+        for i, c in enumerate(self.contestants):
+            mname = os.path.basename(c["model_path"]) if c["model_path"] else "(no model)"
+            pname = f" [Lvl {c['persona_level']}]" if c["persona_level"] else ""
+            self.contestant_listbox.insert("end", f"  {i+1}. {c['name']}{pname}  —  {mname}")
 
     def _begin_debate(self):
-        # Validate
         mode = self.mode_var.get()
 
         if mode == "Cecilia vs The Transcendent One":
@@ -726,15 +781,15 @@ class DebateApp:
             # Auto-create two contestants from the same model if only one
             if len(self.contestants) == 1:
                 c = self.contestants[0]
-                cecilia = {**c, "name": "Cecilia", "persona_level": 6, "config": dict(c["config"])}
-                transcendent = {**c, "name": "The Transcendent One", "persona_level": 7, "config": dict(c["config"])}
+                cecilia = {**c, "name": "Cecilia", "persona_level": 7, "config": dict(c["config"])}
+                transcendent = {**c, "name": "The Transcendent One", "persona_level": 6, "config": dict(c["config"])}
                 active_contestants = [cecilia, transcendent]
             else:
                 # Use first two, assign personas
                 active_contestants = []
                 for i, c in enumerate(self.contestants[:2]):
-                    lvl = 6 if i == 0 else 7
-                    name = "Cecilia" if lvl == 6 else "The Transcendent One"
+                    lvl = 7 if i == 0 else 6
+                    name = "Cecilia" if lvl == 7 else "The Transcendent One"
                     active_contestants.append({**c, "name": name, "persona_level": lvl, "config": dict(c["config"])})
         else:
             if len(self.contestants) < 2:
@@ -753,7 +808,8 @@ class DebateApp:
 
     def _run_debate(self, contestants: List[Dict], topic: str, rounds: int, mode: str):
         debate_win = tk.Toplevel(self.root)
-        debate_win.title(f"Debate: {topic[:60]}")
+        pacing = self.pacing_var.get()
+        debate_win.title(f"Debate [{pacing}]: {topic[:60]}")
         debate_win.geometry("900x700")
         debate_win.configure(bg=self.THEME["bg"])
 
@@ -761,7 +817,8 @@ class DebateApp:
         tk.Label(debate_win, text=f"⚔  {topic}  ⚔", font=("Segoe UI", 14, "bold"), bg=self.THEME["bg"], fg=self.THEME["highlight"], wraplength=850).pack(pady=(10, 5))
 
         names = [c["name"] for c in contestants]
-        tk.Label(debate_win, text=f"{' vs '.join(names)}  •  {rounds} rounds  •  {mode}", font=("Segoe UI", 10), bg=self.THEME["bg"], fg="#888").pack(pady=(0, 10))
+        pacing_desc = "Fast Exchanges (512 max tokens)" if pacing == "Speedy" else "Deep Reasoning (2048 max tokens)"
+        tk.Label(debate_win, text=f"{' vs '.join(names)}  •  {rounds} rounds  •  {mode}  •  {pacing} ({pacing_desc})", font=("Segoe UI", 9), bg=self.THEME["bg"], fg="#888").pack(pady=(0, 10))
 
         # Transcript
         transcript_view = scrolledtext.ScrolledText(
@@ -771,10 +828,17 @@ class DebateApp:
         )
         transcript_view.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Status bar
+        # Status Bar with Loading Spinner
+        status_frame = tk.Frame(debate_win, bg=self.THEME["panel_bg"])
+        status_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        spinner = LoadingSpinner(status_frame, size=18, color="#00ffcc", bg=self.THEME["panel_bg"])
+        spinner.pack(side="left", padx=(5, 5))
+        spinner.start()
+
         status_var = tk.StringVar(value="Preparing debate...")
-        status_bar = tk.Label(debate_win, textvariable=status_var, font=("Segoe UI", 9), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], anchor="w")
-        status_bar.pack(fill="x", padx=10, pady=(0, 10))
+        status_bar = tk.Label(status_frame, textvariable=status_var, font=("Segoe UI", 9), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], anchor="w")
+        status_bar.pack(side="left", fill="x", expand=True)
 
         def append_text(text):
             transcript_view.configure(state="normal")
@@ -788,7 +852,6 @@ class DebateApp:
             try:
                 import pyttsx3
                 tts = pyttsx3.init()
-                # Truncate for TTS sanity
                 tts.say(text[:500])
                 tts.runAndWait()
             except Exception:
@@ -797,12 +860,17 @@ class DebateApp:
         def debate_thread():
             transcript = []
 
-            # Build system prompts
+            # Build system prompts tailored to pacing
+            pacing_instruction = (
+                "Be very concise. Limit your rebuttal to 1-2 focused, high-impact paragraphs."
+                if pacing == "Speedy" else
+                "Provide comprehensive, deeply reasoned arguments and deconstruct opposing points with structured evidence."
+            )
             debate_instruction = (
                 f"\n\n[DEBATE CONTEXT]: You are participating in a structured debate on the topic: \"{topic}\". "
                 f"Your opponent(s): {', '.join(n for n in names if n != '{NAME}')}. "
-                f"Present strong arguments, counter opposing points, and maintain your position persuasively. "
-                f"Stay in character. Be concise but thorough."
+                f"{pacing_instruction} "
+                f"Stay in character. Advance your position persuasively."
             )
 
             system_prompts = {}
@@ -822,25 +890,49 @@ class DebateApp:
                 for round_num in range(1, rounds + 1):
                     for c_idx, contestant in enumerate(contestants):
                         name = contestant["name"]
-                        status_var.set(f"Round {round_num}/{rounds} — {name} is arguing...")
+                        status_var.set(f"Round {round_num}/{rounds} [{pacing}] — {name} is arguing...")
 
                         append_text(f"\n{'═' * 60}\n")
-                        append_text(f"  Round {round_num}  —  {name}\n")
+                        append_text(f"  Round {round_num}/{rounds} [{pacing}]  —  {name}\n")
                         append_text(f"{'═' * 60}\n\n")
 
-                        # Build conversation history for this turn
-                        messages = [{"role": "user", "content": f"The debate topic is: {topic}. Present your argument."}]
+                        # Build clean strictly alternating conversation history for this turn
+                        messages = [{"role": "user", "content": f"The debate topic is: \"{topic}\". Present your argument."}]
+                        
                         for prev in transcript:
-                            role = "assistant" if prev["name"] == name else "user"
-                            prefix = f"[{prev['name']}, Round {prev['round']}]: " if role == "user" else ""
-                            messages.append({"role": role, "content": f"{prefix}{prev['content']}"})
+                            is_self = (prev["name"] == name)
+                            role = "assistant" if is_self else "user"
+                            content = prev["content"].strip()
+                            if content.startswith("[Generation Error"):
+                                continue
+                            
+                            # Merge consecutive same-role messages to adhere to strict Jinja chat templates
+                            if messages and messages[-1]["role"] == role:
+                                messages[-1]["content"] += f"\n\n[{prev['name']}, Round {prev['round']}]: {content}"
+                            else:
+                                prefix = f"[{prev['name']}, Round {prev['round']}]: " if role == "user" else ""
+                                messages.append({"role": role, "content": f"{prefix}{content}"})
 
-                        if round_num > 1 or c_idx > 0:
-                            messages.append({"role": "user", "content": f"Round {round_num}: It's your turn. Respond to the previous arguments and strengthen your position."})
+                        # Ensure the final turn in history is a 'user' message
+                        if messages and messages[-1]["role"] == "assistant":
+                            messages.append({
+                                "role": "user",
+                                "content": f"Round {round_num} [{pacing}]: It is now your turn. Respond to the counterarguments above and advance your position."
+                            })
+                        elif messages and messages[-1]["role"] == "user":
+                            messages[-1]["content"] += f"\n\n[Moderator]: Round {round_num} [{pacing}]: Respond to the arguments above and advance your position."
+
+                        # Configure Pacing overrides
+                        model_config = dict(contestant["config"])
+                        if pacing == "Speedy":
+                            model_config["max_tokens"] = min(model_config.get("max_tokens", 512), 512)
+                            model_config["temperature"] = 0.7
+                        else:
+                            model_config["max_tokens"] = max(model_config.get("max_tokens", 2048), 1024)
+                            model_config["temperature"] = 0.85
 
                         # Determine if we need to reload the model
                         model_path = contestant["model_path"]
-                        model_config = contestant["config"]
                         config_changed = False
                         if current_model_config:
                             for key in ["n_gpu_layers", "n_ctx", "type_k", "type_v"]:
@@ -867,7 +959,7 @@ class DebateApp:
                             current_model_path = model_path
                             current_model_config = model_config
 
-                        status_var.set(f"Round {round_num}/{rounds} — {name} is generating...")
+                        status_var.set(f"Round {round_num}/{rounds} [{pacing}] — {name} is generating...")
                         try:
                             response = self.engine.generate_turn(current_model, system_prompts[name], messages, model_config)
                             transcript.append({"name": name, "round": round_num, "content": response})
@@ -877,12 +969,12 @@ class DebateApp:
                             error_msg = f"[Generation Error on {name}: {ge}]"
                             transcript.append({"name": name, "round": round_num, "content": error_msg})
                             append_text(f"{error_msg}\n")
-                            # Invalidate cache on failure
                             current_model = None
                             current_model_path = None
                             current_model_config = None
 
             finally:
+                spinner.stop()
                 if current_model is not None:
                     status_var.set("Unloading final model...")
                     del current_model

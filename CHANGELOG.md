@@ -1,6 +1,38 @@
 # Changelog
 
 ## Cleanup & Maintenance (August 2026)
+- **Modular Registry Framework & Dynamic Param Auto-Tuning**:
+  - Implemented `System/modular_registry.py` (`ModularRegistry` and `DynamicParamRegistry`) providing thread-safe extensible handler registration and in-memory domain-specific sampling adjustments (coding, math/logic, creative/narrative, factual) without modifying user config files on disk.
+  - Added Settings UI toggle (`dynamic_params_enabled`) in `System/settings_ui.py`.
+- **Interval-Based Markdown, Math & GFM Table Engine**:
+  - Implemented `System/markdown_engine.py` (`MarkdownEngine`) featuring non-destructive direct interval parsing, LaTeX-to-Unicode conversion, aligned Unicode box-drawing table formatting, and protected fenced code block handling without placeholders or null bytes.
+  - Upgraded `_apply_markdown` in `main.py` to a single-pass atomic render and added full tag support (`md_header_1..3`, `md_quote`, `md_strike`, `md_math_inline`, `md_math_block`, `md_table`, `md_code`).
+- **Programmatic Tool Calling & Modular Execution**:
+  - Refactored `System/tool_registry.py` to use `@self.registry.register(...)` decorator pattern.
+  - Added typed Python function stubs generator (`get_python_stubs()`) for programmatic tool calling.
+- **Denoising Latency & Step ETA Telemetry**:
+  - Upgraded `System/diffusion_wrapper.py` with real-time step delta timing, moving-average step latency calculation, and ETA telemetry reporting in the UI thinking status.
+- **Universal KV Cache Quantization Matrix**:
+  - Enabled full KV cache quantization suite across `System/settings_ui.py` and `main.py` (`fp16`, `bf16`, `q8_0`, `q5_1`, `q5_0`, `q4_1`, `q4_0`, `iq4_nl`, `f32`).
+- **Thought Channel Streaming Lookahead Buffer & Turn Persistence**:
+  - Integrated lookahead streaming buffer in `_generation_worker` in `main.py` to prevent thought tokens (`<|channel>`, `<think>`) from leaking into chat history during prefill/streaming before demuxing.
+  - Restored turn persistence (`self.messages.append(...)` and `self.save_history()`) in `_finalize_message()`.
+- **Debate Arena Enhancements**:
+  - Integrated `LoadingSpinner` rotating Canvas animation widget in `System/tests/benchmarks/debate/Debate.py`.
+  - Added Pacing selector (`Speedy` vs `Simmer`) with token limits and temperature profiles.
+  - Implemented strictly alternating `user`/`assistant` Jinja message formatting to resolve multi-round template crashes.
+- **Engine Tier & Level Mapping Realignment**:
+  - Swapped **Secret** and **Live** engine tier slots:
+    - **Engine: Transcendent (Lvl 6)**: Formerly "Live", now assigned to Level 6 (The Transcendent One).
+    - **Engine: Secret (Lvl 7)**: Assigned to Level 7 (Cecilia evolved unlock).
+  - Renamed all `"Live"` tier identifiers across `config.json`, `settings_ui.py`, and `main.py` to `"transcendent"`.
+- **Persona Level Hierarchy Swap**:
+  - Promoted **The Transcendent One** to standard visible **Level 6** (`PERSONA_DISPLAY_INFO`, `PERSONA_PROMPTS`, `DEEP_COOK_SYSTEM_PROMPTS`, `CONTEXT_SIZE_MAP`), providing seamless out-of-the-box slider access from Level 1 through 6.
+  - Re-anchored **Cecilia** as evolved **Level 7** secret unlock persona, triggered via 6-click persona header event.
+  - Added dynamic slider auto-hide behavior: slider auto-collapses to `to=6` when navigating to levels 1–6 or upon model offload, expanding to `to=7` only upon secret unlock.
+  - Migrated all Cecilia synthesis pipelines (`_perform_level7_synthesis`), generation channels, lore extraction, and dedicated avatar assets (`Cecilia_01.png`) to Level 7 with backwards-compatible aliases.
+  - Migrated and swapped all existing chat history archives in History/ between `_lvl6` and `_lvl7`.
+  - Fixed slider auto-clamp bug to preserve Level 7 without falling back to Level 6.
 - **Fast-Path `.venv` Batch Launcher**: Updated `run.bat` to immediately launch `.venv\Scripts\python.exe` without checking global/system `where python` PATH first, eliminating launch failures on systems with missing global PATH entries or Windows Store Python stubs.
 - **Tool Synthesis Thought Separation & Stop Token Alignment**: Added `_isolate_thought_and_response()` in `main.py` to extract reasoning channels (`<|channel>thought...<channel|>`) from tool synthesis outputs into `think_log` and strip residual structural tags from `final_answer`. Filtered `<channel|>` from synthesis stop sequences and expanded token headroom to prevent truncated responses.
 - **Automatic `.venv` Activation & Runtime Re-execution**: Added `_ensure_venv()` at top of `main.py` to auto-re-execute with `.venv/Scripts/python.exe` if started from global/system Python. Updated `run.bat` to directly execute `.venv/Scripts/python.exe` after activation. Updated `System/tool_registry.py` to use `sys.executable` instead of `"python"`.

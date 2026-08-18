@@ -45,7 +45,7 @@ def run_auto_detect(app, window=None):
         except: pass
 
     # 3. Model-Aware Tier Scaling
-    tiers = ["fast", "search", "low", "med", "high", "secret", "Live", "deep_cook", 
+    tiers = ["fast", "search", "low", "med", "high", "transcendent", "secret", "deep_cook", 
              "vision_video", "vision_video_deep", "vision_multimodal"]
     
     recommendations = {}
@@ -355,7 +355,7 @@ def open_settings_window(app):
 
         def _create_tier_block(parent, tier_name, row=0, col=0, is_vision=False):
             key = f"vision_{tier_name}" if is_vision else tier_name
-            lvl_map = {"fast": "1", "search": "2", "low": "3", "med": "4", "high": "5", "secret": "6", "Live": "7"}
+            lvl_map = {"fast": "1", "search": "2", "low": "3", "med": "4", "high": "5", "transcendent": "6", "secret": "7"}
             title_suffix = f" (Lvl {lvl_map[tier_name]})" if tier_name in lvl_map else ""
             lf = tk.LabelFrame(parent, text=f"Engine: {tier_name.upper()}{title_suffix}", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"), pady=5)
             lf.grid(row=row, column=col, sticky="nsew", padx=10, pady=5)
@@ -422,6 +422,11 @@ def open_settings_window(app):
         right_over_col.grid(row=0, column=1, sticky="nsew", padx=5)
 
         # Left Sub-Column Controls
+        dynamic_params_var = tk.BooleanVar(value=app.config.get("dynamic_params_enabled", True))
+        tk.Checkbutton(left_over_col, text="Dynamic Param Auto-Tune (Coding/Math/Creative)", variable=dynamic_params_var,
+                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"],
+                       activebackground=THEME["bg_color"], activeforeground=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=2)
+
         hao_var = tk.StringVar(value=app.config.get("hao_preset", "exps=CPU"))
         tk.Label(left_over_col, text="HAO Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(2,0))
         hao_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); hao_f.pack(anchor="w", padx=10)
@@ -459,18 +464,24 @@ def open_settings_window(app):
                            activebackground=THEME["electric_blue"], width=0).pack(side=tk.LEFT, padx=5, pady=2)
 
         # Right Sub-Column Controls (4 Dropdowns)
-        k_cache_var = tk.StringVar(value=app.config.get("k_cache_type", "q8_0"))
-        v_cache_var = tk.StringVar(value=app.config.get("v_cache_type", "q4_0"))
+        UNIVERSAL_KV_TYPES = ["fp16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"]
+        k_val = app.config.get("k_cache_type", "q8_0").lower()
+        if k_val not in UNIVERSAL_KV_TYPES: k_val = "q8_0"
+        v_val = app.config.get("v_cache_type", "q8_0").lower()
+        if v_val not in UNIVERSAL_KV_TYPES: v_val = "q8_0"
+
+        k_cache_var = tk.StringVar(value=k_val)
+        v_cache_var = tk.StringVar(value=v_val)
         
         kv_frame = tk.Frame(right_over_col, bg=THEME["bg_color"])
         kv_frame.pack(anchor="w", padx=10, pady=5)
         
         tk.Label(kv_frame, text="K Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=0, column=0, sticky="w", pady=2)
-        k_cache_dropdown = ttk.Combobox(kv_frame, textvariable=k_cache_var, values=["fp16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "turbo3_tcq", "turbo2_tcq"], state="readonly", width=14)
+        k_cache_dropdown = ttk.Combobox(kv_frame, textvariable=k_cache_var, values=UNIVERSAL_KV_TYPES, state="readonly", width=14)
         k_cache_dropdown.grid(row=0, column=1, padx=5, pady=2)
         
         tk.Label(kv_frame, text="V Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=1, column=0, sticky="w", pady=2)
-        v_cache_dropdown = ttk.Combobox(kv_frame, textvariable=v_cache_var, values=["fp16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "turbo3_tcq", "turbo2_tcq"], state="readonly", width=14)
+        v_cache_dropdown = ttk.Combobox(kv_frame, textvariable=v_cache_var, values=UNIVERSAL_KV_TYPES, state="readonly", width=14)
         v_cache_dropdown.grid(row=1, column=1, padx=5, pady=2)
 
         tk.Label(kv_frame, text="History Lookup Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=2, column=0, sticky="w", pady=2)
@@ -492,7 +503,7 @@ def open_settings_window(app):
         tier_grid = tk.Frame(main, bg=THEME["bg_color"])
         tier_grid.pack(fill=tk.X, pady=10)
         tier_grid.grid_columnconfigure(0, weight=1); tier_grid.grid_columnconfigure(1, weight=1)
-        tiers = ["fast", "search", "low", "med", "high", "secret", "Live", "deep_cook"]
+        tiers = ["fast", "search", "low", "med", "high", "transcendent", "secret", "deep_cook"]
         for i, tier in enumerate(tiers):
             r, c = divmod(i, 2)
             _create_tier_block(tier_grid, tier, r, c)
@@ -544,6 +555,7 @@ def open_settings_window(app):
                 print(f"[UI] Warning: Could not write KV cache types to Live params: {pe}")
             app.config["hao_preset"] = hao_var.get()
 
+            app.config["dynamic_params_enabled"] = dynamic_params_var.get()
             app.config["swa_kv_cache"] = swa_var.get()
             app.config["auto_vram_offload"] = auto_vram_var.get()
             app.config["speculative_drafting"] = spec_draft_var.get()

@@ -15,7 +15,7 @@
         "vision_multimodal": "Models/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "vision_multimodal_projector": "",
         "mid": "",
-        "Live": ""
+        "transcendent": ""
     },
     "gpu_layer_config": {
         "fast": 99,
@@ -29,7 +29,7 @@
         "vision_video_deep": 14,
         "vision_multimodal": 99,
         "mid": 99,
-        "Live": 8
+        "transcendent": 8
     },
     "context_size_config": {
         "fast": 4096,
@@ -43,7 +43,7 @@
         "vision_video_deep": 4096,
         "vision_multimodal": 32768,
         "mid": 32768,
-        "Live": 32768
+        "transcendent": 32768
     },
     "temp_config": {
         "fast": 0.8,
@@ -57,7 +57,7 @@
         "vision_video_deep": 0.1,
         "vision_multimodal": 1.0,
         "mid": 0.8,
-        "Live": 0.8
+        "transcendent": 0.8
     },
     "top_p_config": {
         "fast": 0.95,
@@ -71,7 +71,7 @@
         "vision_video_deep": 0.9,
         "vision_multimodal": 0.95,
         "mid": 0.95,
-        "Live": 0.95
+        "transcendent": 0.95
     },
     "min_p_config": {
         "fast": 0.05,
@@ -85,7 +85,7 @@
         "vision_video_deep": 0.0,
         "vision_multimodal": 0.0,
         "mid": 0.05,
-        "Live": 0.05
+        "transcendent": 0.05
     },
     "repeat_penalty_config": {
         "fast": 1.1,
@@ -99,7 +99,7 @@
         "vision_video_deep": 1.1,
         "vision_multimodal": 1.1,
         "mid": 1.1,
-        "Live": 1.1
+        "transcendent": 1.1
     },
     "frequency_penalty_config": {
         "fast": 0.0,
@@ -113,7 +113,7 @@
         "vision_video_deep": 0.0,
         "vision_multimodal": 0.0,
         "mid": 0.0,
-        "Live": 0.0
+        "transcendent": 0.0
     },
     "presence_penalty_config": {
         "fast": 0.0,
@@ -139,7 +139,7 @@
         "vision_video_deep": "[USER],User:,<|endoftext|>,<|im_end|>,###,<end_of_turn>,<|file_separator|>,<bos>,<eos>",
         "vision_multimodal": "[USER],User:,<|endoftext|>,<|im_end|>,###,<end_of_turn>,<|file_separator|>,<bos>,<eos>",
         "mid": "<|endoftext|>,<end_of_turn>,<|file_separator|>,<eos>,<|turn>,<turn|>",
-        "Live": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>"
+        "transcendent": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>"
     },
     "n_batch_config": {
         "fast": 2048,
@@ -153,7 +153,7 @@
         "vision_video_deep": 512,
         "vision_multimodal": 512,
         "mid": 512,
-        "Live": 512
+        "transcendent": 512
     },
     "top_k_config": {
         "fast": 64,
@@ -167,12 +167,12 @@
         "vision_video_deep": 64,
         "vision_multimodal": 64,
         "mid": 64,
-        "Live": 64
+        "transcendent": 64
     },
     "sash_pos": 611,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 3,
+    "active_persona_level": 5,
     "max_persona_level": 6.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
@@ -442,6 +442,6 @@
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
     "history_usage": "current_window",
-    "ghost_mode": false,
-    "startup_count": 3
+    "ghost_mode": true,
+    "startup_count": 1
 }
