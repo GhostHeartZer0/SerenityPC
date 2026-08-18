@@ -188,36 +188,43 @@ def install_llama_cpp_self_correcting():
     nvcc_bin = os.path.join(cuda_dir, "bin", "nvcc.exe") if cuda_dir else ""
     nvcc_arg = f' -DCMAKE_CUDA_COMPILER="{nvcc_bin}"' if (nvcc_bin and os.path.exists(nvcc_bin)) else ""
 
+    # Clean any corrupted dist-info
+    for d in os.listdir(os.path.join(sys.prefix, "Lib", "site-packages")):
+        if "llama" in d.lower() and d.endswith(".dist-info"):
+            target = os.path.join(sys.prefix, "Lib", "site-packages", d)
+            if not os.path.exists(os.path.join(target, "RECORD")):
+                shutil.rmtree(target, ignore_errors=True)
+
     passes = [
         {
             "name": f"Pass 1: Portable GPU Optimization (All Supported Archs: {safe_archs})",
             "env": {
-                "CMAKE_ARGS": f"-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES={safe_archs}{toolkit_arg}{nvcc_arg} -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler",
+                "CMAKE_ARGS": f"-DGGML_CUDA=on -DGGML_CUDA_FA_ALL_QUANTS=ON -DCMAKE_CUDA_ARCHITECTURES={safe_archs}{toolkit_arg}{nvcc_arg} -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler",
                 "CUDAFLAGS": "-allow-unsupported-compiler",
                 "NVCC_PREPEND_FLAGS": "-allow-unsupported-compiler",
                 "FORCE_CMAKE": "1"
             },
-            "cmd": [sys.executable, "-m", "pip", "install", pkg_target, "--no-cache-dir"] + extra_args
+            "cmd": [sys.executable, "-m", "pip", "install", pkg_target, "--no-cache-dir", "--no-deps", "--force-reinstall"] + extra_args
         },
         {
             "name": f"Pass 2: Native GPU Optimization (sm_{gpu_arch} + CUDA)",
             "env": {
-                "CMAKE_ARGS": f"-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES={gpu_arch}{toolkit_arg}{nvcc_arg} -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler",
+                "CMAKE_ARGS": f"-DGGML_CUDA=on -DGGML_CUDA_FA_ALL_QUANTS=ON -DCMAKE_CUDA_ARCHITECTURES={gpu_arch}{toolkit_arg}{nvcc_arg} -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler",
                 "CUDAFLAGS": "-allow-unsupported-compiler",
                 "NVCC_PREPEND_FLAGS": "-allow-unsupported-compiler",
                 "FORCE_CMAKE": "1"
             },
-            "cmd": [sys.executable, "-m", "pip", "install", pkg_target, "--no-cache-dir"]
+            "cmd": [sys.executable, "-m", "pip", "install", pkg_target, "--no-cache-dir", "--no-deps", "--force-reinstall"] + extra_args
         },
         {
             "name": "Pass 3: Generic CUDA Fallback",
             "env": {
-                "CMAKE_ARGS": f"-DGGML_CUDA=on{toolkit_arg}{nvcc_arg} -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler",
+                "CMAKE_ARGS": f"-DGGML_CUDA=on -DGGML_CUDA_FA_ALL_QUANTS=ON{toolkit_arg}{nvcc_arg} -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler",
                 "CUDAFLAGS": "-allow-unsupported-compiler",
                 "NVCC_PREPEND_FLAGS": "-allow-unsupported-compiler",
                 "FORCE_CMAKE": "1"
             },
-            "cmd": [sys.executable, "-m", "pip", "install", pkg_target, "--no-cache-dir"]
+            "cmd": [sys.executable, "-m", "pip", "install", pkg_target, "--no-cache-dir", "--no-deps", "--force-reinstall"] + extra_args
         },
         {
             "name": "Pass 4: Pre-compiled Wheels Fallback (PyPI)",
