@@ -217,7 +217,7 @@ def build_local_llama(target_python=sys.executable):
     nvcc_bin = os.path.join(cuda_dir, "bin", "nvcc.exe") if cuda_dir else ""
     nvcc_arg = f' -DCMAKE_CUDA_COMPILER="{nvcc_bin}"' if (nvcc_bin and os.path.exists(nvcc_bin)) else ""
 
-    env["CMAKE_ARGS"] = f"-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES={archs}{toolkit_arg}{nvcc_arg} -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler"
+    env["CMAKE_ARGS"] = f"-DGGML_CUDA=on -DGGML_CUDA_FA_ALL_QUANTS=ON -DCMAKE_CUDA_ARCHITECTURES={archs}{toolkit_arg}{nvcc_arg} -DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler"
     env["CUDAFLAGS"] = "-allow-unsupported-compiler"
     env["NVCC_PREPEND_FLAGS"] = "-allow-unsupported-compiler"
     env["CMAKE_BUILD_PARALLEL_LEVEL"] = str(os.cpu_count() or 8)

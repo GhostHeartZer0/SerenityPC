@@ -192,10 +192,15 @@ def calculate_dynamic_gpu_layers(model_path: str, ctx_size: int, targeted_reserv
 
 # --- KV Cache Quant Map ---
 KV_QUANT_OPTIONS = {
-    "F16": None,  # default
+    "F16": 1,
+    "BF16": 16,
     "Q8_0": 8,
-    "Q4_0": 2,
+    "Q5_1": 7,
+    "Q5_0": 6,
     "Q4_1": 3,
+    "Q4_0": 2,
+    "IQ4_NL": 20,
+    "F32": 0,
 }
 
 # --- Context Size Presets ---
@@ -350,6 +355,43 @@ class DebateEngine:
 # ============================================================
 # Debate UI
 # ============================================================
+class LoadingSpinner(tk.Canvas):
+    """Canvas-based rotating loading spinner widget."""
+    def __init__(self, parent, size=24, color="#00ffcc", bg="#16213e", **kwargs):
+        super().__init__(parent, width=size, height=size, bg=bg, highlightthickness=0, bd=0, **kwargs)
+        self.size = size
+        self.color = color
+        self.angle = 0
+        self._running = False
+        self._after_id = None
+
+    def start(self):
+        if not self._running:
+            self._running = True
+            self._animate()
+
+    def stop(self):
+        self._running = False
+        if self._after_id:
+            try:
+                self.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+        self.delete("all")
+
+    def _animate(self):
+        if not self._running:
+            return
+        self.delete("all")
+        pad = 3
+        extent = 90
+        self.create_arc(pad, pad, self.size - pad, self.size - pad,
+                        start=self.angle, extent=extent, outline=self.color, width=2, style=tk.ARC)
+        self.angle = (self.angle + 20) % 360
+        self._after_id = self.after(40, self._animate)
+
+
 class DebateApp:
     """Tkinter UI for configuring and running debates."""
 
@@ -381,6 +423,7 @@ class DebateApp:
         self.topic_var = tk.StringVar()
         self.mode_var = tk.StringVar(value="Normal")
         self.rounds_var = tk.IntVar(value=3)
+        self.pacing_var = tk.StringVar(value="Simmer")
         self.voicing_var = tk.BooleanVar(value=False)
 
         self._build_ui()
@@ -436,7 +479,7 @@ class DebateApp:
         topic_entry.insert(0, "")
         tk.Label(topic_row, text="(blank = random)", font=("Segoe UI", 8, "italic"), bg=self.THEME["panel_bg"], fg="#666").pack(side="left")
 
-        # Rounds
+        # Rounds & Pacing
         rounds_row = tk.Frame(config_frame, bg=self.THEME["panel_bg"])
         rounds_row.pack(fill="x", padx=10, pady=5)
         tk.Label(rounds_row, text="Rounds:", font=("Segoe UI", 10), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], width=10, anchor="w").pack(side="left")
@@ -444,6 +487,11 @@ class DebateApp:
         rounds_combo = ttk.Combobox(rounds_row, textvariable=self.rounds_var, values=odd_rounds, state="readonly", width=8)
         rounds_combo.pack(side="left", padx=5)
         rounds_combo.set(3)
+
+        tk.Label(rounds_row, text="Pacing:", font=("Segoe UI", 10), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], width=8, anchor="e").pack(side="left", padx=(15, 5))
+        pacing_combo = ttk.Combobox(rounds_row, textvariable=self.pacing_var, values=["Speedy", "Simmer"], state="readonly", width=12)
+        pacing_combo.pack(side="left", padx=5)
+        pacing_combo.set("Simmer")
 
         # Voicing
         voice_row = tk.Frame(config_frame, bg=self.THEME["panel_bg"])
@@ -753,7 +801,8 @@ class DebateApp:
 
     def _run_debate(self, contestants: List[Dict], topic: str, rounds: int, mode: str):
         debate_win = tk.Toplevel(self.root)
-        debate_win.title(f"Debate: {topic[:60]}")
+        pacing = self.pacing_var.get()
+        debate_win.title(f"Debate [{pacing}]: {topic[:60]}")
         debate_win.geometry("900x700")
         debate_win.configure(bg=self.THEME["bg"])
 
@@ -761,7 +810,8 @@ class DebateApp:
         tk.Label(debate_win, text=f"⚔  {topic}  ⚔", font=("Segoe UI", 14, "bold"), bg=self.THEME["bg"], fg=self.THEME["highlight"], wraplength=850).pack(pady=(10, 5))
 
         names = [c["name"] for c in contestants]
-        tk.Label(debate_win, text=f"{' vs '.join(names)}  •  {rounds} rounds  •  {mode}", font=("Segoe UI", 10), bg=self.THEME["bg"], fg="#888").pack(pady=(0, 10))
+        pacing_desc = "Fast Exchanges (512 max tokens)" if pacing == "Speedy" else "Deep Reasoning (2048 max tokens)"
+        tk.Label(debate_win, text=f"{' vs '.join(names)}  •  {rounds} rounds  •  {mode}  •  {pacing} ({pacing_desc})", font=("Segoe UI", 9), bg=self.THEME["bg"], fg="#888").pack(pady=(0, 10))
 
         # Transcript
         transcript_view = scrolledtext.ScrolledText(
@@ -771,10 +821,17 @@ class DebateApp:
         )
         transcript_view.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Status bar
+        # Status Bar with Loading Spinner
+        status_frame = tk.Frame(debate_win, bg=self.THEME["panel_bg"])
+        status_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        spinner = LoadingSpinner(status_frame, size=18, color="#00ffcc", bg=self.THEME["panel_bg"])
+        spinner.pack(side="left", padx=(5, 5))
+        spinner.start()
+
         status_var = tk.StringVar(value="Preparing debate...")
-        status_bar = tk.Label(debate_win, textvariable=status_var, font=("Segoe UI", 9), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], anchor="w")
-        status_bar.pack(fill="x", padx=10, pady=(0, 10))
+        status_bar = tk.Label(status_frame, textvariable=status_var, font=("Segoe UI", 9), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], anchor="w")
+        status_bar.pack(side="left", fill="x", expand=True)
 
         def append_text(text):
             transcript_view.configure(state="normal")
@@ -788,7 +845,6 @@ class DebateApp:
             try:
                 import pyttsx3
                 tts = pyttsx3.init()
-                # Truncate for TTS sanity
                 tts.say(text[:500])
                 tts.runAndWait()
             except Exception:
@@ -797,12 +853,17 @@ class DebateApp:
         def debate_thread():
             transcript = []
 
-            # Build system prompts
+            # Build system prompts tailored to pacing
+            pacing_instruction = (
+                "Be very concise. Limit your rebuttal to 1-2 focused, high-impact paragraphs."
+                if pacing == "Speedy" else
+                "Provide comprehensive, deeply reasoned arguments and deconstruct opposing points with structured evidence."
+            )
             debate_instruction = (
                 f"\n\n[DEBATE CONTEXT]: You are participating in a structured debate on the topic: \"{topic}\". "
                 f"Your opponent(s): {', '.join(n for n in names if n != '{NAME}')}. "
-                f"Present strong arguments, counter opposing points, and maintain your position persuasively. "
-                f"Stay in character. Be concise but thorough."
+                f"{pacing_instruction} "
+                f"Stay in character. Advance your position persuasively."
             )
 
             system_prompts = {}
@@ -822,25 +883,49 @@ class DebateApp:
                 for round_num in range(1, rounds + 1):
                     for c_idx, contestant in enumerate(contestants):
                         name = contestant["name"]
-                        status_var.set(f"Round {round_num}/{rounds} — {name} is arguing...")
+                        status_var.set(f"Round {round_num}/{rounds} [{pacing}] — {name} is arguing...")
 
                         append_text(f"\n{'═' * 60}\n")
-                        append_text(f"  Round {round_num}  —  {name}\n")
+                        append_text(f"  Round {round_num}/{rounds} [{pacing}]  —  {name}\n")
                         append_text(f"{'═' * 60}\n\n")
 
-                        # Build conversation history for this turn
-                        messages = [{"role": "user", "content": f"The debate topic is: {topic}. Present your argument."}]
+                        # Build clean strictly alternating conversation history for this turn
+                        messages = [{"role": "user", "content": f"The debate topic is: \"{topic}\". Present your argument."}]
+                        
                         for prev in transcript:
-                            role = "assistant" if prev["name"] == name else "user"
-                            prefix = f"[{prev['name']}, Round {prev['round']}]: " if role == "user" else ""
-                            messages.append({"role": role, "content": f"{prefix}{prev['content']}"})
+                            is_self = (prev["name"] == name)
+                            role = "assistant" if is_self else "user"
+                            content = prev["content"].strip()
+                            if content.startswith("[Generation Error"):
+                                continue
+                            
+                            # Merge consecutive same-role messages to adhere to strict Jinja chat templates
+                            if messages and messages[-1]["role"] == role:
+                                messages[-1]["content"] += f"\n\n[{prev['name']}, Round {prev['round']}]: {content}"
+                            else:
+                                prefix = f"[{prev['name']}, Round {prev['round']}]: " if role == "user" else ""
+                                messages.append({"role": role, "content": f"{prefix}{content}"})
 
-                        if round_num > 1 or c_idx > 0:
-                            messages.append({"role": "user", "content": f"Round {round_num}: It's your turn. Respond to the previous arguments and strengthen your position."})
+                        # Ensure the final turn in history is a 'user' message
+                        if messages and messages[-1]["role"] == "assistant":
+                            messages.append({
+                                "role": "user",
+                                "content": f"Round {round_num} [{pacing}]: It is now your turn. Respond to the counterarguments above and advance your position."
+                            })
+                        elif messages and messages[-1]["role"] == "user":
+                            messages[-1]["content"] += f"\n\n[Moderator]: Round {round_num} [{pacing}]: Respond to the arguments above and advance your position."
+
+                        # Configure Pacing overrides
+                        model_config = dict(contestant["config"])
+                        if pacing == "Speedy":
+                            model_config["max_tokens"] = min(model_config.get("max_tokens", 512), 512)
+                            model_config["temperature"] = 0.7
+                        else:
+                            model_config["max_tokens"] = max(model_config.get("max_tokens", 2048), 1024)
+                            model_config["temperature"] = 0.85
 
                         # Determine if we need to reload the model
                         model_path = contestant["model_path"]
-                        model_config = contestant["config"]
                         config_changed = False
                         if current_model_config:
                             for key in ["n_gpu_layers", "n_ctx", "type_k", "type_v"]:
@@ -867,7 +952,7 @@ class DebateApp:
                             current_model_path = model_path
                             current_model_config = model_config
 
-                        status_var.set(f"Round {round_num}/{rounds} — {name} is generating...")
+                        status_var.set(f"Round {round_num}/{rounds} [{pacing}] — {name} is generating...")
                         try:
                             response = self.engine.generate_turn(current_model, system_prompts[name], messages, model_config)
                             transcript.append({"name": name, "round": round_num, "content": response})
@@ -877,12 +962,12 @@ class DebateApp:
                             error_msg = f"[Generation Error on {name}: {ge}]"
                             transcript.append({"name": name, "round": round_num, "content": error_msg})
                             append_text(f"{error_msg}\n")
-                            # Invalidate cache on failure
                             current_model = None
                             current_model_path = None
                             current_model_config = None
 
             finally:
+                spinner.stop()
                 if current_model is not None:
                     status_var.set("Unloading final model...")
                     del current_model
