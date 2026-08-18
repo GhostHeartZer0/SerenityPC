@@ -17,7 +17,7 @@ _ensure_venv()
 import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox, filedialog, ttk
 import tkinter.font as tkFont
-import threading, traceback, json, zlib, time, queue, re, atexit, webbrowser, requests, io, faulthandler, struct, random
+import threading, traceback, json, zlib, time, queue, re, atexit, webbrowser, io, faulthandler, struct, random
 try:
     import numpy as np
 except ImportError:
@@ -44,7 +44,6 @@ def setup_localized_environment():
     os.environ["TRITON_CACHE_DIR"] = triton_cache
     os.environ["TORCH_EXTENSIONS_DIR"] = torch_ext_dir
     os.environ["PYTHONPYCACHEPREFIX"] = pycache_dir
-    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 setup_localized_environment()
 if TYPE_CHECKING:
@@ -66,11 +65,13 @@ from System.serenity_utils import (WidgetLogger, FileAndWidgetLogger, LoadingScr
                             log_uncaught_exception, HardwareProfile, MediaProcessor, SystemMonitor,
                             enable_fault_debugging, ThreadSafeDict, ThreadSafeList, ThinkingDisplay,
                             patch_gguf_architecture, patch_llama_deallocator)
+#from System.ui_watchdog import UIWatchdog #commented out for now to save threads
+from System.kv_manager import KVManager, TurboVecIndex
+from System.tool_registry import GemmaToolRegistry
 from System.modular_registry import ModularRegistry, DynamicParamRegistry
 from System.markdown_engine import MarkdownEngine
-from System.kv_manager import KVManager, HistoryKeywordIndex
-from System.tool_registry import GemmaToolRegistry
 from System.settings_ui import open_settings_window, run_auto_detect
+from System.vault_manager import VaultManager, DISCLAIMER_WARNING_TEXT
 
 # --- Debugging & Fault Handling ---
 enable_fault_debugging()
@@ -219,7 +220,7 @@ atexit.register(kill_engine_on_shutdown)
 # ponytail: ThreadSafeDict, ThreadSafeList, and ThinkingDisplay moved to System/serenity_utils.py
 
 
-# ponytail: GemmaToolRegistry and HistoryKeywordIndex moved to System/tool_registry.py and System/kv_manager.py
+# ponytail: GemmaToolRegistry and TurboVecIndex moved to System/tool_registry.py and System/kv_manager.py
 
 class ChatbotApp:
     if TYPE_CHECKING:
@@ -308,6 +309,7 @@ class ChatbotApp:
         self.root.title("Serenity AI - Control Panel")
         self.loading_screen = loading_screen
         self.tool_registry = GemmaToolRegistry(self)
+        self.dynamic_param_registry = DynamicParamRegistry()
         
         self._rgb_supported_val = None
         self.media_cache = {}
@@ -337,18 +339,7 @@ class ChatbotApp:
         self.dirs = {d: os.path.join(self.script_dir, d) for d in ["Media", "History", "Models", "Logs", "System"]}
         for d in self.dirs.values(): os.makedirs(d, exist_ok=True)
         
-        self.history_index = None
         self.turbo_vec = None
-        threading.Thread(target=self._init_history_search, daemon=True).start()
-
-    def _init_history_search(self):
-        try:
-            # We delay loading to not stall UI
-            self.history_index = HistoryKeywordIndex(self.dirs["History"])
-            self.turbo_vec = self.history_index
-            print("[HISTORY_SEARCH] Background keyword index initialization complete.")
-        except Exception as e:
-            print(f"[HISTORY_SEARCH] Background init failed: {e}")
 
         # Start background polling        
         # Support user-preferred 'settings.json' in root or System/
@@ -388,8 +379,6 @@ class ChatbotApp:
             "md_strike": tkFont.Font(family="Open Sans", size=12, overstrike=True)
         }
         
-        self.dynamic_param_registry = DynamicParamRegistry()
-        
         # --- State Management ---
         self.state = ThreadSafeDict({
             "running": False, "deep_cook": False, "initial_setup": False,
@@ -425,7 +414,7 @@ class ChatbotApp:
         
         # Load DMN Backbone
         self._load_dmn_backbone()
-        self.max_persona_level = 6  # Persisted range for the slider
+        self.max_persona_level = 7  # Persisted range for the slider
         self.messages = []
         self.gpu_handle = None
         self.text_buffer = ""
@@ -452,6 +441,12 @@ class ChatbotApp:
         self.context_size_config["vision_video_deep"] = 16384
         
         self.kv_manager = None
+        self.vault_manager = VaultManager(
+            history_dir=self.dirs.get("History", os.path.join(self.script_dir, "History")),
+            state_dir=self.dirs.get("System", os.path.join(self.script_dir, "System"))
+        )
+        self._last_user_activity_time = time.time()
+        self._vault_modal_open = False
         self.temp_config = {tier: 0.8 if "vision" not in tier else 0.1 for tier in tier_list}
         self.temp_config["vision_multimodal"] = 1.0 # Gemma-4 Best Practice
         self.temp_config["secret"] = 0.5 # More accurate and focused
@@ -585,13 +580,130 @@ class ChatbotApp:
         self._initialize_rgb_state()
         
         # Windnd Drag and Drop Hook
-        try:
-            windnd.hook_dropfiles(self.root, func=self._handle_drop_files)
-        except Exception as e:
-            print(f"Failed to hook drag-and-drop: {e}")
+        if windnd is not None and hasattr(windnd, "hook_dropfiles"):
+            try:
+                windnd.hook_dropfiles(self.root, func=self._handle_drop_files)
+            except Exception as e:
+                print(f"Failed to hook drag-and-drop: {e}")
 
         # Non-blocking, lazy query for RGB support
         self._check_rgb_support_async()
+
+        # Non-blocking, background initialization for TurboVec history indexing
+        threading.Thread(target=self._init_turbovec, daemon=True).start()
+
+        # Start Inactivity Watchdog & Startup Lock Verification 
+        self._start_inactivity_watchdog()
+        if hasattr(self, 'vault_manager') and self.vault_manager.is_locked():
+            self.root.after(200, self.show_vault_unlock_modal)
+
+    def _on_user_activity(self, event=None):
+        """Resets the inactivity timer on user interaction."""
+        self._last_user_activity_time = time.time()
+
+    def _start_inactivity_watchdog(self):
+        """Binds user activity listeners and starts the background inactivity watchdog."""
+        try:
+            self.root.bind_all("<Key>", self._on_user_activity, add="+")
+            self.root.bind_all("<Button-1>", self._on_user_activity, add="+")
+            self.root.bind_all("<Button-2>", self._on_user_activity, add="+")
+            self.root.bind_all("<Button-3>", self._on_user_activity, add="+")
+        except Exception: pass
+        self.root.after(3000, self._check_inactivity_lock)
+
+    def _check_inactivity_lock(self):
+        """Checks if inactivity timeout is exceeded and locks vault if active."""
+        if hasattr(self, 'vault_manager') and self.vault_manager.is_lock_enabled():
+            if not self.vault_manager.is_locked() and not self._vault_modal_open:
+                limit_sec = self.vault_manager.get_auto_lock_seconds()
+                if limit_sec > 0:
+                    idle_time = time.time() - self._last_user_activity_time
+                    if idle_time >= limit_sec:
+                        print(f"[VAULT] Inactivity timeout ({limit_sec}s) reached. Locking Serenity Vault.")
+                        self.vault_manager.lock()
+                        self.show_vault_unlock_modal()
+        # Reschedule watchdog
+        if self.root.winfo_exists():
+            self.root.after(3000, self._check_inactivity_lock)
+
+    def show_vault_unlock_modal(self, on_unlock_callback=None):
+        """Displays a modal startup lock / unlock dialog."""
+        if self._vault_modal_open: return
+        self._vault_modal_open = True
+
+        unlock_win = tk.Toplevel(self.root)
+        unlock_win.title("Serenity Vault - Locked")
+        unlock_win.geometry("420x280")
+        unlock_win.config(bg=THEME["bg_color"])
+        unlock_win.transient(self.root)
+        unlock_win.grab_set()
+
+        # Center on parent window
+        try:
+            x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 210
+            y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 140
+            unlock_win.geometry(f"420x280+{x}+{y}")
+        except: pass
+
+        tk.Label(unlock_win, text="🔒 SERENITY VAULT", font=("Segoe UI", 13, "bold"), 
+                 bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(pady=(20, 4))
+
+        tk.Label(unlock_win, text="Enter Master Password to access system & archives:", 
+                 font=("Segoe UI", 9), bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(pady=(0, 15))
+
+        pwd_var = tk.StringVar()
+        pwd_entry = tk.Entry(unlock_win, textvariable=pwd_var, show="*", width=26, 
+                             bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                             insertbackground=THEME["fg_color"], font=("Segoe UI", 11), relief=tk.SUNKEN)
+        pwd_entry.pack(pady=5)
+        pwd_entry.focus_set()
+
+        err_lbl = tk.Label(unlock_win, text="", font=("Segoe UI", 9, "bold"), bg=THEME["bg_color"], fg="#ff4444")
+        err_lbl.pack(pady=4)
+
+        def _try_unlock(event=None):
+            pwd = pwd_var.get().strip()
+            if not pwd:
+                err_lbl.config(text="Password cannot be empty.")
+                return
+
+            if self.vault_manager.unlock(pwd):
+                self._vault_modal_open = False
+                self._last_user_activity_time = time.time()
+                unlock_win.destroy()
+                self._log_and_display("Vault unlocked successfully.")
+                if on_unlock_callback:
+                    on_unlock_callback()
+                else:
+                    self.load_history()
+                    if hasattr(self, 'history_state') and self.history_state.get("view") == "list":
+                        self._render_history_menu()
+            else:
+                err_lbl.config(text="❌ Incorrect master password.")
+                pwd_var.set("")
+                pwd_entry.focus_set()
+
+        pwd_entry.bind("<Return>", _try_unlock)
+        pwd_entry.bind("<KP_Enter>", _try_unlock)
+
+        btn_row = tk.Frame(unlock_win, bg=THEME["bg_color"])
+        btn_row.pack(pady=15)
+
+        tk.Button(btn_row, text="🔓 Unlock", command=_try_unlock,
+                  bg=THEME["button_active_color"], fg=THEME["fg_color"], 
+                  font=("Segoe UI", 9, "bold"), padx=12, pady=3, relief=tk.FLAT).pack(side=tk.LEFT, padx=6)
+
+        def _on_close_modal():
+            if self.vault_manager.is_locked():
+                if messagebox.askyesno("Exit Serenity", "Serenity is locked. Exit application?", parent=unlock_win):
+                    self._vault_modal_open = False
+                    unlock_win.destroy()
+                    self.root.destroy()
+            else:
+                self._vault_modal_open = False
+                unlock_win.destroy()
+
+        unlock_win.protocol("WM_DELETE_WINDOW", _on_close_modal)
 
     def check_gpu_support(self):
         """Final verification of GPU capabilities."""
@@ -1109,8 +1221,20 @@ class ChatbotApp:
         if self.chat_history is not None:
             self.chat_history.pack_forget()
         
-        # Reset to level selection for a fresh entry
-        self.history_state = {"view": "levels", "level": None}
+        # Reset to unified list view
+        if not hasattr(self, 'history_state') or not isinstance(self.history_state, dict):
+            self.history_state = {}
+        self.history_state.setdefault("view", "list")
+        self.history_state.setdefault("level_filter", "All Levels")
+        self.history_state.setdefault("date_filter", "All Dates")
+        self.history_state.setdefault("sort_by", "Newest First")
+        self.history_state.setdefault("search_query", "")
+        self.history_state.setdefault("deep_search_matches", {})
+        if not hasattr(self, '_history_content_cache'):
+            self._history_content_cache = {}
+        if not hasattr(self, '_search_debounce_timer'):
+            self._search_debounce_timer = None
+
         self._render_history_menu()
         
         if self.history_menu_frame is not None:
@@ -1122,29 +1246,28 @@ class ChatbotApp:
             self.btn_active.config(bg=THEME["button_bg_color"], fg="#aaaaaa")
 
     def _render_history_menu(self):
-        """Hierarchical history menu renderer (Refactor 2026)."""
+        """Unified History Archive Renderer with Dropdowns, Date Grouping, and Deep Search."""
         if self.history_menu_frame is None: return
         
         # Clear frame
         for child in self.history_menu_frame.winfo_children():
             child.destroy()
             
-        view = self.history_state["view"]
+        view = self.history_state.get("view", "list")
         
-        # Navigation Bar
+        # Navigation / Control Bar
         nav_bar = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
-        nav_bar.pack(side=tk.TOP, fill=tk.X, pady=5)
+        nav_bar.pack(side=tk.TOP, fill=tk.X, pady=(2, 4))
         
-        if view != "levels":
-            back_btn = tk.Button(nav_bar, text="⬅ Back", command=self._back_history, 
+        if view == "content":
+            back_btn = tk.Button(nav_bar, text="⬅ Back to Archives", command=self._back_history, 
                                 bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT,
-                                font=("Segoe UI", 10, "bold"), cursor="hand2")
+                                font=("Segoe UI", 9, "bold"), cursor="hand2")
             back_btn.pack(side=tk.LEFT, padx=5)
             
-        title = "History Archive"
-        if view == "models": title = f"Archive: Level {self.history_state['level']}"
-        elif view == "content": 
             title = f"Archive: {self.history_state.get('current_display_name', 'Chat Log')}"
+            tk.Label(nav_bar, text=title, font=self.fonts["italic"], bg=THEME["bg_color"], 
+                     fg=THEME["electric_blue"]).pack(side=tk.LEFT, padx=10)
             
             # Action Frame for right-side buttons
             act_frame = tk.Frame(nav_bar, bg=THEME["bg_color"])
@@ -1161,82 +1284,380 @@ class ChatbotApp:
             tk.Button(act_frame, text="🗑️ Delete", command=self._delete_current_archive, 
                       bg="#4a0000", fg="white", relief=tk.FLAT, font=("Segoe UI", 9, "bold"),
                       cursor="hand2").pack(side=tk.LEFT, padx=5)
-        
-        tk.Label(nav_bar, text=title, font=self.fonts["italic"], bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT, padx=10)
 
-        # Content Area
-        content_frame = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
-        content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-        if view == "levels":
-            # Show Unlocked Levels
-            levels = [1, 2, 3, 4, 5, 6]
-            if (self.depth_slider and self.depth_slider.cget('to') == 7) or self.active_persona_level == 7 or self.max_persona_level >= 7:
-                levels.append(7)
-                
-            for lvl in levels:
-                btn = tk.Button(content_frame, text=f"Level {lvl}", height=2,
-                               command=lambda l=lvl: self._select_history_level(l),
-                               bg=THEME["widget_bg_color"], fg=THEME["fg_color"], relief=tk.RAISED,
-                               font=self.fonts["main"], cursor="hand2")
-                btn.pack(fill=tk.X, padx=40, pady=8)
-                
-        elif view == "models":
-            lvl = self.history_state["level"]
-            history_dir = self.dirs["History"]
-            try:
-                files = [f for f in os.listdir(history_dir) if f.endswith(f"_lvl{lvl}.history.jsonz")]
-                files.sort(key=lambda f: os.path.getmtime(os.path.join(history_dir, f)), reverse=True)
-            except: files = []
-            
-            if not files:
-                tk.Label(content_frame, text="No history files found for this level.", 
-                         bg=THEME["bg_color"], fg="#888888", font=self.fonts["italic"]).pack(pady=40)
-            else:
-                # Scrollable list for models if there are many
-                canvas = tk.Canvas(content_frame, bg=THEME["bg_color"], highlightthickness=0)
-                scrollbar = tk.Scrollbar(content_frame, orient="vertical", command=canvas.yview)
-                scroll_frame = tk.Frame(canvas, bg=THEME["bg_color"])
-                
-                scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-                chat_frame_width = self.history_menu_frame.winfo_width()-20
-                canvas.create_window((0, 0), window=scroll_frame, anchor="nw", width=chat_frame_width)
-                canvas.configure(yscrollcommand=scrollbar.set)
-                
-                canvas.pack(side="left", fill="both", expand=True)
-                scrollbar.pack(side="right", fill="y")
-
-                for f in files:
-                    display_name = f.replace(f"_lvl{lvl}.history.jsonz", "").replace("-", " ").replace("_", " ")
-                    btn = tk.Button(scroll_frame, text=display_name, height=2, anchor="w", padx=15,
-                                   command=lambda path=os.path.join(history_dir, f): self._load_selected_history(path),
-                                   bg=THEME["widget_bg_color"], fg=THEME["fg_color"], relief=tk.RAISED,
-                                   font=self.fonts["small"], cursor="hand2")
-                    btn.pack(fill=tk.X, padx=10, pady=4)
-                    
-        elif view == "content":
-            # Show the text view
+            # Content Area for Text View
+            content_frame = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
+            content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
             self.past_history_view.pack(in_=content_frame, side=tk.TOP, fill="both", expand=True)
+            return
 
-    def _select_history_level(self, lvl):
-        self.history_state["view"] = "models"
-        self.history_state["level"] = lvl
+        # --- LIST VIEW: UNIFIED FILTER & SEARCH CONTROLS ---
+        tk.Label(nav_bar, text="📁 History Archive", font=("Segoe UI", 10, "bold"), 
+                 bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT, padx=6)
+        
+        # Search Entry Bar (Enter to search, Search button, No auto-search)
+        search_frame = tk.Frame(nav_bar, bg=THEME["widget_bg_color"], bd=1, relief=tk.SUNKEN)
+        search_frame.pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        
+        search_var = tk.StringVar(value=self.history_state.get("search_query", ""))
+        search_entry = tk.Entry(search_frame, textvariable=search_var, bg=THEME["widget_bg_color"], 
+                                fg=THEME["fg_color"], insertbackground=THEME["fg_color"], 
+                                relief=tk.FLAT, font=self.fonts["small"])
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4, pady=2)
+        
+        def _execute_search(event=None):
+            q = search_var.get().strip()
+            self.history_state["search_query"] = q
+            self._trigger_history_search(q)
+
+        # Bind Enter key to search
+        search_entry.bind("<Return>", _execute_search)
+        search_entry.bind("<KP_Enter>", _execute_search)
+
+        # Dedicated Search Button
+        btn_search = tk.Button(search_frame, text="🔍 Search", command=_execute_search,
+                               bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT,
+                               font=("Segoe UI", 8, "bold"), cursor="hand2", padx=6, pady=1)
+        btn_search.pack(side=tk.RIGHT, padx=(2, 2))
+        
+        if search_var.get():
+            btn_clear_search = tk.Button(search_frame, text="✕", command=lambda: self._clear_history_search(search_var),
+                                         bg=THEME["widget_bg_color"], fg="#aaaaaa", relief=tk.FLAT, 
+                                         font=("Segoe UI", 8), cursor="hand2", bd=0)
+            btn_clear_search.pack(side=tk.RIGHT, padx=2)
+
+        # Dropdowns Frame
+        filter_frame = tk.Frame(nav_bar, bg=THEME["bg_color"])
+        filter_frame.pack(side=tk.RIGHT, padx=4)
+
+        # 1. Level Filter Dropdown
+        level_options = ["All Levels", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7"]
+        lvl_var = tk.StringVar(value=self.history_state.get("level_filter", "All Levels"))
+        lvl_combo = ttk.Combobox(filter_frame, textvariable=lvl_var, values=level_options, 
+                                 state="readonly", width=11, font=("Segoe UI", 9))
+        lvl_combo.pack(side=tk.LEFT, padx=3)
+        lvl_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("level_filter", lvl_var.get()))
+
+        # 2. Date Separator & Filter Dropdown
+        date_options = ["All Dates", "Today", "Yesterday", "Past 7 Days", "Past 30 Days", "Older"]
+        date_var = tk.StringVar(value=self.history_state.get("date_filter", "All Dates"))
+        date_combo = ttk.Combobox(filter_frame, textvariable=date_var, values=date_options, 
+                                  state="readonly", width=11, font=("Segoe UI", 9))
+        date_combo.pack(side=tk.LEFT, padx=3)
+        date_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("date_filter", date_var.get()))
+
+        # 3. Sort Dropdown
+        sort_options = ["Newest First", "Oldest First", "Name (A-Z)", "Name (Z-A)", "Size (Largest)"]
+        sort_var = tk.StringVar(value=self.history_state.get("sort_by", "Newest First"))
+        sort_combo = ttk.Combobox(filter_frame, textvariable=sort_var, values=sort_options, 
+                                  state="readonly", width=12, font=("Segoe UI", 9))
+        sort_combo.pack(side=tk.LEFT, padx=3)
+        sort_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("sort_by", sort_var.get()))
+
+        # Content Area: Scrollable Canvas with Targeted Mousewheel Binding
+        content_frame = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
+        content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(2, 0))
+
+        canvas = tk.Canvas(content_frame, bg=THEME["bg_color"], highlightthickness=0)
+        scroll_frame = tk.Frame(canvas, bg=THEME["bg_color"])
+        self._history_canvas = canvas
+
+        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        
+        def _on_canvas_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(canvas_window, width=event.width)
+            
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        canvas.bind("<Configure>", _on_canvas_configure)
+        scroll_frame.bind("<Configure>", _on_frame_configure)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # TARGETED SCROLLING: strictly bind mousewheel when entering history widget, unbind on leave
+        self._bind_targeted_history_scroll(canvas, canvas)
+        self._bind_targeted_history_scroll(scroll_frame, canvas)
+
+        # Fetch, Filter, Sort, and Group History Entries
+        entries = self._get_all_history_entries()
+        q = self.history_state.get("search_query", "").lower()
+        lvl_filter = self.history_state.get("level_filter", "All Levels")
+        date_filter = self.history_state.get("date_filter", "All Dates")
+        sort_by = self.history_state.get("sort_by", "Newest First")
+        deep_matches = self.history_state.get("deep_search_matches", {})
+
+        filtered = []
+        for e in entries:
+            # Level Filter
+            if lvl_filter != "All Levels":
+                try:
+                    target_lvl = int(lvl_filter.replace("Level ", ""))
+                    if e.get("level") != target_lvl:
+                        continue
+                except: pass
+            
+            # Date Filter
+            if date_filter != "All Dates" and e.get("date_bucket") != date_filter:
+                continue
+
+            # Search Query (Title + Deep JSONZ match)
+            if q:
+                title_match = q in e.get("display_name", "").lower() or q in e.get("filename", "").lower()
+                deep_match = e.get("path") in deep_matches
+                if not (title_match or deep_match):
+                    continue
+                if deep_match:
+                    e["snippet"] = deep_matches[e["path"]]
+
+            filtered.append(e)
+
+        # Sort entries
+        if sort_by == "Newest First":
+            filtered.sort(key=lambda x: x.get("mtime", 0), reverse=True)
+        elif sort_by == "Oldest First":
+            filtered.sort(key=lambda x: x.get("mtime", 0))
+        elif sort_by == "Name (A-Z)":
+            filtered.sort(key=lambda x: x.get("display_name", "").lower())
+        elif sort_by == "Name (Z-A)":
+            filtered.sort(key=lambda x: x.get("display_name", "").lower(), reverse=True)
+        elif sort_by == "Size (Largest)":
+            filtered.sort(key=lambda x: x.get("size_bytes", 0), reverse=True)
+
+        if not filtered:
+            msg = "No history archives match current filters." if (q or lvl_filter != "All Levels" or date_filter != "All Dates") else "No history files found."
+            tk.Label(scroll_frame, text=msg, bg=THEME["bg_color"], fg="#888888", 
+                     font=self.fonts["italic"]).pack(pady=40)
+            return
+
+        # Render Entries with Date Bucket Separators if sorted by Date
+        current_bucket = None
+        is_date_sorted = sort_by in ["Newest First", "Oldest First"]
+
+        for item in filtered:
+            bucket = item.get("date_bucket", "Other")
+            if is_date_sorted and bucket != current_bucket:
+                current_bucket = bucket
+                sep_frame = tk.Frame(scroll_frame, bg=THEME["bg_color"])
+                sep_frame.pack(fill=tk.X, padx=12, pady=(10, 3))
+                tk.Label(sep_frame, text=f"── {bucket.upper()} ──", bg=THEME["bg_color"], 
+                         fg=THEME["electric_blue"], font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+                self._bind_targeted_history_scroll(sep_frame, canvas)
+
+            # Item Card Container
+            card = tk.Frame(scroll_frame, bg=THEME["widget_bg_color"], bd=1, relief=tk.RAISED, cursor="hand2")
+            card.pack(fill=tk.X, padx=10, pady=3)
+            self._bind_targeted_history_scroll(card, canvas)
+
+            # Header row inside card
+            hdr_row = tk.Frame(card, bg=THEME["widget_bg_color"])
+            hdr_row.pack(fill=tk.X, padx=8, pady=(5, 2))
+            self._bind_targeted_history_scroll(hdr_row, canvas)
+
+            # Level Badge
+            lvl_val = item.get("level")
+            lvl_text = f" L{lvl_val} " if lvl_val is not None else " ARCH "
+            lvl_bg = "#5c007a" if lvl_val in [6, 7] else ("#005a9e" if lvl_val == 5 else "#2a4d3a")
+            badge = tk.Label(hdr_row, text=lvl_text, bg=lvl_bg, fg="white", 
+                             font=("Segoe UI", 8, "bold"), padx=4, pady=1)
+            badge.pack(side=tk.LEFT, padx=(0, 8))
+            self._bind_targeted_history_scroll(badge, canvas)
+
+            # Display Name
+            name_lbl = tk.Label(hdr_row, text=item.get("display_name", "Chat Session"), 
+                                bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                                font=self.fonts["main"], anchor="w")
+            name_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            self._bind_targeted_history_scroll(name_lbl, canvas)
+
+            # Date & Size Subtitle
+            meta_str = f"{item.get('date_str', '')} • {item.get('size_str', '')}"
+            meta_lbl = tk.Label(hdr_row, text=meta_str, bg=THEME["widget_bg_color"], 
+                                fg="#888888", font=("Segoe UI", 8))
+            meta_lbl.pack(side=tk.RIGHT, padx=4)
+            self._bind_targeted_history_scroll(meta_lbl, canvas)
+
+            # Deep Search Snippet Preview (if matched)
+            if item.get("snippet"):
+                snip_frame = tk.Frame(card, bg="#1a2332", bd=0)
+                snip_frame.pack(fill=tk.X, padx=8, pady=(0, 6))
+                self._bind_targeted_history_scroll(snip_frame, canvas)
+                snip_lbl = tk.Label(snip_frame, text=f"💬 {item['snippet']}", bg="#1a2332", 
+                                    fg="#70a5ff", font=("Segoe UI", 8, "italic"), anchor="w", justify="left")
+                snip_lbl.pack(side=tk.LEFT, padx=6, pady=3, fill=tk.X, expand=True)
+                self._bind_targeted_history_scroll(snip_lbl, canvas)
+
+            # Click binding across entire card
+            card_path = item["path"]
+            card.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
+            name_lbl.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
+            badge.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
+            meta_lbl.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
+
+    def _bind_targeted_history_scroll(self, widget, canvas):
+        """Recursively binds targeted mousewheel scrolling so it never bleeds into outer widgets."""
+        def _on_enter(e):
+            canvas.bind_all("<MouseWheel>", lambda evt: canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units"))
+            canvas.bind_all("<Button-4>", lambda evt: canvas.yview_scroll(-1, "units"))
+            canvas.bind_all("<Button-5>", lambda evt: canvas.yview_scroll(1, "units"))
+
+        def _on_leave(e):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        widget.bind("<Enter>", _on_enter, add="+")
+        widget.bind("<Leave>", _on_leave, add="+")
+
+    def _get_all_history_entries(self):
+        """Scans History directory and parses metadata and date categories."""
+        import datetime
+        history_dir = self.dirs.get("History")
+        if not history_dir or not os.path.exists(history_dir):
+            return []
+
+        entries = []
+        now = datetime.datetime.now()
+        today = now.date()
+
+        try:
+            files = [f for f in os.listdir(history_dir) if f.endswith(".history.jsonz") or f.endswith(".history.encz")]
+        except Exception:
+            return []
+
+        for f in files:
+            full_path = os.path.join(history_dir, f)
+            try:
+                mtime = os.path.getmtime(full_path)
+                size_bytes = os.path.getsize(full_path)
+            except Exception:
+                mtime = 0
+                size_bytes = 0
+
+            # Level extraction via regex (supporting both .jsonz and .encz)
+            lvl = None
+            match = re.search(r"_lvl(\d+)\.history\.(?:jsonz|encz)$", f)
+            if match:
+                try: lvl = int(match.group(1))
+                except: lvl = None
+
+            # Clean Display Name
+            display_name = re.sub(r"_lvl\d+\.history\.(?:jsonz|encz)$", "", f).replace("-", " ").replace("_", " ")
+            if f.endswith(".encz"):
+                display_name = f"🔒 {display_name}"
+
+            # Date calculation & grouping bucket
+            dt = datetime.datetime.fromtimestamp(mtime)
+            file_date = dt.date()
+            diff_days = (today - file_date).days
+
+            if diff_days == 0:
+                bucket = "Today"
+            elif diff_days == 1:
+                bucket = "Yesterday"
+            elif diff_days <= 7:
+                bucket = "Past 7 Days"
+            elif diff_days <= 30:
+                bucket = "Past 30 Days"
+            else:
+                bucket = "Older"
+
+            # Formatted size
+            if size_bytes >= 1024 * 1024:
+                size_str = f"{size_bytes / (1024*1024):.1f} MB"
+            elif size_bytes >= 1024:
+                size_str = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_str = f"{size_bytes} B"
+
+            date_str = dt.strftime("%b %d, %Y • %I:%M %p")
+
+            entries.append({
+                "path": full_path,
+                "filename": f,
+                "display_name": display_name,
+                "level": lvl,
+                "mtime": mtime,
+                "datetime": dt,
+                "date_str": date_str,
+                "size_bytes": size_bytes,
+                "size_str": size_str,
+                "date_bucket": bucket
+            })
+
+        return entries
+
+    def _on_history_dropdown_change(self, key, value):
+        self.history_state[key] = value
         self._render_history_menu()
+
+    def _clear_history_search(self, search_var):
+        search_var.set("")
+        self.history_state["search_query"] = ""
+        self.history_state["deep_search_matches"] = {}
+        self._render_history_menu()
+
+    def _trigger_history_search(self, query):
+        """Triggers real-time title filter and launches background deep JSONZ/ENCZ full-text search."""
+        self._render_history_menu()
+        if len(query) >= 2:
+            threading.Thread(target=self._async_deep_history_search, args=(query,), daemon=True).start()
+
+    def _async_deep_history_search(self, query):
+        """Deep Full-Text Search inside raw .history.jsonz and .history.encz message contents."""
+        history_dir = self.dirs.get("History")
+        if not history_dir or not os.path.exists(history_dir): return
+
+        matches = {}
+        q_lower = query.lower()
+
+        try:
+            files = [os.path.join(history_dir, f) for f in os.listdir(history_dir) if f.endswith(".history.jsonz") or f.endswith(".history.encz")]
+        except: return
+
+        for path in files:
+            # Check cached content or decompress/decrypt via vault_manager
+            msgs = self._history_content_cache.get(path)
+            if msgs is None:
+                try:
+                    if hasattr(self, 'vault_manager'):
+                        msgs = self.vault_manager.read_history_messages(path)
+                    else:
+                        import zlib, json
+                        with open(path, "rb") as fp:
+                            msgs = json.loads(zlib.decompress(fp.read()).decode("utf-8"))
+                    self._history_content_cache[path] = msgs
+                except Exception:
+                    continue
+
+            # Search within dialogue contents
+            for m in msgs:
+                content = str(m.get("content", ""))
+                idx = content.lower().find(q_lower)
+                if idx != -1:
+                    start = max(0, idx - 30)
+                    end = min(len(content), idx + len(query) + 40)
+                    snippet = ("..." if start > 0 else "") + content[start:end].replace("\n", " ") + ("..." if end < len(content) else "")
+                    matches[path] = f"[{m.get('role', 'msg').capitalize()}]: {snippet}"
+                    break
+
+        self.root.after(0, self._on_deep_search_completed, query, matches)
+
+    def _on_deep_search_completed(self, query, matches):
+        if self.history_state.get("search_query", "").strip() == query.strip():
+            self.history_state["deep_search_matches"] = matches
+            self._render_history_menu()
 
     def _back_history(self):
-        if self.history_state["view"] == "content":
-            self.past_history_view.pack_forget()
-            self.history_state["view"] = "models"
-        elif self.history_state["view"] == "models":
-            self.history_state["view"] = "levels"
-            self.history_state["level"] = None
+        self.history_state["view"] = "list"
         self._render_history_menu()
 
-    def _load_selected_history(self, path):
-        # Extract display name from path
+    def _load_selected_history(self, path, search_query=None):
+        """Loads selected archive into content text view with search term highlighting and vault support."""
         fname = os.path.basename(path)
-        lvl_suffix = f"_lvl{self.history_state.get('level', '')}.history.jsonz"
-        display_name = fname.replace(lvl_suffix, "").replace("-", " ").replace("_", " ")
+        display_name = re.sub(r"_lvl\d+\.history\.(?:jsonz|encz)$", "", fname).replace("-", " ").replace("_", " ")
+        if fname.endswith(".encz"):
+            display_name = f"🔒 {display_name}"
         
         self.history_state["view"] = "content"
         self.history_state["current_path"] = path
@@ -1244,20 +1665,47 @@ class ChatbotApp:
         
         self.past_history_view.config(state='normal')
         self.past_history_view.delete('1.0', tk.END)
+        self.past_history_view.tag_config("search_match", background="#005a9e", foreground="white")
         
         try:
-            import zlib, json
-            with open(path, 'rb') as f: 
-                msgs = json.loads(zlib.decompress(f.read()).decode('utf-8'))
+            if path in self._history_content_cache:
+                msgs = self._history_content_cache[path]
+            else:
+                if hasattr(self, 'vault_manager'):
+                    msgs = self.vault_manager.read_history_messages(path)
+                else:
+                    import zlib, json
+                    with open(path, 'rb') as f: 
+                        msgs = json.loads(zlib.decompress(f.read()).decode('utf-8'))
+                self._history_content_cache[path] = msgs
             
             for m in msgs: 
-                who = "You" if m['role'] == 'user' else ("Cecilia" if (self.history_state.get('level') in [7, '7'] or m.get('role') == 'cecilia' or m.get('persona') == 'Cecilia') else self._get_persona_label())
+                who = "You" if m['role'] == 'user' else ("Cecilia" if (m.get('role') == 'cecilia' or m.get('persona') == 'Cecilia') else self._get_persona_label())
                 tag = "user" if m['role'] == 'user' else "ai"
                 content = self._clean_latex_artifacts(m['content'])
                 entry = f"{who}: {content}\n{'-'*50}\n\n"
                 self.past_history_view.insert(tk.END, entry, (tag,))
             
-            self.past_history_view.yview_moveto(0.0) # Start from top for long history
+            # Highlight search occurrences if searching
+            if search_query and len(search_query) >= 2:
+                start_pos = '1.0'
+                first_match = None
+                while True:
+                    start_pos = self.past_history_view.search(search_query, start_pos, stopindex=tk.END, nocase=True)
+                    if not start_pos: break
+                    if not first_match: first_match = start_pos
+                    end_pos = f"{start_pos}+{len(search_query)}c"
+                    self.past_history_view.tag_add("search_match", start_pos, end_pos)
+                    start_pos = end_pos
+                if first_match:
+                    self.past_history_view.see(first_match)
+                else:
+                    self.past_history_view.yview_moveto(0.0)
+            else:
+                self.past_history_view.yview_moveto(0.0)
+        except PermissionError:
+            self.past_history_view.insert(tk.END, "🔒 This history file is encrypted.\n\nPlease unlock the Serenity Vault to view this archive.")
+            self.show_vault_unlock_modal(on_unlock_callback=lambda: self._load_selected_history(path, search_query))
         except Exception as e:
             self.past_history_view.insert(tk.END, f"Error loading history: {e}")
             
@@ -1276,6 +1724,8 @@ class ChatbotApp:
         if confirm:
             try:
                 os.remove(path)
+                if hasattr(self, '_history_content_cache') and path in self._history_content_cache:
+                    del self._history_content_cache[path]
                 print(f"[SYSTEM] Deleted history file: {path}")
                 self._back_history()
             except Exception as e:
@@ -1285,24 +1735,21 @@ class ChatbotApp:
         """Toggle edit mode for the history view."""
         current_state = self.past_history_view.cget("state")
         if current_state == "disabled":
-            # Switch to EDIT mode
             self.past_history_view.config(state="normal")
-            self._render_history_menu() # Refresh buttons
+            self._render_history_menu()
         else:
-            # Switch to VIEW mode and SAVE
             self._save_history_edits()
             self.past_history_view.config(state="disabled")
-            self._render_history_menu() # Refresh buttons
+            self._render_history_menu()
 
     def _save_history_edits(self):
-        """Parse the edited text and save it back to the compressed history file."""
+        """Parse the edited text and save it back to the history file via VaultManager."""
         path = self.history_state.get("current_path")
         if not path or not os.path.exists(path): return
         
         raw_text = self.past_history_view.get("1.0", tk.END).strip()
         if not raw_text: return
         
-        # Split by the separator used in _load_selected_history
         separator = "-" * 50
         chunks = raw_text.split(f"\n{separator}\n\n")
         
@@ -1311,7 +1758,6 @@ class ChatbotApp:
             chunk = chunk.strip()
             if not chunk: continue
             
-            # Determine role
             role = "user"
             content = chunk
             if chunk.startswith("You: "):
@@ -1326,10 +1772,9 @@ class ChatbotApp:
             elif chunk.startswith("System: "):
                 role = "system"
                 content = chunk[8:]
-            elif ": " in chunk[:20]: # Try to guess if user changed the name
+            elif ": " in chunk[:20]:
                 parts = chunk.split(": ", 1)
                 content = parts[1]
-                # Default role mapping
                 if parts[0].lower() in ["you", "user"]: role = "user"
                 elif parts[0].lower() in ["serenity", "cecilia", "assistant", "ai"]: role = "assistant"
                 elif parts[0].lower() == "system": role = "system"
@@ -1339,10 +1784,15 @@ class ChatbotApp:
         if not new_msgs: return
         
         try:
-            import zlib, json
-            compressed_data = zlib.compress(json.dumps(new_msgs).encode('utf-8'))
-            with open(path, 'wb') as f:
-                f.write(compressed_data)
+            if hasattr(self, 'vault_manager'):
+                self.vault_manager.write_history_messages(path, new_msgs)
+            else:
+                import zlib, json
+                compressed_data = zlib.compress(json.dumps(new_msgs).encode('utf-8'))
+                with open(path, 'wb') as f:
+                    f.write(compressed_data)
+            if hasattr(self, '_history_content_cache'):
+                self._history_content_cache[path] = new_msgs
             print(f"[SYSTEM] Saved edits to history: {path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save edits: {e}")
@@ -1819,9 +2269,9 @@ class ChatbotApp:
             self._log_and_display("Model and Persona already active."); return
 
         # --- APEX VRAM SOFT-CLEAR ---
-        # If toggling between layers of the exact same model file, keep KV/Logic loaded (exclude transcendent tier for full purge)
+        # If toggling between layers of the exact same model file, keep KV/Logic loaded (exclude Live tier for full purge)
         soft_clear = False
-        if self.model and getattr(self, "model_path", None) == path and target_tier != "transcendent":
+        if self.model and getattr(self, "model_path", None) == path and target_tier not in ("transcendent", "Live"):
             soft_clear = True
             if SYSTEM_MONITOR_LOADED and getattr(self, "gpu_handle", None):
                 try:
@@ -2044,7 +2494,7 @@ class ChatbotApp:
                         fname = os.path.basename(path)
                         if ext in ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']:
                             budget = VisionHandler._determine_visual_budget(user_msg)
-                            b64 = VisionHandler.encode_image(path, budget=budget)
+                            b64 = VisionHandler.encode_image(path, budget=budget, query=user_msg)
                             if b64:
                                 content_list.append({"type": "text", "text": f"[Attached Image: {fname} ({path})]"})
                                 content_list.append({
@@ -2472,7 +2922,7 @@ class ChatbotApp:
                             break
 
                 proj_path = adjacent_proj or self._find_projector_for_model(self.model_path)
-                if proj_path and os.path.exists(proj_path) and (has_active_multimedia or self.config.get("image_handling") == "native"):
+                if proj_path and os.path.exists(proj_path) and has_active_multimedia:
                     try:
                         from llama_cpp.llama_chat_format import Llava15ChatHandler
                         chat_handler = Llava15ChatHandler(clip_model_path=proj_path, verbose=True)
@@ -2554,48 +3004,43 @@ class ChatbotApp:
             use_flash = params.pop('flash_attn', True)
             
             # Resolve dynamic KV cache types from config/specs
+            # Resolve validated universal KV cache types
             import llama_cpp as lcpp
             cache_map = {
                 "f32": getattr(lcpp, "GGML_TYPE_F32", 0),
                 "f16": getattr(lcpp, "GGML_TYPE_F16", 1),
                 "fp16": getattr(lcpp, "GGML_TYPE_F16", 1),
-                "bf16": getattr(lcpp, "GGML_TYPE_BF16", 29),
+                "bf16": getattr(lcpp, "GGML_TYPE_BF16", 16),
                 "q8_0": getattr(lcpp, "GGML_TYPE_Q8_0", 8),
-                "q4_0": getattr(lcpp, "GGML_TYPE_Q4_0", 2),
-                "q4_1": getattr(lcpp, "GGML_TYPE_Q4_1", 3),
-                "q5_0": getattr(lcpp, "GGML_TYPE_Q5_0", 6),
                 "q5_1": getattr(lcpp, "GGML_TYPE_Q5_1", 7),
-                "q6_0": getattr(lcpp, "GGML_TYPE_Q6_K", 14),
+                "q5_0": getattr(lcpp, "GGML_TYPE_Q5_0", 6),
+                "q4_1": getattr(lcpp, "GGML_TYPE_Q4_1", 3),
+                "q4_0": getattr(lcpp, "GGML_TYPE_Q4_0", 2),
                 "iq4_nl": getattr(lcpp, "GGML_TYPE_IQ4_NL", 20),
-                "turbo3_tcq": getattr(lcpp, "GGML_TYPE_Q3_K", 11),
-                "tq3": getattr(lcpp, "GGML_TYPE_Q3_K", 11),
-                "turbo3": getattr(lcpp, "GGML_TYPE_Q3_K", 11),
-                "turbo2_tcq": getattr(lcpp, "GGML_TYPE_Q2_K", 10),
-                "tq2": getattr(lcpp, "GGML_TYPE_Q2_K", 10),
-                "turbo2": getattr(lcpp, "GGML_TYPE_Q2_K", 10),
-                "tq4": getattr(lcpp, "GGML_TYPE_Q4_K", 12),
-                "turbo4": getattr(lcpp, "GGML_TYPE_Q4_K", 12),
             }
             
-            # Retrieve independent K/V Cache selections from config, falling back to params or defaults
+            # Retrieve independent K/V Cache selections from config
+            UNIVERSAL_KV = {"fp16", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"}
             k_fmt = self.config.get("k_cache_type", params.pop("cache_type_k", "q8_0")).lower()
-            v_fmt = self.config.get("v_cache_type", params.pop("cache_type_v", "q4_0")).lower()
+            v_fmt = self.config.get("v_cache_type", params.pop("cache_type_v", "q8_0")).lower()
+            if k_fmt not in UNIVERSAL_KV:
+                print(f"[APEX] Warning: Unsupported K cache format '{k_fmt}'. Falling back to 'q8_0'.")
+                k_fmt = "q8_0"
+            if v_fmt not in UNIVERSAL_KV:
+                print(f"[APEX] Warning: Unsupported V cache format '{v_fmt}'. Falling back to 'q8_0'.")
+                v_fmt = "q8_0"
             
             t_k = cache_map.get(k_fmt, getattr(lcpp, "GGML_TYPE_Q8_0", 8))
-            t_v = cache_map.get(v_fmt, getattr(lcpp, "GGML_TYPE_Q4_0", 2))
+            t_v = cache_map.get(v_fmt, getattr(lcpp, "GGML_TYPE_Q8_0", 8))
             
             is_kv_quantized = (t_k != getattr(lcpp, "GGML_TYPE_F16", 1)) or (t_v != getattr(lcpp, "GGML_TYPE_F16", 1))
             is_gemma_family = "gemma" in (self.model_path.lower() if self.model_path else "")
             
             # Flash Attention Logic:
-            # - Normal models: disable FA if KV is quantized (to prevent standard crashes)
-            # - Gemma models: REQUIRE FA if KV is quantized (to prevent context initialization crashes due to SWA/MTP padding)
+            # - Quantized KV cache (q8_0, q4_0) strictly requires Flash Attention in llama.cpp to initialize context.
             if is_kv_quantized:
-                if is_gemma_family:
-                    print("[SYSTEM Note] Gemma model with quantized KV cache detected. Forcing Flash Attention ON to prevent SWA context creation failures.")
-                    use_flash = True
-                else:
-                    use_flash = False
+                print("[SYSTEM Note] Quantized KV cache detected. Enforcing Flash Attention ON to ensure context initialization.")
+                use_flash = True
 
             
             hao_preset = self.config.get("hao_preset", "exps=CPU")
@@ -2625,21 +3070,35 @@ class ChatbotApp:
             # Speculative MTP Drafting Setup
             draft_model = None
             mtp_model_path = None
-            if self.config.get("speculative_drafting", True) and not target_tier.startswith("vision_") and not chat_handler:
+            if self.config.get("speculative_drafting", False) and not target_tier.startswith("vision_") and not chat_handler:
                 assistant_path = None
                 mtp_mapping = self.config.get("mtp_mapping", {})
                 
                 # 1. Check persistent MTP mapping first
+                norm_main = os.path.normcase(os.path.abspath(self.model_path)) if self.model_path else ""
                 if self.model_path in mtp_mapping and os.path.exists(mtp_mapping[self.model_path]):
-                    assistant_path = mtp_mapping[self.model_path]
+                    cand = mtp_mapping[self.model_path]
+                    if norm_main and os.path.normcase(os.path.abspath(cand)) != norm_main:
+                        assistant_path = cand
+                    else:
+                        del mtp_mapping[self.model_path]
+                        self.config["mtp_mapping"] = mtp_mapping
+                        if hasattr(self, 'save_config'):
+                            self.save_config()
                 else:
-                    # 2. Search for assistant model in same directory
+                    # 2. Search for assistant model in same directory (excluding main model itself)
                     if self.model_path:
                         model_dir = os.path.dirname(self.model_path)
                         if os.path.exists(model_dir):
                             for f in os.listdir(model_dir):
-                                if f.lower().endswith(".gguf") and any(k in f.lower() for k in ["assistant", "mtp"]):
-                                    assistant_path = os.path.join(model_dir, f)
+                                cand_path = os.path.join(model_dir, f)
+                                if (
+                                    f.lower().endswith(".gguf")
+                                    and norm_main
+                                    and os.path.normcase(os.path.abspath(cand_path)) != norm_main
+                                    and any(k in f.lower() for k in ["assistant", "mtp", "dflash", "drafter"])
+                                ):
+                                    assistant_path = cand_path
                                     break
                     
                     # 3. Drafter MTPicker (Registration Wizard)
@@ -2658,7 +3117,7 @@ class ChatbotApp:
                                     filetypes=[("GGUF Models", "*.gguf")],
                                     initialdir=os.path.dirname(self.model_path)
                                 )
-                                if selected_path:
+                                if selected_path and os.path.normcase(os.path.abspath(selected_path)) != norm_main:
                                     assistant_path = selected_path
                                     mtp_mapping[self.model_path] = assistant_path
                                     self.config["mtp_mapping"] = mtp_mapping
@@ -2667,19 +3126,22 @@ class ChatbotApp:
                         except Exception as gui_err:
                             print(f"[ENGINE] MTPicker GUI failed: {gui_err}")
                 
-                if assistant_path and os.path.exists(assistant_path):
-                    mtp_model_path = assistant_path
-                    print(f"[ENGINE] Speculative MTP assistant model mapped: {os.path.basename(assistant_path)}")
-                
-                # 4. Fallback to prompt lookup decoding if no assistant model is found
-                if mtp_model_path is None:
+                if assistant_path and os.path.exists(assistant_path) and os.path.normcase(os.path.abspath(assistant_path)) != norm_main:
                     try:
-                        from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
-                        pred_tokens = 8 if n_layers > 0 else 2
-                        draft_model = LlamaPromptLookupDecoding(num_pred_tokens=pred_tokens)
-                        print(f"[ENGINE] Speculative drafting enabled: LlamaPromptLookupDecoding(num_pred_tokens={pred_tokens})")
-                    except Exception as spec_err:
-                        print(f"[ENGINE] Failed to initialize prompt lookup speculative draft model: {spec_err}")
+                        from System.gguf_draft_model import GgufDraftModel
+                        draft_model = GgufDraftModel(assistant_path, n_gpu_layers=0, n_ctx=min(n_ctx, 4096))
+                        msg = f"[MTP] Speculative GGUF assistant model loaded: {os.path.basename(assistant_path)}"
+                        print(f"[ENGINE] {msg}")
+                        self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
+                        self.process_queue.put({"status": "log_update", "content": f"\n{msg}\n"})
+                    except Exception as draft_err:
+                        err_msg = f"[MTP] Failed to load GgufDraftModel ({draft_err}). Speculative drafting disabled."
+                        print(f"[ENGINE] {err_msg}")
+                        self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {err_msg}"})
+                        draft_model = None
+                else:
+                    # Pure MTP / companion model drafting only: No speculative prompt lookup decoding fallback
+                    draft_model = None
 
             is_diffusion = "diffusion" in self.model_path.lower()
             try:
@@ -2695,31 +3157,58 @@ class ChatbotApp:
                     )
                     print(f"[ENGINE] Diffusion model detected. Initializing DiffusionCLIWrapper.")
                 else:
-                    patch_gguf_architecture(self.model_path)
-                    model = Llama(
-                        model_path=self.model_path, 
-                        n_gpu_layers=n_layers,       # Dynamic HAO
-                    n_ctx=n_ctx,                 # Dynamic Context Window
-                    n_threads=HardwareProfile.get_optimal_threads(), # Dynamic physical/logical core allocation
-                    n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
-                    n_ubatch=512,                # Increased for Parallel Prefill performance on i7-12700KF
-                    n_keep=resolved_n_keep,      # FIXED: Preserves system prompt and visual structures in KV Cache
-                    n_seq_max=1,                 # Explicit single sequence for max memory savings
-                    chat_handler=chat_handler,
-                    chat_format=resolved_format, # FIXED: Prevents template collisions on Gemma-4 structures
-                    verbose=True, 
-                    use_mmap=True,               # i7 handles kernel mapping
-                    flash_attn=use_flash,        # Dynamic Flash Attention
-                    type_k=t_k, type_v=t_v,      # Dynamic KV Quantization
-                    offload_kqv=not no_kv_offload,
-                    logits_all=False,                            # DISABLED: Prevents n_ctx * vocab_size (98k x 262k) 96GB float32 OOM array allocation
-                    tensor_split=None,
-                    rpc_servers=None,
-                    override_tensors=override_tensors,
-                    draft_model=draft_model,      # Fallback Drafting
-                    mtp_model_path=mtp_model_path, # True MTP Drafting
-                    **params
-                )
+                    try:
+                        model = Llama(
+                            model_path=self.model_path, 
+                            n_gpu_layers=n_layers,       # Dynamic HAO
+                            n_ctx=n_ctx,                 # Dynamic Context Window
+                            n_threads=HardwareProfile.get_optimal_threads(), # Dynamic physical/logical core allocation
+                            n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
+                            n_ubatch=512,                # Increased for Parallel Prefill performance on i7-12700KF
+                            n_keep=resolved_n_keep,      # FIXED: Preserves system prompt and visual structures in KV Cache
+                            n_seq_max=1,                 # Explicit single sequence for max memory savings
+                            chat_handler=chat_handler,
+                            chat_format=resolved_format, # FIXED: Prevents template collisions on Gemma-4 structures
+                            verbose=True, 
+                            use_mmap=True,               # i7 handles kernel mapping
+                            flash_attn=use_flash,        # Dynamic Flash Attention
+                            type_k=t_k, type_v=t_v,      # Dynamic KV Quantization
+                            offload_kqv=not no_kv_offload,
+                            logits_all=False,                            # DISABLED: Prevents n_ctx * vocab_size (98k x 262k) 96GB float32 OOM array allocation
+                            tensor_split=None,
+                            rpc_servers=None,
+                            override_tensors=override_tensors,
+                            draft_model=draft_model,      # Speculative GgufDraftModel or PromptLookup
+                            **params
+                        )
+                    except Exception as init_err:
+                        if draft_model is not None:
+                            print(f"[ENGINE] Drafter initialization failed ({init_err}). Retrying without draft model...")
+                            model = Llama(
+                                model_path=self.model_path, 
+                                n_gpu_layers=n_layers,
+                                n_ctx=n_ctx,
+                                n_threads=HardwareProfile.get_optimal_threads(),
+                                n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
+                                n_ubatch=512,
+                                n_keep=resolved_n_keep,
+                                n_seq_max=1,
+                                chat_handler=chat_handler,
+                                chat_format=resolved_format,
+                                verbose=True, 
+                                use_mmap=True,
+                                flash_attn=use_flash,
+                                type_k=t_k, type_v=t_v,
+                                offload_kqv=not no_kv_offload,
+                                logits_all=False,
+                                tensor_split=None,
+                                rpc_servers=None,
+                                override_tensors=override_tensors,
+                                draft_model=None,
+                                **params
+                            )
+                        else:
+                            raise init_err
             except Exception as e:
                 err_msg = f"CRITICAL: Llama initialization failed: {e}"
                 self.process_queue.put({"status": "diag_log_update", "content": err_msg})
@@ -2744,7 +3233,7 @@ class ChatbotApp:
                     print(f"[APEX] VRAM Floor Check Failed: {e}")
 
             # --- GGUF KV Cache Benchmark ---
-            if not is_diffusion:
+            if not is_diffusion and self.config.get("benchmark_enabled", False):
                 try:
                     print(f"[BENCHMARK] Running GGUF KV Cache Benchmark...")
                     start_b = time.time()
@@ -2801,6 +3290,24 @@ class ChatbotApp:
                 except Exception as be:
                     print(f"[BENCHMARK] GGUF Benchmark failed: {be}")
 
+            # --- Tokenizer BOS Verification ---
+            try:
+                bos_id = model.token_bos() if hasattr(model, 'token_bos') else -1
+                eos_id = model.token_eos() if hasattr(model, 'token_eos') else -1
+                print(f"[ENGINE] Tokenizer BOS Verification: BOS ID={bos_id} (Valid: {bos_id != -1}), EOS ID={eos_id}")
+                self.process_queue.put({
+                    "status": "diag_log_update",
+                    "content": f"[ENGINE] Tokenizer BOS Verified: BOS ID={bos_id} (Valid: {bos_id != -1}) | EOS ID={eos_id}"
+                })
+            except Exception as tok_err:
+                print(f"[ENGINE] BOS Verification check: {tok_err}")
+
+            if draft_model is not None and assistant_path:
+                self.process_queue.put({
+                    "status": "diag_log_update",
+                    "content": f"[MTP] Speculative Decoding Active: Assistant={os.path.basename(assistant_path)}"
+                })
+
             if self.stop_process.is_set(): return
             self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
 
@@ -2829,6 +3336,11 @@ class ChatbotApp:
                         logits_all=False,            # DISABLED: Prevents n_ctx * vocab_size array allocation
                         tensor_split=None,
                     )
+                    try:
+                        bos_id = model.token_bos() if hasattr(model, 'token_bos') else -1
+                        eos_id = model.token_eos() if hasattr(model, 'token_eos') else -1
+                        print(f"[ENGINE] Tokenizer BOS Verification (Retry): BOS ID={bos_id} (Valid: {bos_id != -1}), EOS ID={eos_id}")
+                    except Exception: pass
                     if self.stop_process.is_set(): return
                     self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
                     return
@@ -2862,9 +3374,12 @@ class ChatbotApp:
                 )
                 sys_content += grounding_rule
 
-            is_gemma = "gemma" in self.model_path.lower()
-            has_chat_handler = (getattr(self.model, "chat_handler", None) is not None) or self._ensure_chat_handler()
+            is_gemma = "gemma" in (self.model_path or "").lower()
             has_multimodal_content = any(isinstance(m.get("content"), list) for m in temp_messages)
+            if has_multimodal_content:
+                self._ensure_chat_handler()
+            elif hasattr(self.model, "chat_handler") and self.model.chat_handler is not None:
+                self.model.chat_handler = None
             
             # Setup Inference Params
             params = self._get_inference_params(temp_messages)
@@ -2873,115 +3388,79 @@ class ChatbotApp:
                 if "<turn|>" not in params.get("stop", []):
                     params.setdefault("stop", []).append("<turn|>")
                             
-                sys_clean = sys_content.strip()
-                def official_q(s): return f"<|\"|>{s}<|\"|>"
+            sys_clean = sys_content.strip()
+            def official_q(s): return f"<|\"|>{s}<|\"|>"
 
-                # Gemma-4: Tool definitions injection (Template-Aligned)
-                tool_defs = self.tool_registry.get_gemma_declarations(self.active_persona_level)
-                tools = self.tool_registry.get_definitions(self.active_persona_level)
-                if tools:
-                    tool_defs += "\n" # Gemma-4 alignment safety
-                    sys_clean += f"\n[TOOL CALLING RULE]: If the user's request requires information you do not have (e.g. weather, news, file content), you MUST immediately output a tool call tag. DO NOT provide a final answer, summarize your plan, or explain why you are searching in the final response. EXECUTE it using this format: <|tool_call>call:tool_name{{arg1:{official_q('value1')}}}<tool_call|>"
-                    sys_clean += "\n[PERMISSION]: You are an autonomous agent. You have PERMISSION to execute any tool call immediately when needed. Do NOT ask for permission or wait for further instructions before calling a tool."
-                
-                # Level 3+ or Deep Cook need the thought channel constraint
-                is_diffusion = "diffusion" in self.model_path.lower()
-                if not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
-                    if is_gemma:
-                        sys_clean += (
-                            "\n[CRITICAL RESTRICTION]: Complete ALL internal analysis, planning, and tone-checks inside your thought channel before transitioning to the final response."
-                            " Keep thoughts extremely concise, direct, and structured."
-                        )
-                    else:
-                        sys_clean += (
-                            "\n[CRITICAL RESTRICTION]: You MUST begin your response by opening the thought channel. Complete ALL internal analysis, planning, and tone-checks inside that channel before closing it."
-                            "\nNote: The thought channel is already opened for you with '<think>'. Write your thoughts directly, and close the channel with '</think>' when transitioning to the final response. DO NOT output '</think>' early. Keep thoughts extremely concise, direct, and structured. Do not repeat instructions, constraints, or write conversational filler (e.g., 'Wait', 'Actually', 'Let me see') in your thoughts. Cut straight to analyzing the input and planning actions."
-                        )
-                elif self.active_persona_level == 2:
-                    sys_clean += "\n[SEARCH PROTOCOL]: If you need information, output a tool call IMMEDIATELY. Do not explain your reasoning unless the search fails."
-                
-                # Gemma-4: Enable logic mode via <|think|> at start of system prompt for high levels
-                thinking_tag = "<|think|>\n" if (self.active_persona_level >= 3 or self.state.get("deep_cook")) else ""
-                # Reconstruct sys_content for both the manual prompt builder and fallback blocks
-                sys_content = f"{thinking_tag}{sys_clean}\n{tool_defs}".strip()
+            # Programmatic Tool Calling (PTC) definitions injection (arXiv:2608.06370v1)
+            tools = self.tool_registry.get_definitions(self.active_persona_level)
+            if tools and self.active_persona_level >= 2:
+                tool_defs = self.tool_registry.get_python_stubs(self.active_persona_level)
+                sys_clean += f"\n[PROGRAMMATIC TOOL CALLING]: To retrieve live data or execute system actions, invoke tools via Python function calls (e.g. `web_search(query='...')`).\n{tool_defs}"
 
-            if is_gemma and not (has_multimodal_content and has_chat_handler):
-                prompt_str = f"<|turn>system\n{sys_content}\n<turn|>\n"
-
-                            
-                is_diffusion = "diffusion" in self.model_path.lower()
-                
-                # TriAttention KV Pruning
-                if is_diffusion:
-                     # Diffusion architectures allocate massive contiguous ubatches. Limit history strictly.
-                     processed_msgs = temp_messages[-6:]
-                elif self.kv_manager and TRI_ATTENTION_ENABLED:
-                     processed_msgs = self.kv_manager.enforce_kv_budget(temp_messages)
+            # Level 3+ or Deep Cook need the thought channel constraint
+            is_diffusion = "diffusion" in self.model_path.lower()
+            if not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
+                if is_gemma:
+                    sys_clean = f"<|think|>\n{sys_clean}"
                 else:
-                     processed_msgs = temp_messages[-12:]
-                            
-                for m in processed_msgs:
-                    role = "model" if m["role"] == "assistant" else m["role"]
-                    raw_content = m["content"]
-                    
-                    # MULTIMODAL SAFETY: If content is a list (vision/image messages),
-                    # extract only the text parts for the Gemma prompt string builder.
-                    if isinstance(raw_content, list):
-                        text_parts = []
-                        for part in raw_content:
-                            if isinstance(part, dict):
-                                if part.get("type") == "text":
-                                    text_parts.append(part.get("text", ""))
-                                elif part.get("type") == "image_url":
-                                    text_parts.append("[image]")  # Placeholder for prompt context
-                                elif part.get("type") == "input_audio":
-                                    text_parts.append("[audio]")
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        content = " ".join(text_parts).strip()
-                    else:
-                        content = str(raw_content).strip() if raw_content else ""
-                    
-                    # HF Template alignment: Strip previous thoughts from the context window (Gemma-4 Official Rule)
-                    if role == "model":
-                        content = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', content, flags=re.IGNORECASE)
-                        content = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', content, flags=re.IGNORECASE)
-                        content = re.sub(r'<\|think\|>.*?(?:<\/\|think\|>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
-                        content = re.sub(r'<thought(?:>|\b).*?(?:<\/thought>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
-                        content = content.strip()
-                    
-                    # Append ALL messages (user AND model) to the prompt
-                    prompt_str += f"<|turn>{role}\n{content}<turn|>\n"
-                
-                # Start the model's response turn
-                prompt_str += "<|turn>model\n"
-                if not is_gemma and not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
-                    prompt_str += "<think>\n"
+                    sys_clean += (
+                        "\n[CRITICAL RESTRICTION]: Wrap your internal reasoning, analysis, and planning inside <think>...</think>. "
+                        "Keep thoughts direct and structured. Once closed with </think>, provide only the clean final response."
+                    )
+            elif self.active_persona_level == 2:
+                sys_clean += "\n[SEARCH PROTOCOL]: If you need live information, invoke a search tool immediately."
+            
+            sys_content = sys_clean
 
-                            
-                status_text = "Analyzing logical momentum..." if self.active_persona_level >= 3 else "Direct Strike: Pre-computing..."
-                
-                # Wit-Layer: Batching Message
-                self.process_queue.put({"status": "thinking_status", "content": status_text})
-                
-                # APEX GIL-SAFETY: We use internal streaming even for "non-streaming" responses.
-                full_resp = ""
-                in_thought_channel = False
-                thought_detected = False
-                stream_lead_buffer = ""
-                streamed_answer_chars = 0
-                closers_regex = r'(?:<\/think>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\/thought>|\[\/DRAFT\])'
-                
-                history_len = len(prompt_str) - len(sys_clean) - len(tool_defs)
-                print(f"[INFERENCE] Prompt breakdown -> sys_clean: {len(sys_clean)}, tool_defs: {len(tool_defs)}, history/other: {history_len}")
-                print(f"[INFERENCE] Prefill phase starting. Prompt length: {len(prompt_str)} chars.")
-                gen_iterator = self.model(prompt_str, stream=True, echo=False, **params)
-                
-                for chunk in gen_iterator:
-                    if self.stop_process.is_set():
-                        break
-                    token_text = chunk["choices"][0]["text"]
-                    full_resp += token_text
+            # TriAttention KV Pruning
+            is_diffusion = "diffusion" in self.model_path.lower()
+            if is_diffusion:
+                # Diffusion architectures allocate massive contiguous ubatches. Limit history strictly.
+                processed_msgs = temp_messages[-6:]
+            elif self.kv_manager and TRI_ATTENTION_ENABLED:
+                processed_msgs = self.kv_manager.enforce_kv_budget(temp_messages)
+            else:
+                processed_msgs = temp_messages[-12:]
+                        
+            # Multi-turn thought pruning to avoid feeding previous thoughts back into history
+            cleaned_msgs = []
+            for m in processed_msgs:
+                role = "assistant" if m.get("role") in ("assistant", "model") else m.get("role")
+                content = m.get("content")
+                if role == "assistant" and isinstance(content, str):
+                    content = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', content, flags=re.IGNORECASE)
+                    content = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', content, flags=re.IGNORECASE)
+                    content = re.sub(r'<\|think\|>.*?(?:<\/\|think\|>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
+                    content = re.sub(r'<thought(?:>|\b).*?(?:<\/thought>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
+                    content = content.strip()
+                cleaned_msgs.append({"role": role, "content": content})
+            processed_msgs = cleaned_msgs
+
+            msgs = [{"role": "system", "content": sys_content}] + processed_msgs
+
+            # BOS & Tokenizer Verification Log
+            if hasattr(self.model, 'token_bos'):
+                bos_id = self.model.token_bos()
+                print(f"[INFERENCE] Native Jinja Chat: BOS verified (ID={bos_id})")
+
+            status_text = "Analyzing logical momentum..." if self.active_persona_level >= 3 else "Direct Strike: Pre-computing..."
+            self.process_queue.put({"status": "thinking_status", "content": status_text})
+            
+            # GIL-Safety: Internal Streaming via Native Embedded Jinja Template (Thought Stream Demuxed)
+            full_resp = ""
+            in_thought_channel = False
+            thought_opened = False
+            thought_detected = False
+            stream_lead_buffer = ""
+            streamed_answer_chars = 0
+            closers_regex = r'(?:<\/think>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\/thought>|\[\/DRAFT\])'
+
+            gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
+            for chunk in gen_iterator:
+                if self.stop_process.is_set(): break
+                if "content" in chunk["choices"][0]["delta"]:
+                    txt = chunk["choices"][0]["delta"]["content"]
+                    full_resp += txt
                     
                     lower_resp = full_resp.lower()
                     
@@ -2990,16 +3469,20 @@ class ChatbotApp:
                         if any(tag in lower_resp for tag in ["<think>", "<|channel>thought", "<thought>", "<|think|>", "[draft]"]):
                             thought_detected = True
                             in_thought_channel = True
-                            stream_lead_buffer = ""  # Discard buffered opener
+                            thought_opened = True
+                            stream_lead_buffer = "" # Discard buffered opener
                         elif full_resp.strip().startswith("<") and len(full_resp.strip()) < 25:
-                            stream_lead_buffer += token_text
+                            # Potential opener still forming; buffer without streaming
+                            stream_lead_buffer += txt
                         else:
+                            # Not an opener; flush any lead buffer and stream directly
                             if stream_lead_buffer:
                                 self.process_queue.put({"status": "streaming", "content": stream_lead_buffer})
                                 stream_lead_buffer = ""
-                            self.process_queue.put({"status": "streaming", "content": token_text})
+                            self.process_queue.put({"status": "streaming", "content": txt})
                     else:
                         if in_thought_channel:
+                            # Check if thought channel has closed
                             if any(c in lower_resp for c in ["</think>", "<channel|>", "</channel|>", "</thought>", "[/draft]", "<|channel>text", "<|channel>assistant"]):
                                 in_thought_channel = False
                                 parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
@@ -3009,6 +3492,7 @@ class ChatbotApp:
                                         self.process_queue.put({"status": "streaming", "content": ans_chunk})
                                         streamed_answer_chars += len(ans_chunk)
                         else:
+                            # Post-thought active answer streaming
                             parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
                             if len(parts) > 1 and parts[-1]:
                                 ans_chunk = parts[-1][streamed_answer_chars:]
@@ -3016,344 +3500,108 @@ class ChatbotApp:
                                     self.process_queue.put({"status": "streaming", "content": ans_chunk})
                                     streamed_answer_chars += len(ans_chunk)
                             else:
-                                self.process_queue.put({"status": "streaming", "content": token_text})
-                    
-                    time.sleep(0.001) 
-                    
-                    # Loop Mitigation: Check for infinite repetition loops
-                    if len(full_resp) > 200 and self._detect_repetition(full_resp):
-                        self.process_queue.put({"status": "diag_log_update", "content": "[RUNTIME] Repetition loop detected! Breaking inference stream to preserve sanity."})
-                        print("[RUNTIME] Repetition loop detected! Breaking inference stream.")
-                        break 
-                
-                # Re-format as a response object for usage/diag extraction below
-                response = {"choices": [{"text": full_resp, "finish_reason": "stop"}], "usage": {}}
-                
-                # --- DIAGNOSTICS TELEMETRY ---
-                diag_msg = f"--- GENERATION DIAGNOSTICS ---\n"
-                diag_msg += f"Finish Reason: {response['choices'][0].get('finish_reason', 'N/A')}\n"
-                usage = response.get('usage', {})
-                diag_msg += f"Tokens Used: {usage.get('completion_tokens', 'N/A')} (Total: {usage.get('total_tokens', 'N/A')})\n"
-                diag_msg += f"Raw Output Length: {len(full_resp)} characters\n"
-                
-                # Extract and list all structural tags found
-                tags = re.findall(r'<[^>]+>', full_resp)
-                if tags:
-                    diag_msg += f"Generated Tags: {', '.join(tags)}\n"
-                    
-                diag_msg += "------------------------------"
-                self.process_queue.put({"status": "diag_log_update", "content": diag_msg})
-                
-                # --- GEMMA-4 HARMONIZATION PATCH (Background) ---
-                # 1. Telemetry Extraction
-                match_deep = re.search(r'\[DEEPLOG:(.*?)\]', full_resp, re.IGNORECASE | re.DOTALL)
-                if match_deep:
-                    extracted_log = match_deep.group(1).strip()
-                    full_resp = re.sub(r'\[DEEPLOG:.*?\]', '', full_resp, flags=re.IGNORECASE | re.DOTALL).strip()
-                    log_path = os.path.join(self.dirs["Logs"], "subconscious_journal.txt")
+                                self.process_queue.put({"status": "streaming", "content": txt})
+
+                time.sleep(0.001) # Heartbeat for UI
+
+                # Loop Mitigation: Check for infinite repetition loops
+                if len(full_resp) > 200 and self._detect_repetition(full_resp):
+                    self.process_queue.put({"status": "diag_log_update", "content": "[RUNTIME] Repetition loop detected! Breaking inference stream to preserve sanity."})
+                    print("[RUNTIME] Repetition loop detected! Breaking inference stream.")
+                    break
+
+            think_log = ""
+            final_answer = full_resp.strip()
+            
+            # Telemetry Extraction (subconscious / prime chronicles)
+            match_deep = re.search(r'\[DEEPLOG:(.*?)\]', final_answer, flags=re.IGNORECASE | re.DOTALL)
+            if match_deep:
+                extracted_log = match_deep.group(1).strip()
+                final_answer = re.sub(r'\[DEEPLOG:.*?\]', '', final_answer, flags=re.IGNORECASE | re.DOTALL).strip()
+                log_path = os.path.join(self.dirs["Logs"], "subconscious_journal.txt")
+                try:
                     with open(log_path, "a", encoding="utf-8") as f:
                         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {extracted_log}\n")
+                except Exception: pass
 
-                match_prime = re.search(r'\[PRIME_MEMORY:(.*?)\]', full_resp, re.IGNORECASE | re.DOTALL)
-                if match_prime:
-                    extracted_prime = match_prime.group(1).strip()
-                    full_resp = re.sub(r'\[PRIME_MEMORY:.*?\]', '', full_resp, flags=re.IGNORECASE | re.DOTALL).strip()
-                    prime_path = os.path.join(self.dirs["System"], ".prime_chronicles.txt")
+            match_prime = re.search(r'\[PRIME_MEMORY:(.*?)\]', final_answer, flags=re.IGNORECASE | re.DOTALL)
+            if match_prime:
+                extracted_prime = match_prime.group(1).strip()
+                final_answer = re.sub(r'\[PRIME_MEMORY:.*?\]', '', final_answer, flags=re.IGNORECASE | re.DOTALL).strip()
+                prime_path = os.path.join(self.dirs["System"], ".prime_chronicles.txt")
+                try:
                     with open(prime_path, "a", encoding="utf-8") as f:
                         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {extracted_prime}\n")
+                except Exception: pass
 
-                # 2. Advanced Scout & Split (Gemma-4 Optimized)
-                closers = [
-                    r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
-                    r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
-                ]
-
-                all_splits = []
-                for tag_pattern in closers:
-                    # MISSION: Search the entire response to find ALL potential boundaries
-                    # (Removed the 15k limit to handle ultra-long Deep Cook reasoning)
-                    for m in re.finditer(tag_pattern, full_resp, re.IGNORECASE):
-                        all_splits.append(m.end())
-                
-                # Structural Fallback: If no explicit closer, check if model started with thought but stopped at turn closer
-                if not all_splits and ("<think>" in full_resp or "<|channel>thought" in full_resp):
-                    # Check for implicit end-of-thought at the very end of the string
-                    all_splits.append(len(full_resp))
-
-                all_splits.sort()
-                
-                best_split = -1
-                if all_splits:
-                    # MISSION: Find the most logical split point (Smart Splitter)
-                    # We want the split that leaves a non-empty final answer and is not followed by more thoughts.
-                    for split in all_splits:
-                        remaining = full_resp[split:].strip()
-                        # If there's another thought block starting after this closer, this isn't the final boundary.
-                        if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
-                            continue
-                        
-                        # We found a split that leaves a response, and no more thoughts follow.
-                        best_split = split
-                        break
-                    
-                    # Fallback to the absolute last split if no "clean" split was identified
-                    if best_split == -1:
-                        best_split = all_splits[-1]
-                
-                if best_split != -1:
-                    think_log = full_resp[:best_split].strip()
-                    final_answer = full_resp[best_split:].strip()
-                else:
-                    # --- APEX FIX: EMERGENCY SPLIT ---
-                    was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
-                    
-                    if was_thinking_expected:
-                        headers = r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Response|Final Verdict|Final Answer)[\s:]+'
-                        parts = re.split(headers, full_resp)
-                        if len(parts) > 1:
-                            think_log = parts[0].strip()
-                            final_answer = parts[-1].strip()
-                        else:
-                            # Attempt heuristic extraction
-                            think_log = self._extract_thinking_content(full_resp) 
-                            if think_log and len(think_log) < len(full_resp) * 0.9:
-                                # MISSION: Safely isolate the final answer even if multiple blocks were found
-                                # Find the end of the very last identified thought block in the raw response
-                                last_thought_end = 0
-                                # Search for ALL common block patterns, including open tags (ending at $)
-                                block_patterns = r'(?s)<think>.*?(?:<\/think>|$)|<thought>.*?(?:<\/thought>|$)|\[DRAFT\].*?(?:\[\/DRAFT\]|$)|<\|channel>thought.*?(?:<\/\|?channel\|?>|$)'
-                                for m in re.finditer(block_patterns, full_resp, re.IGNORECASE):
-                                    last_thought_end = max(last_thought_end, m.end())
-                                
-                                if last_thought_end > 0:
-                                    think_log = full_resp[:last_thought_end].strip()
-                                    final_answer = full_resp[last_thought_end:].strip()
-                                else:
-                                    # Fallback to standard replace
-                                    final_answer = full_resp.replace(think_log, "", 1).strip()
-                            else:
-                                # If extraction is ambiguous, treat the whole thing as thinking 
-                                # and trigger synthesis to get a clean answer.
-                                think_log = full_resp
-                                final_answer = ""
-                    else:
-                        think_log = ""
-                        final_answer = full_resp
-
-                # 3. Structural Cleaning (Enhanced for Qwen/Gemma-4)
-                structural_tags = [
-                    r'<\|?channel>(?:text|thought)?>?', r'<\/\|?channel\|?>', r'<channel\s*\|?>', r'<\/channel\s*\|?>',
-                    r'(?:<channel\s*\|?>|<\/channel\s*\|?>)+', r'<think>', r'<\/think>', r'<\|/>', r'<turn/>', r'<\|?turn\|?>',
-                    r'<\|im_start|>(?:thought|assistant)?', r'<\|im_end|>', r'<\|endoftext|>'
-                ]
-
-                for tag in structural_tags:
-                    final_answer = re.sub(tag, '', final_answer, flags=re.IGNORECASE | re.DOTALL)
-                    think_log = re.sub(tag, '', think_log, flags=re.IGNORECASE | re.DOTALL)
-                
-                # 3b. SYNTHESIS FALLBACK (Hardened with Budget Recovery Mode)
-                clean_answer = final_answer.strip()
-                was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
-                finish_reason = response["choices"][0].get("finish_reason", "")
-                rec_mode = self.config.get("budget_recovery_mode", "wrapup")
-                
-                needs_synthesis = False
-                if rec_mode != "off":
-                    if was_thinking_expected and len(clean_answer) < 15 and len(think_log) > 50:
-                        needs_synthesis = True
-                    elif "length" in str(finish_reason) and was_thinking_expected and len(clean_answer) < 20:
-                        needs_synthesis = True
-                
-                if needs_synthesis and self.active_persona_level > 1:
-                    reasoning_source = think_log if think_log else full_resp
-                    if rec_mode == "wrapup":
-                        instr = "Wrap up your thoughts and provide the final answer immediately based on the reasoning above."
-                    elif rec_mode == "respond":
-                        instr = "Provide your final response now based on the reasoning above."
-                    elif rec_mode == "autocont":
-                        instr = "Continue your thought process and complete your output seamlessly."
-                    else:
-                        instr = "Synthesize a clear final response."
-                    
-                    if self.active_persona_level == 7:
-                        self.process_queue.put({"status": "thinking_status", "content": "Cecilia is gathering her thoughts..."})
-                        synthesized = self._perform_level7_synthesis(user_message, reasoning_source)
-                    else:
-                        self.process_queue.put({"status": "thinking_status", "content": "Synthesizing final response..."})
-                        synthesized = self._perform_final_synthesis(user_message, reasoning_source, prompt_override=instr)
-                    
-                    if synthesized:
-                        final_answer = synthesized.strip()
-                        for tag in structural_tags:
-                            final_answer = re.sub(tag, '', final_answer, flags=re.IGNORECASE | re.DOTALL)
-                    else:
-                        print("[SYNTHESIS] Pass failed or returned None; retaining original draft.")
-                
-                # 3c. TOOL LOOP INTEGRATION (Hardened for standard worker)
-                has_tool_call = any(t in full_resp.lower() or t in final_answer.lower() for t in ["<ctrl42>call:", "<|tool_call>call:", "<|tool>call:", "call:", "action:", "<execute_tool>", "<executetool>"])
-                if has_tool_call:
-                    target_tool_resp = full_resp if ("<|tool_call>" in full_resp or "<ctrl42>" in full_resp or "call:" in full_resp or "action:" in full_resp or "<execute_tool>" in full_resp or "<executetool>" in full_resp) else final_answer
-                    tool_res = self._run_tool_loop(target_tool_resp, prompt_str, params)
-                    if tool_res:
-                        final_answer = tool_res
-
-                # Safeguard: Post-synthesis Thought Isolation
-                if "<|channel>thought" in final_answer or "<channel|>" in final_answer or "<think>" in final_answer:
-                    extra_think, clean_ans = self._isolate_thought_and_response(final_answer)
-                    if extra_think:
-                        think_log = (think_log + "\n\n" + extra_think).strip()
-                    if clean_ans:
-                        final_answer = clean_ans
-                
-                # 4. LaTeX Artifact Removal
-                final_answer = self._clean_latex_artifacts(final_answer.strip())
-                if not final_answer and full_resp:
-                    raw_fallback = full_resp.strip()
-                    for tag in structural_tags:
-                        raw_fallback = re.sub(tag, '', raw_fallback, flags=re.IGNORECASE | re.DOTALL)
-                    final_answer = raw_fallback.strip()
-                
-                # 5. Delivery
-                self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
-                print(f"[INFERENCE] Generation complete. Final response length: {len(final_answer)} chars.")
-                self.process_queue.put({
-                    "status": "session_finished",
-                    "user_msg": user_message,
-                    "think_log": think_log.strip(),
-                    "final_answer": final_answer.strip(),
-                    "is_error": False
-                })
-                return
+            # Advanced Scout & Split
+            closers = [
+                r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+                r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
+            ]
+            all_splits = []
+            for tag_pattern in closers:
+                for m in re.finditer(tag_pattern, final_answer, re.IGNORECASE):
+                    all_splits.append(m.end())
+            
+            if not all_splits and ("<think>" in final_answer or "<|channel>thought" in final_answer):
+                all_splits.append(len(final_answer))
+            
+            all_splits.sort()
+            best_split = -1
+            if all_splits:
+                for split in all_splits:
+                    remaining = final_answer[split:].strip()
+                    if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
+                        continue
+                    best_split = split
+                    break
+                if best_split == -1:
+                    best_split = all_splits[-1]
+            
+            if best_split != -1:
+                think_log = final_answer[:best_split].strip()
+                final_answer = final_answer[best_split:].strip()
             else:
-                if self.kv_manager and TRI_ATTENTION_ENABLED:
-                    processed_msgs = self.kv_manager.enforce_kv_budget(temp_messages)
-                else:
-                    processed_msgs = temp_messages[-12:]
-                
-                # Multi-turn thought pruning for Gemma models to avoid feeding thoughts back into history
-                if is_gemma:
-                    cleaned_msgs = []
-                    for m in processed_msgs:
-                        role = m.get("role")
-                        content = m.get("content")
-                        if role == "assistant" and isinstance(content, str):
-                            content = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', content, flags=re.IGNORECASE)
-                            content = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', content, flags=re.IGNORECASE)
-                            content = re.sub(r'<\|think\|>.*?(?:<\/\|think\|>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
-                            content = re.sub(r'<thought(?:>|\b).*?(?:<\/thought>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
-                            content = content.strip()
-                        cleaned_msgs.append({"role": role, "content": content})
-                    processed_msgs = cleaned_msgs
-
-                msgs = [{"role": "system", "content": sys_content}] + processed_msgs
-                self.process_queue.put({"status": "thinking_status", "content": "Almost there... batching the response."})
-                
-                # GIL-Safety: Internal Streaming
-                full_resp = ""
-                gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
-                for chunk in gen_iterator:
-                    if self.stop_process.is_set(): break
-                    if "content" in chunk["choices"][0]["delta"]:
-                        txt = chunk["choices"][0]["delta"]["content"]
-                        full_resp += txt
-                        self.process_queue.put({"status": "streaming", "content": txt})
-                    time.sleep(0.001) # Heartbeat for UI
-                
-                think_log = ""
-                final_answer = full_resp.strip()
-                
-                # If we are running a Gemma model with multimodal handler, perform the same robust thought isolation/splitting
-                if is_gemma:
-                    match_deep = re.search(r'\[DEEPLOG:(.*?)\]', final_answer, flags=re.IGNORECASE | re.DOTALL)
-                    if match_deep:
-                        extracted_log = match_deep.group(1).strip()
-                        final_answer = re.sub(r'\[DEEPLOG:.*?\]', '', final_answer, flags=re.IGNORECASE | re.DOTALL).strip()
-                        
-                    match_prime = re.search(r'\[PRIME_MEMORY:(.*?)\]', final_answer, flags=re.IGNORECASE | re.DOTALL)
-                    if match_prime:
-                        extracted_prime = match_prime.group(1).strip()
-                        final_answer = re.sub(r'\[PRIME_MEMORY:.*?\]', '', final_answer, flags=re.IGNORECASE | re.DOTALL).strip()
-                        prime_path = os.path.join(self.dirs["System"], ".prime_chronicles.txt")
-                        try:
-                            with open(prime_path, "a", encoding="utf-8") as f:
-                                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {extracted_prime}\n")
-                        except Exception: pass
-
-                    closers = [
-                        r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
-                        r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
-                    ]
-                    all_splits = []
-                    for tag_pattern in closers:
-                        for m in re.finditer(tag_pattern, final_answer, re.IGNORECASE):
-                            all_splits.append(m.end())
-                    
-                    if not all_splits and ("<think>" in final_answer or "<|channel>thought" in final_answer):
-                        all_splits.append(len(final_answer))
-                    
-                    all_splits.sort()
-                    best_split = -1
-                    if all_splits:
-                        for split in all_splits:
-                            remaining = final_answer[split:].strip()
-                            if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
-                                continue
-                            best_split = split
-                            break
-                        if best_split == -1:
-                            best_split = all_splits[-1]
-                    
-                    if best_split != -1:
-                        think_log = final_answer[:best_split].strip()
-                        final_answer = final_answer[best_split:].strip()
-                    else:
-                        was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
-                        if was_thinking_expected:
-                            headers = r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Response|Final Verdict|Final Answer)[\s:]+'
-                            parts = re.split(headers, final_answer)
-                            if len(parts) > 1:
-                                think_log = parts[0].strip()
-                                final_answer = parts[-1].strip()
-                            else:
-                                think_log = self._extract_thinking_content(final_answer)
-                                if think_log and len(think_log) < len(final_answer) * 0.9:
-                                    last_thought_end = 0
-                                    block_patterns = r'(?s)<think>.*?(?:<\/think>|$)|<thought>.*?(?:<\/thought>|$)|\[DRAFT\].*?(?:\[\/DRAFT\]|$)|<\|channel>thought.*?(?:<\/\|?channel\|?>|$)'
-                                    for m in re.finditer(block_patterns, final_answer, re.IGNORECASE):
-                                        last_thought_end = max(last_thought_end, m.end())
-                                    if last_thought_end > 0:
-                                        think_log = final_answer[:last_thought_end].strip()
-                                        final_answer = final_answer[last_thought_end:].strip()
-                                    else:
-                                        final_answer = final_answer.replace(think_log, "", 1).strip()
-                                else:
-                                    think_log = final_answer
-                                    final_answer = ""
-                    
-                    # Heuristic fallback synthesis if model got stuck
-                    was_thinking_expected = (self.active_persona_level >= 3 or self.state.get("deep_cook"))
-                    if was_thinking_expected and not final_answer.strip() and len(think_log) > 200:
+                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<\|think\|>', final_answer, re.IGNORECASE))
+                if has_thought_openers:
+                    think_log = final_answer
+                    final_answer = ""
+                    if len(think_log) > 200:
                         self.process_queue.put({"status": "thinking_status", "content": "[PROCESS] Synthesizing Final Answer..."})
                         synthesized = self._perform_final_synthesis(user_message, think_log)
                         if synthesized:
                             final_answer = synthesized.strip()
-
-                    # Strip wrapper tags
-                    think_log = re.sub(r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>', '', think_log).strip()
-                    final_answer = re.sub(r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>', '', final_answer).strip()
-
-                final_answer = self._clean_latex_artifacts(final_answer.strip())
-                if not final_answer and full_resp:
+                else:
+                    # Model produced direct response without thought tags: keep as final answer
+                    think_log = ""
                     final_answer = full_resp.strip()
-                
-                self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
-                self.process_queue.put({
-                    "status": "session_finished",
-                    "user_msg": user_message,
-                    "think_log": think_log.strip(),
-                    "final_answer": final_answer.strip(),
-                    "is_error": False
-                })
+
+            # Tool Execution Check in Standard Generation
+            if tools and self.active_persona_level >= 2:
+                has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\(.*?\)', final_answer, re.DOTALL | re.IGNORECASE)
+                has_tag_tool = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{', final_answer, re.DOTALL | re.IGNORECASE)
+                if has_py_tool or has_tag_tool:
+                    self.process_queue.put({"status": "thinking_status", "content": "Executing tool..."})
+                    final_answer = self._run_tool_loop(final_answer, msgs, params)
+
+            # Strip wrapper tags and residual tool markers
+            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>'
+            think_log = re.sub(tag_clean_pattern, '', think_log).strip()
+            final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+
+            if not final_answer and full_resp:
+                final_answer = re.sub(tag_clean_pattern, '', full_resp).strip()
+            
+            self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
+            print(f"[INFERENCE] Generation complete. Final response length: {len(final_answer)} chars.")
+            self.process_queue.put({
+                "status": "session_finished",
+                "user_msg": user_message,
+                "think_log": think_log.strip(),
+                "final_answer": final_answer.strip(),
+                "is_error": False
+            })
         except Exception as e:
             traceback.print_exc()
             self.process_queue.put({"status": "error", "content": str(e)})
@@ -3393,25 +3641,11 @@ class ChatbotApp:
                     params["min_p"] = 0.02
                 
                 if is_gemma:
-                    for req_stop in ["<turn|>", "<|turn>", "<|file_separator|>", "<eos>"]:
-                        if req_stop not in params.get("stop", []):
-                            params.setdefault("stop", []).append(req_stop)
-                    
-                    # Gemma-4: Tool definitions injection for Deep Cook (Template-Aligned)
                     tool_defs = self.tool_registry.get_gemma_declarations(self.active_persona_level)
-                    sys_msg += (
-                        "\n[CRITICAL RESTRICTION]: You will begin in a reasoning block using '<think>'. You must complete ALL planning, tone adjustments, and technical notes INSIDE that block."
-                        "\nWhen you are all ready to generate the response, you MUST close the thought channel with '</think>', followed immediately by your polished final response. DO NOT output '</think>' early during thinking."
-                    )
-                    
-                    # FORCED THINKING MODALITY (Gemma-4 Official)
-                    # We inject <|think|> into system and <think> into model turn.
-                    prompt_str = f"<|turn>system\n{sys_msg}\n{tool_defs}<turn|>\n<|turn>user\nTask: {prompt}<turn|>\n<|turn>model\n<think>\n"
-                    stream = self.model(prompt_str, stream=True, echo=False, **params)
-                else:
-                    # Standard logic for non-Gemma models
-                    msgs = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
-                    stream = self.model.create_chat_completion(messages=msgs, stream=True, **params)
+                    sys_msg = f"{sys_msg}\n{tool_defs}".strip()
+                
+                msgs = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
+                stream = self.model.create_chat_completion(messages=msgs, stream=True, **params)
                 
                 if ctype:
                     self.process_queue.put({
@@ -3427,14 +3661,9 @@ class ChatbotApp:
                 tag_buffer = ""
                 for chunk in stream:
                     if self.stop_process.is_set(): raise InterruptedError()
-                    if is_gemma:
-                        ch = chunk.get('choices', [{}])[0]
-                        c = ch.get('text', "")
-                        if ch.get('finish_reason'): last_finish_reason = ch.get('finish_reason')
-                    else:
-                        ch = chunk.get('choices', [{}])[0]
-                        c = ch.get('delta', {}).get("content", "")
-                        if ch.get('finish_reason'): last_finish_reason = ch.get('finish_reason')
+                    ch = chunk.get('choices', [{}])[0]
+                    c = ch.get('delta', {}).get("content", "") or ch.get('text', "")
+                    if ch.get('finish_reason'): last_finish_reason = ch.get('finish_reason')
                     if c: 
                         result_text += c
                         tag_buffer += c
@@ -4076,133 +4305,6 @@ class ChatbotApp:
         except Exception as e:
             print(f"[UI SAFETY] Markdown render error: {e}")
 
-    def _regex_format(self, pattern, tag, start_idx, end_idx, base_tags):
-        """High-performance native search/format for chat history with absolute index safety."""
-        #print(f"[RENDER] Regex scan: {pattern}")
-        hist = self.chat_history
-        if not hist or not start_idx or not end_idx: return
-        
-        # MISSION: Ensure indices are canonical to avoid Tcl errors
-        try:
-            search_idx = hist.index(start_idx)
-            limit_idx = hist.index(end_idx)
-        except: return
-        
-        max_iterations = 400
-        iterations = 0
-        start_time = time.time()
-        
-        while iterations < max_iterations:
-            # MISSION: Prevent long-running regex loops from freezing the UI
-            # Yield if we've spent more than 15ms in this pattern
-            if (time.time() - start_time) > 0.015:
-                self.root.after(5, lambda: self._regex_format_continuation(pattern, tag, search_idx, limit_idx, base_tags, iterations, start_time))
-                return
-
-            iterations += 1
-            match_count = tk.IntVar()
-            
-            # Perform search with local safety
-            try:
-                match_idx = hist.search(pattern, search_idx, stopindex=limit_idx, regexp=True, count=match_count)
-            except Exception as e:
-                print(f"[UI SAFETY] Search error: {e}")
-                break
-                
-            if not match_idx: break
-            
-            # Canonicalize match_idx immediately
-            match_idx = hist.index(match_idx)
-            if hist.compare(match_idx, ">=", limit_idx): break
-            
-            count = match_count.get()
-            if count <= 0:
-                search_idx = f"{match_idx} + 1c"
-                continue
-                
-            full_match_text = hist.get(match_idx, f"{match_idx} + {count} chars")
-            m = re.search(pattern, full_match_text)
-            if not m:
-                search_idx = f"{match_idx} + {count} chars"
-                continue
-                
-            inner_text = m.group(1)
-            m_end_idx = hist.index(f"{match_idx} + {count} chars")
-            
-            hist.config(state='normal')
-            try:
-                hist.delete(match_idx, m_end_idx)
-                hist.insert(match_idx, inner_text, base_tags + (tag,))
-            finally:
-                hist.config(state='disabled')
-            
-            # Strictly advance to avoid infinite loop traps
-            search_idx = hist.index(f"{match_idx} + {len(inner_text)} chars")
-            if hist.compare(search_idx, "<=", match_idx):
-                search_idx = f"{match_idx} + 1c"
-        
-        if iterations >= max_iterations:
-            print(f"[UI SAFETY] High recursion in _regex_format for pattern: {pattern}")
-
-    def _regex_format_continuation(self, pattern, tag, search_idx, limit_idx, base_tags, iterations, start_time):
-        """Allows _regex_format to resume after yielding to the UI loop."""
-        hist = self.chat_history
-        if not hist or not hist.winfo_exists(): return
-        
-        # Reset timer for the next chunk
-        new_start_time = time.time()
-        
-        # Resume the loop
-        self._regex_format_logic(pattern, tag, search_idx, limit_idx, base_tags, iterations, new_start_time)
-
-    def _regex_format_logic(self, pattern, tag, search_idx, limit_idx, base_tags, iterations, start_time):
-        """Internal logic for _regex_format to support yielding."""
-        hist = self.chat_history
-        max_iterations = 400
-        
-        while iterations < max_iterations:
-            if (time.time() - start_time) > 0.015:
-                self.root.after(5, lambda: self._regex_format_continuation(pattern, tag, search_idx, limit_idx, base_tags, iterations, start_time))
-                return
-
-            iterations += 1
-            match_count = tk.IntVar()
-            try:
-                match_idx = hist.search(pattern, search_idx, stopindex=limit_idx, regexp=True, count=match_count)
-            except: break
-                
-            if not match_idx: break
-            match_idx = hist.index(match_idx)
-            if hist.compare(match_idx, ">=", limit_idx): break
-            
-            count = match_count.get()
-            if count <= 0:
-                search_idx = f"{match_idx} + 1c"
-                continue
-                
-            full_match_text = hist.get(match_idx, f"{match_idx} + {count} chars")
-            m = re.search(pattern, full_match_text)
-            if not m:
-                search_idx = f"{match_idx} + {count} chars"
-                continue
-                
-            inner_text = m.group(1)
-            m_end_idx = hist.index(f"{match_idx} + {count} chars")
-            
-            hist.config(state='normal')
-            try:
-                hist.delete(match_idx, m_end_idx)
-                hist.insert(match_idx, inner_text, base_tags + (tag,))
-            finally:
-                hist.config(state='disabled')
-            
-            search_idx = hist.index(f"{match_idx} + {len(inner_text)} chars")
-            if hist.compare(search_idx, "<=", match_idx):
-                search_idx = f"{match_idx} + 1c"
-        
-        if iterations >= max_iterations:
-            print(f"[UI SAFETY] High recursion in _regex_format for pattern: {pattern}")
-
 
     def _post_process_media(self, start_idx=None):
         """Scans the last message for URLs and media paths using native search."""
@@ -4373,60 +4475,6 @@ class ChatbotApp:
                 self._status_timer = None
             self._status_timer = self.root.after(5000, lambda *args: self._revert_status_label())
 
-    def _isolate_thought_and_response(self, text):
-        """Splits raw model output into (thought_log, clean_answer) using structural boundaries."""
-        if not text:
-            return "", ""
-        
-        closers = [
-            r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
-            r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
-        ]
-        
-        all_splits = []
-        for tag_pattern in closers:
-            for m in re.finditer(tag_pattern, text, re.IGNORECASE):
-                all_splits.append(m.end())
-        
-        if not all_splits and ("<think>" in text or "<|channel>thought" in text):
-            all_splits.append(len(text))
-            
-        all_splits.sort()
-        
-        best_split = -1
-        if all_splits:
-            for split in all_splits:
-                remaining = text[split:].strip()
-                if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
-                    continue
-                best_split = split
-                break
-            if best_split == -1:
-                best_split = all_splits[-1]
-                
-        if best_split != -1:
-            think_log = text[:best_split].strip()
-            final_answer = text[best_split:].strip()
-        else:
-            think_log = self._extract_thinking_content(text)
-            final_answer = text
-            if think_log and "<|channel>thought" in text:
-                final_answer = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', text, flags=re.IGNORECASE).strip()
-            elif think_log and "<think>" in text:
-                final_answer = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', text, flags=re.IGNORECASE).strip()
-                
-        structural_tags = [
-            r'<\|?channel>(?:text|thought)?>?', r'<\/\|?channel\|?>', r'<channel\s*\|?>', r'<\/channel\s*\|?>',
-            r'(?:<channel\s*\|?>|<\/channel\s*\|?>)+', r'<think>', r'<\/think>', r'<\|/>', r'<turn/>', r'<\|?turn\|?>',
-            r'<\|im_start|>(?:thought|assistant)?', r'<\|im_end|>', r'<\|endoftext|>'
-        ]
-        
-        for tag in structural_tags:
-            final_answer = re.sub(tag, '', final_answer, flags=re.IGNORECASE | re.DOTALL)
-            think_log = re.sub(tag, '', think_log, flags=re.IGNORECASE | re.DOTALL)
-            
-        return think_log.strip(), final_answer.strip()
-
     def _run_tool_loop(self, full_resp, prompt_str, params, depth=0):
         """
         Parses tool calls from model output, executes them, and recursively 
@@ -4435,67 +4483,87 @@ class ChatbotApp:
         if depth > 3:
             return f"{full_resp}\n\n[SYSTEM]: Tool recursion limit reached. Truncating response."
 
-        # Added support for Gemma-4 'action', 'execute_tool', 'executetool' tags and missing 'call:' prefixes
-        call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
-        if not call_match:
-            _, clean_resp = self._isolate_thought_and_response(full_resp)
-            return clean_resp if clean_resp else full_resp
+    def _run_tool_loop(self, full_resp, prompt_str, params, depth=0):
+        """
+        Parses tool calls from model output (supporting Programmatic Tool Calling Python syntax
+        and legacy tags), executes them, and recursively generates the final answer.
+        Max depth 3 to prevent runaway inference.
+        """
+        if depth > 3:
+            return f"{full_resp}\n\n[SYSTEM]: Tool recursion limit reached. Truncating response."
 
-        call_name = call_match.group(1).strip()
-        if call_name.lower() in ["readfile", "read_file"]:
-            call_name = "read_file"
-        args_raw = call_match.group(2).strip()
-        
-        # Robust Argument Parsing (Template-Aware)
-        # MISSION: Handle Gemma-4 <|"|> quotes and unquoted JSON keys from reasoning models
-        clean_args = args_raw.replace('<|"|>', '"').replace('<|"', '"').replace('"|>', '"').strip()
-        if clean_args.startswith("{") and clean_args.endswith("}"):
-            clean_args = clean_args[1:-1].strip()
-            
+        call_name = None
         args = {}
-        # Multi-stage JSON recovery
-        # Prevent VS Code debugger from halting on expected JSONDecodeErrors
-        is_json_format = not clean_args or clean_args.strip().startswith('"')
-        
-        if is_json_format:
-            try:
-                # Stage 1: Standard JSON (Fast path)
-                args = json.loads("{" + clean_args + "}")
-            except Exception:
-                pass
 
-        if not args and clean_args:
-            try:
-                # Stage 2: Key-Value Pair Extraction Fallback (Robust path)
-                # MISSION: Handle unquoted keys and unquoted string values from logic models
-                kv_pattern = r'(?m)^\s*["\']?([\w_]+)["\']?\s*[:=]\s*(.*?)\s*(?:,|$)'
-                matches = re.finditer(kv_pattern, clean_args)
-                for m in matches:
-                    key = m.group(1).strip()
-                    val = m.group(2).strip().strip('"\'')
-                    if val: args[key] = val
-                
-                if not args:
-                    # Stage 3: Quote unquoted keys (Traditional fallback)
-                    fixed = re.sub(r'(?<!["\'])(\b\w+\b)(?!["\'])\s*:', r'"\1":', clean_args)
-                    fixed = re.sub(r',\s*$', '', fixed.strip())
-                    args = json.loads("{" + fixed + "}")
-            except Exception:
+        # 1. Programmatic Tool Calling (PTC) - Python syntax (e.g. web_search("..."), read_file(path="..."))
+        py_match = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\((.*?)\)(?:\s*```)?', full_resp, re.DOTALL | re.IGNORECASE)
+        # 2. Legacy / Tag-based Tool Calls
+        call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
+
+        if py_match:
+            call_name = py_match.group(1).strip().lower()
+            raw_args = py_match.group(2).strip()
+            if raw_args:
+                import ast
                 try:
-                    # Stage 4: Bare value extraction (for single-arg tools)
-                    bare_val = re.sub(r'^.*?:\s*', '', clean_args).strip().strip('"\'')
-                    if bare_val:
-                        if call_name == "web_search": args["query"] = bare_val
-                        elif call_name == "read_file": args["path"] = bare_val
+                    expr = ast.parse(f"{call_name}({raw_args})", mode="eval")
+                    if isinstance(expr.body, ast.Call):
+                        for kw in expr.body.keywords:
+                            args[kw.arg] = ast.literal_eval(kw.value)
+                        if expr.body.args:
+                            if call_name == "web_search": args["query"] = ast.literal_eval(expr.body.args[0])
+                            elif call_name == "read_file": args["path"] = ast.literal_eval(expr.body.args[0])
+                            elif call_name == "generate_image": args["prompt"] = ast.literal_eval(expr.body.args[0])
                 except Exception:
-                    pass # Absolute failure
-        
+                    clean_str = raw_args.strip('\'" ')
+                    if call_name == "web_search": args["query"] = clean_str
+                    elif call_name == "read_file": args["path"] = clean_str
+                    elif call_name == "generate_image": args["prompt"] = clean_str
+        elif call_match:
+            call_name = call_match.group(1).strip()
+            if call_name.lower() in ["readfile", "read_file"]:
+                call_name = "read_file"
+            args_raw = call_match.group(2).strip()
+            
+            clean_args = args_raw.replace('<|"|>', '"').replace('<|"', '"').replace('"|>', '"').strip()
+            if clean_args.startswith("{") and clean_args.endswith("}"):
+                clean_args = clean_args[1:-1].strip()
+                
+            is_json_format = not clean_args or clean_args.strip().startswith('"')
+            if is_json_format:
+                try:
+                    args = json.loads("{" + clean_args + "}")
+                except Exception: pass
+
+            if not args and clean_args:
+                try:
+                    kv_pattern = r'(?m)^\s*["\']?([\w_]+)["\']?\s*[:=]\s*(.*?)\s*(?:,|$)'
+                    matches = re.finditer(kv_pattern, clean_args)
+                    for m in matches:
+                        key = m.group(1).strip()
+                        val = m.group(2).strip().strip('"\'')
+                        if val: args[key] = val
+                    if not args:
+                        fixed = re.sub(r'(?<!["\'])(\b\w+\b)(?!["\'])\s*:', r'"\1":', clean_args)
+                        fixed = re.sub(r',\s*$', '', fixed.strip())
+                        args = json.loads("{" + fixed + "}")
+                except Exception:
+                    try:
+                        bare_val = re.sub(r'^.*?:\s*', '', clean_args).strip().strip('"\'')
+                        if bare_val:
+                            if call_name == "web_search": args["query"] = bare_val
+                            elif call_name == "read_file": args["path"] = bare_val
+                    except Exception: pass
+
+        if not call_name:
+            return full_resp
+
         # Inform UI
         self.process_queue.put({"status": "thinking_status", "content": f"Executing tool: {call_name}"})
         self.process_queue.put({"status": "tool_log_update", "content": f"\n[{time.strftime('%H:%M:%S')}] Executing: {call_name}\nArgs: {args}"})
         
         try:
-            # 1. ATTEMPT EXECUTION (TIGHT WRAP)
+            # 1. ATTEMPT EXECUTION
             try:
                 observation = self.tool_registry.execute(call_name, args)
             except Exception as e:
@@ -4504,45 +4572,30 @@ class ChatbotApp:
 
             self.process_queue.put({"status": "tool_log_update", "content": f"Result: \n{str(observation)[:200]}..."})
             
-            def oq(s): return f"<|\"|>{s}<|\"|>"
-            
-            # 2. CHAT TEMPLATE ALIGNMENT
+            # 2. CHAT SYNTHESIS
             clean_resp = full_resp
             clean_resp = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', clean_resp, flags=re.IGNORECASE)
             clean_resp = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', clean_resp, flags=re.IGNORECASE)
-            clean_resp = re.sub(r'(?s)<\|think\|>.*?(?:<\/\|think\|>|$)', '', clean_resp, flags=re.IGNORECASE)
-            clean_resp = re.sub(r'(?s)<thought>.*?(?:<\/thought>|$)', '', clean_resp, flags=re.IGNORECASE)
             
-            call_tag_match = re.search(r'(?:<ctrl42>|<\|tool_call>|<\|tool_call\|>|<\|tool>|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>).*', clean_resp, re.DOTALL | re.IGNORECASE)
-            if call_tag_match:
-                clean_resp = call_tag_match.group(0)
+            forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search / tool results below, provide a direct, helpful answer to the user's original query."
+            if isinstance(prompt_str, list):
+                new_prompt = list(prompt_str) + [
+                    {"role": "assistant", "content": f"Executed tool `{call_name}` with args: {json.dumps(args)}"},
+                    {"role": "user", "content": f"[TOOL RESULT ({call_name})]:\n{observation}\n\nDeliver the final response now based on these results."}
+                ]
+            else:
+                new_prompt = [
+                    {"role": "system", "content": forced_sys},
+                    {"role": "user", "content": f"Original Query Context:\n{prompt_str[-500:]}\n\nTool Results ({call_name}):\n{observation}\n\nDeliver the final response now."}
+                ]
             
-            if not clean_resp.strip().endswith("<turn|>"):
-                clean_resp = clean_resp.strip() + "<turn|>\n"
-            
-            response_turn = f"<|turn>user\n<|tool_response>response:{call_name}{{value:{oq(observation)}}}<tool_response|><turn|>\n"
-            new_prompt = prompt_str + clean_resp + response_turn + "<|turn>model\n"
-            
-            synth_params = dict(params)
-            synth_params["max_tokens"] = max(synth_params.get("max_tokens", 512), 2048)
-            if "stop" in synth_params and isinstance(synth_params["stop"], list):
-                synth_params["stop"] = [s for s in synth_params["stop"] if s not in ["<channel|>", "</channel|>"]]
-
             self.process_queue.put({"status": "thinking_status", "content": "Synthesizing tool results..."})
-            new_text = self._run_blocking_inference(new_prompt, synth_params)
+            new_text = self._run_blocking_inference(new_prompt, params)
             
-            # 3b. SYNTHESIS SAFETY CHECK (Prevent "0 response" issue)
             if not new_text or len(new_text.strip()) < 5:
-                # If synthesis failed or is empty, try a "forced" synthesis with a stricter prompt
-                forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search results below, provide a helpful answer."
-                forced_prompt = f"Original Query: {prompt_str[-500:]}\n\nTool Results: {observation}\n\nDeliver the final response now."
-                new_text = self._run_blocking_inference([{"role": "system", "content": forced_sys}, {"role": "user", "content": forced_prompt}], synth_params)
+                new_text = f"Tool Result for `{call_name}`:\n{observation}"
 
-            res = self._run_tool_loop(new_text, new_prompt, params, depth=depth+1)
-            synth_think, synth_ans = self._isolate_thought_and_response(res)
-            if synth_think:
-                self.process_queue.put({"status": "log_update", "content": f"\n[TOOL REASONING]:\n{synth_think}\n"})
-            return synth_ans if synth_ans else res
+            return self._run_tool_loop(new_text, new_prompt, params, depth=depth+1)
             
         except Exception as e:
             return f"{full_resp}\n\nI apologize, but I encountered a system-level error during the synthesis phase: {str(e)}. Please try rephrasing your request."
@@ -4635,69 +4688,8 @@ class ChatbotApp:
 
 
     def _clean_latex_artifacts(self, text):
-        """Removes MathJax/LaTeX formatting artifacts that Tkinter cannot render."""
-        if not text: return ""
-        initial_len = len(text)
-        
-        # 1. Math Block & Inline Wrappers
-        text = re.sub(r'\$\$(.*?)\$\$', r'\1', text, flags=re.DOTALL)
-        text = re.sub(r'\\\[(.*?)\\\]', r'\1', text, flags=re.DOTALL)
-        text = re.sub(r'\\\((.*?)\\\)', r'\1', text, flags=re.DOTALL)
-        
-        # 2. Mathematical Structures & Roots
-        text = re.sub(r'\\(?:d|t)?frac\{([^{}]*)\}\{([^{}]*)\}', r'\1/\2', text)
-        text = re.sub(r'\\sqrt\[([^\]]+)\]\{([^{}]*)\}', r'root[\1](\2)', text)
-        text = re.sub(r'\\sqrt\{([^{}]*)\}', r'√(\1)', text)
-            
-        # 3. Formatting Commands & Enclosers
-        tags = ["mathbf", "mathrm", "mathit", "text", "textbf", "textit", "underline", "mathbb", "mathcal"]
-        pattern = r'\\(?:' + '|'.join(tags) + r')\{([^}]*)\}'
-        text = re.sub(pattern, r'\1', text)
-        text = text.replace(r'\left(', '(').replace(r'\right)', ')')
-        text = text.replace(r'\left[', '[').replace(r'\right]', ']')
-        text = text.replace(r'\left\{', '{').replace(r'\right\}', '}')
-        
-        # 4. Spacing commands
-        text = re.sub(r'\\(?:quad|qquad|,|;|!|\s)', ' ', text)
-
-        # 5. Special Symbols (Comprehensive Math Set)
-        symbol_map = {
-            r'\rightarrow': '->', r'\to': '->', r'\Rightarrow': '=>', r'\leftarrow': '<-', r'\Leftarrow': '<=',
-            r'\checkmark': '✓', r'\neg': 'NOT ', r'\neq': '!=', r'\ne': '!=',
-            r'\times': 'x', r'\cdot': '*', r'\div': '/', r'\pm': '+/-',
-            r'\approx': '≈', r'\sim': '~', r'\equiv': '≡',
-            r'\le': '<=', r'\leq': '<=', r'\ge': '>=', r'\geq': '>=',
-            r'\sum': '∑', r'\prod': '∏', r'\int': '∫', r'\partial': '∂',
-            r'\in': '∈', r'\notin': '∉', r'\subset': '⊂', r'\subseteq': '⊆',
-            r'\cap': '∩', r'\cup': '∪', r'\forall': '∀', r'\exists': '∃',
-            r'\infty': '∞', r'\degree': '°', r'^\circ': '°',
-            r'\Phi': 'Phi', r'\phi': 'phi', r'\alpha': 'alpha', r'\beta': 'beta',
-            r'\gamma': 'gamma', r'\theta': 'theta', r'\lambda': 'lambda',
-            r'\mu': 'mu', r'\pi': 'pi', r'\sigma': 'sigma', r'\omega': 'omega',
-            r'\Delta': 'Delta', r'\dots': '...', r'\ldots': '...'
-        }
-        for lat, plain in symbol_map.items():
-            text = text.replace(lat, plain)
-            
-        # 6. Context-Aware "No-Backslash" Hygiene
-        if '$' in text:
-            def safe_math_clean(match):
-                inner = match.group(1)
-                orig = f"${inner}$"
-                inner = inner.replace('rightarrow', '->').replace('Rightarrow', '=>').replace('to', '->')
-                inner = inner.replace('ge', '>=').replace('ne', '!=')
-                if f"${match.group(1)}$" != orig: return inner
-                if any(x in inner for x in ['->', '=>', '>=', '!=', 'alpha', 'beta', 'gamma']): return inner
-                return orig
-            text = re.sub(r'(?<!\\)\$([^{}$\n]+?)(?<!\\)\$', safe_math_clean, text)
-        
-        # 7. Escaped Characters
-        text = text.replace(r'\{', '{').replace(r'\}', '}').replace(r'\%', '%').replace(r'\$', '$').replace(r'\#', '#')
-        
-        if len(text) != initial_len:
-            print(f"[SYSTEM] LaTeX hygiene complete. Reduced artifacts by {initial_len - len(text)} chars.")
-            
-        return text.strip()
+        """Pass-through hygiene: MarkdownEngine handles LaTeX and Math natively during markdown rendering."""
+        return text if text else ""
 
     def _handle_deep_cook_ui_start(self, msg):
         """Initializes a new dropdown block for streaming Deep Cook tokens."""
@@ -5132,7 +5124,7 @@ class ChatbotApp:
                         
                         if ext in ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']:
                             # Image - Use determined budget
-                            b64 = VisionHandler.encode_image(video_path, budget=budget)
+                            b64 = VisionHandler.encode_image(video_path, budget=budget, query=user_msg)
                             if b64:
                                 prompt_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
                         elif ext in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
@@ -5511,7 +5503,7 @@ class ChatbotApp:
 
             if is_gemma:
                 prompt_str = (
-                    f"<|turn>system\n{LEVEL7_SYNTHESIS_SYSTEM_PROMPT}<turn|>\n"
+                    f"<|turn>system\n{LEVEL6_SYNTHESIS_SYSTEM_PROMPT}<turn|>\n"
                     f"<|turn>user\n{final_prompt}<turn|>\n"
                     f"<|turn>model\n"
                 )
@@ -5520,14 +5512,14 @@ class ChatbotApp:
                 raw_response = self._run_blocking_inference(prompt_str, synth_params)
             else:
                 msgs = [
-                    {"role": "system", "content": LEVEL7_SYNTHESIS_SYSTEM_PROMPT},
+                    {"role": "system", "content": LEVEL6_SYNTHESIS_SYSTEM_PROMPT},
                     {"role": "user", "content": final_prompt}
                 ]
                 raw_response = self._run_blocking_inference(msgs, params)
 
             full_compiled_text = self._sanitize_synthesis_output(raw_response)
             if self._looks_like_thought_only(full_compiled_text):
-                self.process_queue.put({"status": "log_update", "content": "[LEVEL7 WARNING] Cecilia output appears thought-like; retrying with more direct instruction.\n"})
+                self.process_queue.put({"status": "log_update", "content": "[LEVEL6 WARNING] Cecilia output appears thought-like; retrying with more direct instruction.\n"})
                 retry_prompt = (
                     f"User Query: {user_msg}\n\n"
                     f"Hidden Variables & Reasoning Found:\n{history_subset}\n\n"
@@ -5536,30 +5528,28 @@ class ChatbotApp:
                 )
                 if is_gemma:
                     retry_str = (
-                        f"<|turn>system\n{LEVEL7_SYNTHESIS_SYSTEM_PROMPT}<turn|>\n"
+                        f"<|turn>system\n{LEVEL6_SYNTHESIS_SYSTEM_PROMPT}<turn|>\n"
                         f"<|turn>user\n{retry_prompt}<turn|>\n"
                         f"<|turn>model\n"
                     )
                     retry_raw = self._run_blocking_inference(retry_str, synth_params)
                 else:
                     retry_msgs = [
-                        {"role": "system", "content": LEVEL7_SYNTHESIS_SYSTEM_PROMPT},
+                        {"role": "system", "content": LEVEL6_SYNTHESIS_SYSTEM_PROMPT},
                         {"role": "user", "content": retry_prompt}
                     ]
                     retry_raw = self._run_blocking_inference(retry_msgs, params)
                 full_compiled_text = self._sanitize_synthesis_output(retry_raw)
-                self.process_queue.put({"status": "log_update", "content": "[LEVEL7] Retry complete.\n"})
+                self.process_queue.put({"status": "log_update", "content": "[LEVEL6] Retry complete.\n"})
 
-            self.process_queue.put({"status": "log_update", "content": "[LEVEL7] Cecilia synthesis complete.\n"})
+            self.process_queue.put({"status": "log_update", "content": "[LEVEL6] Cecilia synthesis complete.\n"})
             return full_compiled_text if full_compiled_text else None
         except Exception as e:
-            self.process_queue.put({"status": "log_update", "content": f"[LEVEL7 ERROR] {e}\n"})
+            self.process_queue.put({"status": "log_update", "content": f"[LEVEL6 ERROR] {e}\n"})
             print(f"Cecilia Synthesis Error: {e}")
             return f"Cecilia encountered a truth she couldn't yet speak: {str(e)}"
 
-    def _perform_level6_synthesis(self, user_msg, reasoning_history, critique_txt=""):
-        """Backwards-compatible alias for Cecilia synthesis."""
-        return self._perform_level7_synthesis(user_msg, reasoning_history, critique_txt)
+    _perform_level6_synthesis = _perform_level7_synthesis
 
     def _finalize_message(self, user_msg, think_log, final_answer, error=False):
         print(f"[SYSTEM] Finalizing message delivery (Error: {error}).")
@@ -5673,17 +5663,33 @@ class ChatbotApp:
                 
                 hist.insert(tk.END, "\n", ("ai",))
                 hist.window_create(tk.END, window=rlhf_frame)
+                hist.insert(tk.END, "\n", ("ai",))
             except Exception as fb_err:
                 print(f"[UI] RLHF widget embed error: {fb_err}")
 
-        # Turn Persistence to in-memory history and disk
-        if not error and final_answer and user_msg:
-            self.messages.append({"role": "user", "content": user_msg})
-            self.messages.append({"role": "assistant", "content": final_answer})
-            self.save_history()
-
         hist.config(state='disabled')
         hist.see(tk.END)
+
+        # PERSISTENCE (Hardened against memory corruption)
+        try:
+            if not error and user_msg and final_answer:
+                final_answer_history = final_answer.replace("<|file_separator|>", "").strip()
+                self.messages.extend([
+                    {"role": "user", "content": str(user_msg)}, 
+                    {"role": "assistant", "content": str(final_answer_history)}
+                ])
+                if self.config.get("ghost_mode", False):
+                    self.messages = self.messages[-4:]
+                self.save_history()
+        except Exception as e:
+            print(f"[SYSTEM] Persistence recovery: {e}")
+
+        try:
+            self.set_avatar_state("pleased")
+        except: pass
+        
+        self.state["response_started"] = False
+        self.root.after(1500, lambda *args: self.set_avatar_state("listening"))
 
     def _save_rlhf_log(self, prompt, answer, rating):
         """Saves user feedback (+1 / -1) into System/rlhf_logs.json and updates DMN backbone."""
@@ -5750,29 +5756,6 @@ class ChatbotApp:
             print("[SELF-ANALYSIS] Diagnosis report generated successfully.")
         except Exception as err:
             print(f"[SELF-ANALYSIS ERROR] Failed to run self analysis: {err}")
-        
-        # PERSISTENCE (Hardened against memory corruption)
-        try:
-            # MISSION: Prune history to prevent memory death on ultra-long sessions
-            #if len(self.messages) > 100:
-                #self.messages = self.messages[-60:]
-                
-            final_answer_history = final_answer.replace("<|file_separator|>", "").strip()
-            self.messages.extend([
-                {"role": "user", "content": str(user_msg)}, 
-                {"role": "assistant", "content": str(final_answer_history)}
-            ])
-            if self.config.get("ghost_mode", False):
-                self.messages = self.messages[-4:]
-        except Exception as e:
-            print(f"[SYSTEM] Persistence recovery: {e}")
-
-        try:
-            self.set_avatar_state("pleased")
-        except: pass
-        
-        self.state["response_started"] = False
-        self.root.after(1500, lambda *args: self.set_avatar_state("listening"))
 
     def _buffer_text(self, text):
         """Append text to the streaming buffer."""
@@ -5805,11 +5788,10 @@ class ChatbotApp:
         lvl = int(val) if val is not None else self.active_persona_level
         self.active_persona_level = lvl
         
-        # Dynamic slider auto-hide behavior: collapse to 6 when navigating to 1..6
-        if not getattr(self, '_setting_slider', False):
-            if lvl <= 6 and self.depth_slider.cget('to') == 7:
-                self.depth_slider.config(to=6)
-        
+        # --- Level 7 Dynamic Hiding: auto-collapse slider to 6 when moving to standard levels 1-6 ---
+        if lvl <= 6 and self.depth_slider.cget('to') == 7 and not getattr(self, '_setting_slider', False):
+            self.depth_slider.config(to=6)
+
         # --- Secret Lore Button Toggle & Auto-Hide ---
         if hasattr(self, 'lore_btn') and self.lore_btn is not None:
             if lvl == 7:
@@ -5861,7 +5843,7 @@ class ChatbotApp:
             self._load_secret_model_event()
 
     def _load_secret_model_event(self, e=None):
-        self._log_and_display("Engaging Cecilia...")
+        self._log_and_display("Engaging Worldbuilder...")
         self.active_persona_level = 7
         self._setting_slider = True
         self.depth_slider.config(to=7)
@@ -5880,9 +5862,10 @@ class ChatbotApp:
         self._log_and_display("System Ready. Select a persona to begin.")
         self.set_avatar_state("off")
         
-        # Restore persistent sticky persona level and range
+        # Restore persistent sticky persona level and range (max 6 unless level 7 active)
         if hasattr(self, 'depth_slider'):
-            self.depth_slider.config(to=self.max_persona_level)
+            max_lvl = 7 if self.active_persona_level == 7 else 6
+            self.depth_slider.config(to=max_lvl)
             self.depth_slider.set(self.active_persona_level)
         
         self.update_persona_display(self.active_persona_level)
@@ -5909,7 +5892,7 @@ class ChatbotApp:
         VisionHandler.hygiene_gate()
         
         # --- Level 7 Auto-Hide on Offload ---
-        if self.depth_slider and self.depth_slider.cget('to') == 7:
+        if self.depth_slider.cget('to') == 7:
             self.depth_slider.config(to=6)
             if self.active_persona_level == 7:
                 self.depth_slider.set(6)
@@ -5923,15 +5906,25 @@ class ChatbotApp:
         self._log_and_display("All models offloaded. VRAM Cleared.")
 
     def get_history_path(self): 
-        return os.path.join(self.dirs["History"], f"{os.path.splitext(os.path.basename(self.model_path))[0]}_lvl{self.active_persona_level}.history.jsonz") if self.model_path else None
+        if not self.model_path: return None
+        base = f"{os.path.splitext(os.path.basename(self.model_path))[0]}_lvl{self.active_persona_level}.history"
+        p_enc = os.path.join(self.dirs["History"], f"{base}.encz")
+        p_jsonz = os.path.join(self.dirs["History"], f"{base}.jsonz")
+        if os.path.exists(p_enc): return p_enc
+        if os.path.exists(p_jsonz): return p_jsonz
+        ext = ".encz" if (hasattr(self, 'vault_manager') and self.vault_manager.is_lock_enabled()) else ".jsonz"
+        return os.path.join(self.dirs["History"], f"{base}{ext}")
 
     def save_history(self):
         if self.config.get("ghost_mode", False):
             return
         if not (path := self.get_history_path()) or not self.messages: return
         try:
-            with open(path, 'wb') as f:
-                f.write(zlib.compress(json.dumps(self.messages).encode('utf-8')))
+            if hasattr(self, 'vault_manager'):
+                self.vault_manager.write_history_messages(path, self.messages)
+            else:
+                with open(path, 'wb') as f:
+                    f.write(zlib.compress(json.dumps(self.messages).encode('utf-8')))
         except Exception as e:
             print(f"History save error: {e}", file=sys.stderr)
 
@@ -5997,8 +5990,11 @@ class ChatbotApp:
         
         if (path := self.get_history_path()) and os.path.exists(path):
             try:
-                with open(path, 'rb') as f: 
-                    self.messages = json.loads(zlib.decompress(f.read()).decode('utf-8'))
+                if hasattr(self, 'vault_manager'):
+                    self.messages = self.vault_manager.read_history_messages(path)
+                else:
+                    with open(path, 'rb') as f: 
+                        self.messages = json.loads(zlib.decompress(f.read()).decode('utf-8'))
                 
                 if self.messages and self.messages[-1].get('role') == 'user': 
                     self.messages.pop()
@@ -6015,6 +6011,8 @@ class ChatbotApp:
                 # Option 1: Keep past history in Archive tab, start active chat fresh
                 self.clear_chat_ui()
                 self._log_and_display("Archive Updated.")
+            except PermissionError:
+                self._log_and_display("Archive is encrypted. Unlock vault to access.")
             except: 
                 self._log_and_display("Archive load failed.")
 
@@ -6029,8 +6027,7 @@ class ChatbotApp:
         self.root.destroy()
         
     def load_params(self, tier):
-        """Loads tier-specific inference parameters if available, otherwise falls back to system defaults."""
-        # Try tier-specific params first, then global params
+        """Loads tier-specific inference parameters, auto-populating params.json if missing."""
         params_files = [f"params_{tier}.json", "params.json"]
         loaded = False
         
@@ -6038,8 +6035,10 @@ class ChatbotApp:
             path = os.path.join(self.dirs["System"], p_file)
             if os.path.exists(path):
                 try: 
-                    with open(path) as f: 
-                        self.params = json.load(f)
+                    with open(path, "r", encoding="utf-8") as f: 
+                        data = json.load(f)
+                    if isinstance(data, dict) and data:
+                        self.params = data
                         print(f"[APEX] Loaded inference overrides from: {p_file}")
                         loaded = True
                         break
@@ -6047,8 +6046,32 @@ class ChatbotApp:
                     print(f"Warning: Failed to load {p_file}: {e}")
         
         if not loaded:
-            self.params = {}
-            print(f"[APEX] No inference overrides found for {tier}. Using engine defaults.")
+            stops = [s.strip() for s in self.stop_strings_config.get(tier, "").split(",") if s.strip()]
+            for st in ["<turn|>", "<|turn>", "<|end_of_turn|>", "<eos>", "<|im_end|>", "<|eot_id|>", "You:", "Serenity:"]:
+                if st not in stops:
+                    stops.append(st)
+            
+            default_params = {
+                "stop": stops,
+                "temperature": self.temp_config.get(tier, 0.8),
+                "min_p": self.min_p_config.get(tier, 0.05),
+                "repeat_penalty": self.repeat_penalty_config.get(tier, 1.0),
+                "presence_penalty": self.presence_penalty_config.get(tier, 0.0),
+                "frequency_penalty": self.frequency_penalty_config.get(tier, 0.0),
+                "top_k": self.top_k_config.get(tier, 64),
+                "top_p": self.top_p_config.get(tier, 0.95),
+                "dry_multiplier": 0.0,
+                "disable_fim_autoswap": True
+            }
+            default_path = os.path.join(self.dirs["System"], "params.json")
+            try:
+                with open(default_path, "w", encoding="utf-8") as f:
+                    json.dump(default_params, f, indent=2)
+                self.params = default_params
+                print(f"[APEX] Populated default params.json for tier: {tier}")
+            except Exception as e:
+                self.params = default_params
+                print(f"[APEX] Warning: Could not write params.json: {e}")
 
     def _fit_image_aspect(self, img, target_w=350, target_h=350):
         orig_w, orig_h = img.size
@@ -6248,9 +6271,9 @@ class ChatbotApp:
         self.state["deep_cook_behavior"] = self.config.get('deep_thought_behavior', "oneshot")
         self.state["virtual_vram"] = self.config.get('virtual_vram', 0)
         self.active_persona_level = self.config.get('active_persona_level', 3)
-        self.max_persona_level = self.config.get('max_persona_level', 6)
-        if self.max_persona_level < 6:
-            self.max_persona_level = 6
+        self.max_persona_level = self.config.get('max_persona_level', 7)
+        if self.max_persona_level < 7:
+            self.max_persona_level = 7
         
         # Persist streaming and headroom
         self.state["streaming_mode"] = self.config.get('streaming_mode', "Buffered")
@@ -6263,7 +6286,7 @@ class ChatbotApp:
         if "auto_vram_offload" not in self.config:
             self.config["auto_vram_offload"] = False
         if "speculative_drafting" not in self.config:
-            self.config["speculative_drafting"] = True
+            self.config["speculative_drafting"] = False
         if "history_lookup_mode" not in self.config:
             self.config["history_lookup_mode"] = "targeted"
         if "k_cache_type" not in self.config:
@@ -6361,74 +6384,10 @@ class ChatbotApp:
             'media_rendering': self.config.get("media_rendering", 1),
             'history_usage': self.config.get("history_usage", "all"),
             'ghost_mode': self.config.get("ghost_mode", False),
+            'dynamic_params_enabled': self.config.get("dynamic_params_enabled", True),
             'startup_count': self.config.get("startup_count", 0),
         }
         with open(self.config_file, 'w') as f: json.dump(data, f, indent=4)
-
-    def _calculate_active_logit_bias(self, context_data):
-        """Analyzes semantically relevant historical memories to identify thematic keywords and build a dynamic logit_bias dict."""
-        if not hasattr(self, 'model') or not self.model:
-            return {}
-        
-        # 1. Extract the user's current query for vector search
-        current_query = ""
-        if isinstance(context_data, list):
-            # Look backwards for the most recent user message
-            for m in reversed(context_data):
-                if isinstance(m, dict) and m.get("role") == "user":
-                    content = m.get("content", "")
-                    if isinstance(content, list):
-                        # Handle multimodal content lists
-                        for part in content:
-                            if part.get("type") == "text":
-                                current_query += " " + part.get("text", "")
-                    elif isinstance(content, str):
-                        current_query = content
-                    break
-        elif isinstance(context_data, str):
-            current_query = context_data[-1000:]
-            
-        current_query = current_query.strip().lower()
-        if not current_query:
-            return {}
-
-        # 2. History Memory Retrieval via Keyword Search
-        text_corpus = ""
-        search_engine = getattr(self, 'history_index', None) or getattr(self, 'turbo_vec', None)
-        if search_engine:
-            try:
-                lookup_mode = self.config.get("history_lookup_mode", "targeted")
-                query_with_time = f"{current_query} {datetime.now().strftime('%Y-%m-%d %A')}"
-                memories = search_engine.search(
-                    query_with_time, 
-                    top_k=3, 
-                    active_model_path=self.model_path, 
-                    active_level=self.active_persona_level, 
-                    lookup_mode=lookup_mode
-                )
-                if memories:
-                    text_corpus = " ".join(memories).lower()
-            except Exception as e:
-                print(f"[HISTORY_SEARCH] Logit Bias search failed: {e}")
-                
-        # Fallback to the active query if no historical relevance is found
-        if not text_corpus:
-            text_corpus = current_query
-        
-        # 3. Extract words and filter stop words/short words
-        words = set([w for w in text_corpus.split() if len(w) > 4])
-        
-        logit_bias = {}
-        for w in words:
-            try:
-                # Use model.tokenize if available to extract token IDs to bias
-                tokens = self.model.tokenize(w.encode("utf-8"), add_bos=False)
-                for t in tokens:
-                    logit_bias[t] = 1.0  # slight bump
-            except Exception:
-                pass
-            
-        return logit_bias
 
     def _get_inference_params(self, temp_messages=None):
         """Builds the parameter dictionary for llama-cpp-python inference."""
@@ -6446,7 +6405,7 @@ class ChatbotApp:
             "temperature": self.temp_config.get(self.current_model_tier, 1.0), # Gemma-4 Official
             "top_p": self.top_p_config.get(self.current_model_tier, 0.95),
             "min_p": self.min_p_config.get(self.current_model_tier, 0.05),
-            "repeat_penalty": self.repeat_penalty_config.get(self.current_model_tier, 1.0), # Gemma-4 recommendation
+            "repeat_penalty": self.repeat_penalty_config.get(self.current_model_tier, 1.15) if self.repeat_penalty_config.get(self.current_model_tier, 1.0) == 1.0 else self.repeat_penalty_config.get(self.current_model_tier, 1.15),
             "frequency_penalty": self.frequency_penalty_config.get(self.current_model_tier, 0.0),
             "presence_penalty": self.presence_penalty_config.get(self.current_model_tier, 0.0),
             "stop": stops,
@@ -6465,7 +6424,8 @@ class ChatbotApp:
             inf_params["max_tokens"] = max(256, calculated_max)
 
         
-        # Overlay with params.json values if loaded
+        # Live hot-reload and overlay with params.json values if present
+        self.load_params(self.current_model_tier)
         if hasattr(self, "params") and self.params:
             override_params = dict(self.params)
             
@@ -6486,12 +6446,6 @@ class ChatbotApp:
         }
         
         filtered_params = {k: v for k, v in inf_params.items() if k in supported_keys}
-        
-        # Support active logit bias tracking for context recursion
-        if temp_messages:
-            lb = self._calculate_active_logit_bias(temp_messages)
-            if lb:
-                filtered_params["logit_bias"] = lb
         
         dropped = set(inf_params.keys()) - set(filtered_params.keys())
         if dropped:
@@ -6716,7 +6670,7 @@ class ChatbotApp:
     def _get_history_usage_label(self):
         val = self.config.get("history_usage", "all")
         if val == "current_window":
-            return "📚 Hist: Session"
+            return "📚 Hist: Window"
         elif val == "off":
             return "📚 Hist: Off"
         return "📚 Hist: All"
@@ -6732,12 +6686,49 @@ class ChatbotApp:
     def toggle_history_usage(self):
         modes = ["all", "current_window", "off"]
         current = self.config.get("history_usage", "all")
+        if current not in modes:
+            current = "all"
         next_idx = (modes.index(current) + 1) % len(modes)
         next_mode = modes[next_idx]
         self.config["history_usage"] = next_mode
         self.save_config()
         self.history_usage_button.config(text=self._get_history_usage_label(), fg=self._get_history_usage_color())
-        self._log_and_display(f"History usage set to: {next_mode.upper()}")
+        label_disp = "CURRENT WINDOW" if next_mode == "current_window" else next_mode.upper()
+        self._log_and_display(f"History usage set to: {label_disp}")
+
+    def _init_turbovec(self):
+        try:
+            cfg = getattr(self, "config", {}) or {}
+            mode = cfg.get("turbovec_mode", "fallback")
+            self.turbo_vec = TurboVecIndex(self.dirs["History"], mode=mode)
+            if mode != "off":
+                lookup_mode = cfg.get("history_lookup_mode", "targeted")
+                model_p = getattr(self, "model_path", None)
+                lvl = getattr(self, "active_persona_level", 1)
+                self.turbo_vec.ingest_needed_files(model_p, lvl, lookup_mode)
+            print(f"[TURBOVEC] Background initialization complete (Mode: {mode.upper()}).")
+        except ImportError as e:
+            print(f"[TURBOVEC] Optional module not installed: {e}")
+        except Exception as e:
+            print(f"[TURBOVEC] Background init failed: {e}")
+
+    def soft_reload_turbovec(self):
+        """Soft-reloads the TurboVec subsystem without restarting or dropping models."""
+        cfg = getattr(self, "config", {}) or {}
+        mode = cfg.get("turbovec_mode", "fallback")
+        def _reload():
+            try:
+                print(f"[TURBOVEC] Soft reloading TurboVec subsystem (Target Mode: {mode.upper()})...")
+                self.turbo_vec = TurboVecIndex(self.dirs["History"], mode=mode)
+                if mode != "off":
+                    lookup_mode = cfg.get("history_lookup_mode", "targeted")
+                    model_p = getattr(self, "model_path", None)
+                    lvl = getattr(self, "active_persona_level", 1)
+                    self.turbo_vec.ingest_needed_files(model_p, lvl, lookup_mode)
+                print(f"[TURBOVEC] Soft reload complete.")
+            except Exception as e:
+                print(f"[TURBOVEC] Soft reload error: {e}")
+        threading.Thread(target=_reload, daemon=True).start()
 
 sys.excepthook = log_uncaught_exception
 
@@ -6782,7 +6773,10 @@ if __name__ == "__main__":
         # Start checking
         root.after(50, check_libraries)
         root.mainloop()
-    except Exception as e: log_uncaught_exception(type(e), e, e.__traceback__)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        log_uncaught_exception(type(e), e, e.__traceback__)
     finally:
         if SYSTEM_MONITOR_LOADED and nvidia_ml: 
             try: nvidia_ml.nvmlShutdown()

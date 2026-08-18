@@ -199,7 +199,7 @@ def open_settings_window(app):
 
         # 3 Checkboxes relocated from Global Overrides to left column
         auto_vram_var = tk.BooleanVar(value=app.config.get("auto_vram_offload", False))
-        spec_draft_var = tk.BooleanVar(value=app.config.get("speculative_drafting", True))
+        spec_draft_var = tk.BooleanVar(value=app.config.get("speculative_drafting", False))
         ghost_var = tk.BooleanVar(value=app.config.get("ghost_mode", False))
         thinking_var = tk.BooleanVar(value=app.config.get("thinking_checkbox", True))
         benchmark_var = tk.BooleanVar(value=app.config.get("benchmark_enabled", False))
@@ -424,11 +424,11 @@ def open_settings_window(app):
         # Left Sub-Column Controls
         dynamic_params_var = tk.BooleanVar(value=app.config.get("dynamic_params_enabled", True))
         tk.Checkbutton(left_over_col, text="Dynamic Param Auto-Tune (Coding/Math/Creative)", variable=dynamic_params_var,
-                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"],
-                       activebackground=THEME["bg_color"], activeforeground=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=2)
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"],
+                       activebackground=THEME["bg_color"], activeforeground=THEME["fg_color"]).pack(anchor="w", padx=5, pady=(2,0))
 
         hao_var = tk.StringVar(value=app.config.get("hao_preset", "exps=CPU"))
-        tk.Label(left_over_col, text="HAO Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(2,0))
+        tk.Label(left_over_col, text="HAO Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
         hao_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); hao_f.pack(anchor="w", padx=10)
         for o in ["None", "exps=CPU"]:
             tk.Radiobutton(hao_f, text=o, variable=hao_var, value=o, 
@@ -499,6 +499,210 @@ def open_settings_window(app):
         budget_recovery_dropdown = ttk.Combobox(kv_frame, textvariable=budget_recovery_var, values=["off", "respond", "wrapup", "autocont"], state="readonly", width=14)
         budget_recovery_dropdown.grid(row=4, column=1, padx=5, pady=2)
 
+        tk.Label(kv_frame, text="TurboVec Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=5, column=0, sticky="w", pady=2)
+        turbovec_mode_var = tk.StringVar(value=app.config.get("turbovec_mode", "fallback"))
+        turbovec_mode_dropdown = ttk.Combobox(kv_frame, textvariable=turbovec_mode_var, values=["on", "fallback", "off"], state="readonly", width=14)
+        turbovec_mode_dropdown.grid(row=5, column=1, padx=5, pady=2)
+
+        # --- SECURITY & VAULT ENCRYPTION PANEL ---
+        vault_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
+        vault_section.pack(fill=tk.X, padx=10, pady=(15, 10))
+
+        vault_header = tk.Frame(vault_section, bg=THEME["widget_bg_color"])
+        vault_header.pack(fill=tk.X, padx=0, pady=0)
+        tk.Label(vault_header, text="🔐 Security & Vault Encryption (AES-256-GCM)", bg=THEME["widget_bg_color"], 
+                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(side=tk.LEFT, padx=8, pady=4)
+
+        vault_status_lbl = tk.Label(vault_header, text="", font=("Segoe UI", 9, "bold"), bg=THEME["widget_bg_color"])
+        vault_status_lbl.pack(side=tk.RIGHT, padx=8, pady=4)
+
+        def _refresh_vault_status_ui():
+            if hasattr(app, 'vault_manager') and app.vault_manager.is_lock_enabled():
+                if app.vault_manager.is_locked():
+                    vault_status_lbl.config(text="● LOCKED", fg="#ff4444")
+                else:
+                    vault_status_lbl.config(text="● ACTIVE (Unlocked)", fg="#00ff88")
+            else:
+                vault_status_lbl.config(text="○ DISABLED (Plaintext)", fg="#888888")
+
+        _refresh_vault_status_ui()
+
+        vault_body = tk.Frame(vault_section, bg=THEME["bg_color"], padx=8, pady=6)
+        vault_body.pack(fill=tk.X)
+
+        # Master Password Action Buttons
+        v_btn_row = tk.Frame(vault_body, bg=THEME["bg_color"])
+        v_btn_row.pack(fill=tk.X, pady=(2, 6))
+
+        def _open_set_password_modal():
+            from System.vault_manager import DISCLAIMER_WARNING_TEXT
+            pwd_win = tk.Toplevel(win)
+            pwd_win.title("Set Master Vault Password")
+            pwd_win.geometry("540x520")
+            pwd_win.config(bg=THEME["bg_color"])
+            pwd_win.transient(win)
+            pwd_win.grab_set()
+
+            # Loud All-Caps Disclaimer Box
+            disc_frame = tk.Frame(pwd_win, bg="#330000", bd=2, relief=tk.RIDGE)
+            disc_frame.pack(fill=tk.X, padx=12, pady=10)
+            tk.Label(disc_frame, text=DISCLAIMER_WARNING_TEXT, bg="#330000", fg="#ffcc00",
+                     font=("Consolas", 8, "bold"), justify=tk.LEFT).pack(padx=8, pady=8)
+
+            fields_frame = tk.Frame(pwd_win, bg=THEME["bg_color"])
+            fields_frame.pack(fill=tk.X, padx=16, pady=4)
+
+            is_already_enabled = hasattr(app, 'vault_manager') and app.vault_manager.is_lock_enabled()
+            curr_pwd_var = tk.StringVar()
+            new_pwd_var = tk.StringVar()
+            confirm_pwd_var = tk.StringVar()
+
+            row_idx = 0
+            if is_already_enabled:
+                tk.Label(fields_frame, text="Current Password:", bg=THEME["bg_color"], fg=THEME["fg_color"]).grid(row=row_idx, column=0, sticky="w", pady=4)
+                curr_entry = tk.Entry(fields_frame, textvariable=curr_pwd_var, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+                curr_entry.grid(row=row_idx, column=1, padx=6, pady=4)
+                row_idx += 1
+
+            tk.Label(fields_frame, text="New Master Password:", bg=THEME["bg_color"], fg=THEME["fg_color"]).grid(row=row_idx, column=0, sticky="w", pady=4)
+            new_entry = tk.Entry(fields_frame, textvariable=new_pwd_var, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+            new_entry.grid(row=row_idx, column=1, padx=6, pady=4)
+            row_idx += 1
+
+            tk.Label(fields_frame, text="Confirm Password:", bg=THEME["bg_color"], fg=THEME["fg_color"]).grid(row=row_idx, column=0, sticky="w", pady=4)
+            conf_entry = tk.Entry(fields_frame, textvariable=confirm_pwd_var, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+            conf_entry.grid(row=row_idx, column=1, padx=6, pady=4)
+
+            def _apply_new_password():
+                new_p = new_pwd_var.get().strip()
+                conf_p = confirm_pwd_var.get().strip()
+                curr_p = curr_pwd_var.get().strip() if is_already_enabled else None
+
+                if len(new_p) < 4:
+                    messagebox.showerror("Error", "Password must be at least 4 characters long.", parent=pwd_win)
+                    return
+                if new_p != conf_p:
+                    messagebox.showerror("Error", "New password and confirmation do not match.", parent=pwd_win)
+                    return
+
+                if not messagebox.askyesno("CONFIRM ENCRYPTION", 
+                                           "ARE YOU ABSOLUTELY SURE?\n\nIf you lose this password, ALL history files will be PERMANENTLY lost.\n\nProceed with AES-256-GCM history migration?",
+                                           parent=pwd_win):
+                    return
+
+                success, msg = app.vault_manager.set_password(new_p, curr_p)
+                if success:
+                    messagebox.showinfo("Vault Configured", msg, parent=pwd_win)
+                    _refresh_vault_status_ui()
+                    pwd_win.destroy()
+                else:
+                    messagebox.showerror("Vault Error", msg, parent=pwd_win)
+
+            btn_box = tk.Frame(pwd_win, bg=THEME["bg_color"])
+            btn_box.pack(fill=tk.X, padx=16, pady=12)
+            tk.Button(btn_box, text="Encrypt & Set Password", command=_apply_new_password,
+                      bg=THEME["button_active_color"], fg=THEME["fg_color"], font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=4)
+            tk.Button(btn_box, text="Cancel", command=pwd_win.destroy,
+                      bg=THEME["button_bg_color"], fg=THEME["fg_color"]).pack(side=tk.RIGHT, padx=4)
+
+        def _open_disable_vault_modal():
+            if not hasattr(app, 'vault_manager') or not app.vault_manager.is_lock_enabled():
+                messagebox.showinfo("Info", "Vault lock is already disabled.", parent=win)
+                return
+
+            dis_win = tk.Toplevel(win)
+            dis_win.title("Disable Vault Lock")
+            dis_win.geometry("400x200")
+            dis_win.config(bg=THEME["bg_color"])
+            dis_win.transient(win)
+            dis_win.grab_set()
+
+            tk.Label(dis_win, text="Enter Master Password to Decrypt All Histories:", 
+                     bg=THEME["bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 9, "bold")).pack(padx=12, pady=10)
+            
+            pwd_ent = tk.Entry(dis_win, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+            pwd_ent.pack(padx=12, pady=6)
+            pwd_ent.focus_set()
+
+            def _do_disable():
+                pwd = pwd_ent.get().strip()
+                if not pwd: return
+                success, msg = app.vault_manager.disable_lock(pwd)
+                if success:
+                    messagebox.showinfo("Vault Disabled", msg, parent=dis_win)
+                    _refresh_vault_status_ui()
+                    dis_win.destroy()
+                else:
+                    messagebox.showerror("Verification Failed", msg, parent=dis_win)
+
+            tk.Button(dis_win, text="Decrypt & Disable", command=_do_disable,
+                      bg="#660000", fg="white", font=("Segoe UI", 9, "bold")).pack(pady=12)
+
+        tk.Button(v_btn_row, text="🔑 Set / Change Master Password", command=_open_set_password_modal,
+                  bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=4)
+
+        tk.Button(v_btn_row, text="🔓 Disable Vault Lock", command=_open_disable_vault_modal,
+                  bg=THEME["button_bg_color"], fg="#ffaa00", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
+
+        def _lock_now():
+            if hasattr(app, 'vault_manager') and app.vault_manager.is_lock_enabled():
+                app.vault_manager.lock()
+                _refresh_vault_status_ui()
+                if hasattr(app, 'show_vault_unlock_modal'):
+                    app.show_vault_unlock_modal()
+            else:
+                messagebox.showinfo("Vault Inactive", "Enable Master Password first to lock the application.", parent=win)
+
+        tk.Button(v_btn_row, text="🔒 Lock App Now", command=_lock_now,
+                  bg="#441111", fg="#ff8888", font=("Segoe UI", 8, "bold")).pack(side=tk.RIGHT, padx=4)
+
+        # Inactivity Auto-Lock Control (Slider + Typeable input + Quick presets)
+        auto_lock_sec = app.vault_manager.get_auto_lock_seconds() if hasattr(app, 'vault_manager') else 0
+        auto_lock_var = tk.IntVar(value=auto_lock_sec)
+        auto_lock_min_var = tk.DoubleVar(value=round(auto_lock_sec / 60.0, 1))
+
+        inactivity_frame = tk.Frame(vault_body, bg=THEME["bg_color"])
+        inactivity_frame.pack(fill=tk.X, pady=(4, 2))
+
+        tk.Label(inactivity_frame, text="Auto-Lock Inactivity:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 6))
+
+        sec_entry = tk.Entry(inactivity_frame, textvariable=auto_lock_var, width=6, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+        sec_entry.pack(side=tk.LEFT, padx=4)
+        tk.Label(inactivity_frame, text="sec", bg=THEME["bg_color"], fg="#888888").pack(side=tk.LEFT, padx=(0, 8))
+
+        slider_lock = tk.Scale(inactivity_frame, from_=0, to=60, orient=tk.HORIZONTAL, resolution=0.5,
+                               variable=auto_lock_min_var, bg=THEME["bg_color"], fg=THEME["fg_color"],
+                               troughcolor=THEME["widget_bg_color"], highlightthickness=0, length=140)
+        slider_lock.pack(side=tk.LEFT, padx=4)
+        tk.Label(inactivity_frame, text="min", bg=THEME["bg_color"], fg="#888888").pack(side=tk.LEFT, padx=(0, 8))
+
+        def _on_sec_entry_change(*args):
+            try:
+                s = int(auto_lock_var.get())
+                auto_lock_min_var.set(round(s / 60.0, 1))
+            except: pass
+
+        def _on_min_slider_change(*args):
+            try:
+                m = float(auto_lock_min_var.get())
+                auto_lock_var.set(int(m * 60))
+            except: pass
+
+        auto_lock_var.trace_add("write", _on_sec_entry_change)
+        auto_lock_min_var.trace_add("write", _on_min_slider_change)
+
+        # Quick Preset Buttons
+        def _set_preset(s):
+            auto_lock_var.set(s)
+            auto_lock_min_var.set(round(s / 60.0, 1))
+
+        presets_frame = tk.Frame(vault_body, bg=THEME["bg_color"])
+        presets_frame.pack(fill=tk.X, pady=(2, 4))
+        tk.Label(presets_frame, text="Presets:", bg=THEME["bg_color"], fg="#777777", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 4))
+        for p_sec, p_lbl in [(0, "Off"), (15, "15s"), (30, "30s"), (45, "45s"), (300, "5m"), (900, "15m"), (1800, "30m")]:
+            tk.Button(presets_frame, text=p_lbl, command=lambda s=p_sec: _set_preset(s),
+                      bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 7), relief=tk.FLAT, padx=3, pady=0).pack(side=tk.LEFT, padx=2)
+
         tk.Label(main, text="Text/Inline Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(anchor="w", padx=10, pady=(15, 5))
         tier_grid = tk.Frame(main, bg=THEME["bg_color"])
         tier_grid.pack(fill=tk.X, pady=10)
@@ -527,12 +731,16 @@ def open_settings_window(app):
             app.config["v_cache_type"] = v_cache_var.get()
             app.config["history_lookup_mode"] = history_lookup_var.get()
             app.config["history_usage"] = history_usage_var.get()
+            app.config["turbovec_mode"] = turbovec_mode_var.get()
+            app.config["dynamic_params_enabled"] = dynamic_params_var.get()
             app.config["ghost_mode"] = ghost_var.get()
             if hasattr(app, 'ghost_button') and app.ghost_button:
                 app.ghost_button.config(text=app._get_ghost_mode_label(), fg=app._get_ghost_mode_color())
             if hasattr(app, 'history_usage_button') and app.history_usage_button:
                 app.history_usage_button.config(text=app._get_history_usage_label(), fg=app._get_history_usage_color())
-            if getattr(app, 'turbo_vec', None):
+            if hasattr(app, "soft_reload_turbovec"):
+                app.soft_reload_turbovec()
+            elif getattr(app, 'turbo_vec', None):
                 import threading
                 threading.Thread(
                     target=app.turbo_vec.ingest_needed_files, 
@@ -555,10 +763,11 @@ def open_settings_window(app):
                 print(f"[UI] Warning: Could not write KV cache types to Live params: {pe}")
             app.config["hao_preset"] = hao_var.get()
 
-            app.config["dynamic_params_enabled"] = dynamic_params_var.get()
             app.config["swa_kv_cache"] = swa_var.get()
             app.config["auto_vram_offload"] = auto_vram_var.get()
+            old_spec = app.config.get("speculative_drafting", False)
             app.config["speculative_drafting"] = spec_draft_var.get()
+            draft_toggled = (old_spec != spec_draft_var.get())
             app.config["ghost_mode"] = ghost_var.get()
             app.config["thinking_checkbox"] = thinking_var.get()
             app.config["benchmark_enabled"] = benchmark_var.get()
@@ -570,6 +779,9 @@ def open_settings_window(app):
             app.config["image_handling"] = image_handling_var.get()
             app.config["muse_reasoning_strength"] = muse_reasoning_var.get()
             app.config["dmn_timeout"] = dmn_ent.get().strip()
+            if hasattr(app, 'vault_manager'):
+                try: app.vault_manager.set_auto_lock_seconds(int(auto_lock_var.get()))
+                except: pass
             try: app.state["virtual_vram"] = int(float(vram_ent.get()) * 1024)
             except: pass
             for t, e in ents.items():
@@ -599,9 +811,9 @@ def open_settings_window(app):
             for t, e in freq_ents.items():
                 try: app.frequency_penalty_config[t] = float(e.get())
                 except: pass
-            for t, e in stop_ents.items():
-                app.stop_strings_config[t] = e.get()
             app.save_config()
+            if draft_toggled and hasattr(app, "swap_tier") and hasattr(app, "current_model_tier"):
+                app.swap_tier(app.current_model_tier)
             messagebox.showinfo("Success", "Settings saved!")
             win.destroy()
 

@@ -13,3 +13,5 @@ sounddevice
 beautifulsoup4
 playwright
 chromadb
+cryptography
+opencv-python
