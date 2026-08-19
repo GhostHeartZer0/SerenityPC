@@ -14,14 +14,6 @@ DOCS_DIR = os.path.join(BASE_DIR, "Docs")
 APP_ICON = os.path.join(SYSTEM_DIR, "serenity.ico")
 LIVE_ICON = os.path.join(MEDIA_DIR, "transcendent_serenity_ws_hq2.png")
 
-# Logic & Scripts
-LIVE_AGENT_SCRIPT = os.path.join(LIVE_DIR, "serenity_live.py")
-LIVE_ENGINE_SCRIPT = os.path.join(LIVE_DIR, "Engine", "t5_server.py")
-
-# --- LIVE ENGINE CONFIG ---
-SERENITY_LIVE_URL = "http://127.0.0.1:8001/analyze"
-SERENITY_LIVE_KEY = "REVOKED"
-
 # --- UI THEME ---
 THEME = {
     "bg_color": "#000000",           # Pure Black Background
