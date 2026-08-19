@@ -1,0 +1,44 @@
+SERENITYPC LOCAL LEGACY WORKSPACE TODO
+========================================
+
+[x] 1. MERGE & UPDATE FROM MAIN
+    - Track commits from main branch (https://github.com/GhostHeartZer0/SerenityPC).
+    - Port bugfixes, UI improvements, and core logic updates.
+    - Exclude internal-only testing scripts, dev credentials, and hardcoded local configurations.
+    - Ensure README.txt and Setup.txt are accurate and updated for the public release.
+    REMEMBER: this branch is for other users, not this specific system. compatibility and reliability is key.
+
+[ ] 2. REFACTOR FOR CROSS-PLATFORM COMPATIBILITY
+    - Eliminate or guard Windows-only imports and calls:
+      * `windnd` (main.py): Wrap Tkinter drag-and-drop dynamically. Fall back gracefully if windnd is missing or implement a cross-platform TkinterDnD2 integration.
+      * `winsound` (serenity_live.py, t5_server.py, setup_engine.py): Replace or wrap in try-except with fallbacks (e.g. system terminal bell, sounddevice, or silence on macOS/Linux).
+      * `win32api`/`win32con` (serenity_utils.py): Check sys.platform and use cross-platform equivalents or bypass logic.
+    - Port cleanup logic:
+      * Replace Windows-specific taskkill shell command (`taskkill /F /PID ...`) in main.py shutdown hooks with cross-platform psutil-based process termination.
+    - Build environments (setup.py):
+      * Support gcc/clang compilation flags alongside MSVC.
+      * Make Visual Studio vcvars64.bat search optional.
+      * Enable Apple Silicon (Metal) and Linux (ROCm/CUDA/CPU-only) compilation paths.
+
+[ ] 3. REMOVE HARDCODED SYSTEM PATHS & LOCALIZATION
+    - Config file (System/config.json):
+      * [x] Convert absolute paths containing 'C:/Users/ccrg6/...' and 'S:/...' to relative paths inside the workspace (e.g., './Models/...').
+    - Path resolution:
+      * Ensure setup.py, main.py, and serenity_resources.py use relative folder paths or user home directories (e.g. `~/.serenity/`) rather than assuming specific drive letters or folder structures.
+
+[ ] 4. TAILOR HARDWARE INFERENCE TO DYNAMIC TARGETS
+    - Remove hardcoded specifications tuned for i7-12700KF / RTX 3050 LP:
+      * Replace fixed thread pinning (`n_threads=8`) with dynamic core detection (`psutil.cpu_count(logical=False)`).
+      * Dynamically set batch sizes (`n_batch`) and memory margins based on detected CPU/GPU capacity instead of static limits.
+      * Make VRAM floor checking (nvidia_ml) adaptable to different card sizes (e.g. 4GB, 6GB, 8GB, 12GB, 16GB, 24GB+) rather than hardcoding a 500MB margin.
+
+[ ] 5. HUGGING FACE MODEL DOWNLOADER INTEGRATION
+    - Build an interactive model downloader script (e.g., `System/model_downloader.py` or integrated into `setup.py`):
+      * Use `huggingface_hub` to fetch GGUF checkpoints directly.
+      * Map levels/personas to respective public HF models (e.g., `unsloth/gemma-4-E2B-it-GGUF`, `unsloth/gemma-4-E4B-it-GGUF`, etc.).
+      * Implement hardware check that guides the user to select the appropriate quantization size based on their VRAM/RAM tier.
+      * Organize model downloads automatically into the `./Models/` directory structure.
+
+[ ] 6. Set up model tiers and bucketing for easy model distro.
+
+[ ] 7. Fully Offline mode toggle (blocks all network usage outside of setup)

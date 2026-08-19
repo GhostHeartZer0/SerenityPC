@@ -2,91 +2,48 @@ This is SerenityPC Local Legacy, a version made for legacy hardware.
 
 
 System Requirements:
-Reccomended:
+Recommended:
 At least 6GB of VRAM, 12-24GB preferred.
 16GB of RAM, 32 preferred.
 A CPU with at least 8 logical cores
-At Least GB storage
+At Least 20GB storage
 Required:
 4GB VRAM
 8GB RAM
 a CPU with at least 4 cores.
-At least GB storage.
-To decide which models to run, take the total size of the model with estimated cache size against your VRAM for speed and VRAM+RAM for possibility.
-Give 1GB VRAM to ensure system stability.
-Cache size calculation:
-KV cache chosen in settings goes like this:
-Q4_0 ia a quarter the full, uncompressed size.
-Q8_0 divides it by 8. FP16 is full size.
-Assuming Q4_0:
-
-Model Tier
-Variant
-Weight Size (FS)
-KV Cache (KV)
-Total Footprint (FT)
-
-Gemma-4 E2B
-Recommended (IQ4)
-2.76 GiB
-56.54 MiB
-2.82 GiB
-
-Gemma-4 E4B
-Recommended (Q4_K)
-4.74 GiB
-152.44 MiB
-4.89 GiB
-
-Gemma-4 26B
-Recommended 1 (MXFP4)
-15.47 GiB
-250.31 MiB
-15.72 GiB
-
-Gemma-4 26B
-Recommended 2 (Q5_K)
-19.75 GiB
-250.31 MiB
-20.00 GiB
-
-Gemma-4 31B
-Required (Q4_K)
-17.46 GiB
-1,001.25 MiB
-18.46 GiB
-
-
+At least 8GB storage.
+LLMs run from memory, so
+(VRAM - Sys Use) + (RAM - Sys Use)
 
   How to get started:
-First, run setup.py, and for the Live interface, setup_engine.py. you'll find desktop shortcuts for each, and when they finish, you'll get to see if you have GPU support.
-Clicking the desktop icons will run their respective interface.
-Live is also runnable from SerenityPC herself. If for some reason it doesn't run, click in main.py to launch SerenityPC, and t5_engine for Serenity Live. 
+1. Check your CUDA version and update if needed by navigating to Misc > CUDA and running that installer. 
+you can select the advanced installer to select only what you need.
+2. run setup.py. you will need to do this to build the virtual environment (.venv folder) for your specific system.
+3. To load the UI, you can open the desktop shortcut, run.bat, or main.py.
+4. Navigating The UI
+	First, set the Models up. In settings, select the LLM you want for each lvl or engine you intend to use.
+	Second, set the params. To make it easy, you can either search for recommended settings, or use a template. On the Templating Engine, click Write, them click the Engine box you intend to write to. a good template to start with is bottom left for gemma-4. Modiy views and edits them.
+Layers is how much of the model is loaded on GPU. for max, set it to 99. you can reduce this if you notice shared VRAM spikes.
+	Third, set the rest up, Save & Apply to close.
+Most of this is self-explanatory, but you can leave alone what you don't get.
+	Lastly, select persona or knock twice on the door to Lvl 7, and Begin! Type a prompt at any time during this process, it'll save as long as the chat window remains. Enter/Send sends the prompt (and loads model if needed).
 
-Explaining the Interface:
+Have fun exploring the interface, if you have any questions, please feel free to ask.
 
-There are 5 main levels, 7 total.
-Lvl 1 is for fast response time and speed.
-Lvl 2 focuses on web searching and general help.
-Lvl 3 is collaborative, project focused.
-Lvl 4 unravels emotional complexity.
-Lvl 5 is the smart one.
-As for the others...
-Lvl 6 is a secret, hidden level. 
-Deep Cook uses iterative processing and cycles to think more deeply about a prompt, resulting in a much more accurate response. It takes the previous cycle's findings and periodically weighs it against the main prompt to ensure it stays on track. It is meant as an extension of each of these 6 levels, designed for more deep thought and reasoning at the cost of speed.
-Lvl 7 is technically Live mode, visible when launching the Live interface from the main UI. Its meant to learn from each level, creating a smarter, combined interface, as Live otherwise has just the one level. 
-Live, instead, has Cores, tied to different models.
-Those models are as follows:
-Light: t5gemma-2-270m-270m, requiring GB of VRAM.
-Med: t5gemma-2-1b-1b, requiring GB of VRAM (or RAM, but that's slower)
-Heavy: t5gemma-2-4b-4b, needing GB of VRAM/DRAM to function.
-Context size also matters. You can adjust this in settings. With the advancements of TurboQuant (Google DeepMind) and TriAttention (Researchers from MIT, NVIDIA, and Zhejiang University), context takes up far less memory than it used to. 
-It is the combined size limit of the prompt, history, and model thoughts that go into the final response. 
+Context size also matters. You can adjust this in settings. It is the combined size limit of the prompt, history, system overhead and reasoning that go into making the final response. Here is a cheat sheet:
+k*1024
+256k= 262,144, 192k= 196,608,160k= 163,840
+128k= 131,072, 96k = 98,304, 64k = 65,536
+48k = 49,152,  32k = 32,768, 16k = 16,384
+12k = 12,288,  8k  = 8192,   4k  = 4096
+
+In System/tests/benchmarks, you'll find two apps.
+
 In the main SerenityPC UI,
   Settings:
 Deep Cook Behavior has two functions:
 One-Shot loads the deep cook model for a single prompt, activated by clicking its respective button right next to send.
-Toggle Mode changes thaycbutton to turn the Deep Cook model and mode on or off.
+Toggle Mode changes that button to turn the Deep Cook model and mode on or off.
 Manual VRAM override adjusts Auto-detect, do you don't ha e to mess with layers and context size.
 Rich Media Rendering details how images and video are displayed.
 Global Overrides:
@@ -94,10 +51,10 @@ Global KV Cache relates to the KV Translator Map up top. It details the level of
 Video Processing Sub-Chunk Size details how many frames the AI can gobble at once, which ultimately results in the compiled descriptions (temporarily stored in memory), which then get considered for the final response.
 Video inferencing is real slow, limited mostly by memory and model size.
 A Token can vary in size, from a symbol or syllable to a word.
-A parameter (B in A4B) is wssentially a neuron connecting dots in thought during training.the A stands for active. 
+A parameter (B in A4B) is essentially a neuron connecting dots in thought during training. The A stands for active. 
 E in E4B stands for Effective, meaning it acts larger than it really is.
 As for the parameters:
-Layers dictates how many llm layers are offloaded to the GPU, to be stored in VRAM. this dictates how fast the model can understand and respond, as VRAM on the GPU is much faster and reccomended for fastest response time.
+Layers dictates how many LLM layers are offloaded to the GPU, to be stored in VRAM. this dictates how fast the model can understand and respond, as VRAM on the GPU is much faster and recommended for fastest response time.
 The larger models (26B, 31B) are slower, as they usually can't fit entirely in VRAM, as they require expensive hardware with up to 24GB VRAM. instead, this is where layer offloading is crucial. Offloading just enough (-1 if all can fit), allows the model to split the layers better, resulting in faster loading times. However, the intelligence and accuracy of these models is much higher, at the cost of speed.
 Ctx is context size. 1024 x the number next to k (thousand) provides the value.
 4k is 4096, 8k 8192, 16k 16384, 32k 32768, 64k 65536, and so on.
@@ -107,30 +64,23 @@ Batch is the chunk size in tokens sent to the model at once for evaluation. This
 Temp:  increases or decreases the randomness. Low  Factual, precise, consistent (e.g., coding, summaries).High Creative, varied, unpredictable (e.g., brainstorming, poetry). 0, Deterministic (always chooses the highest probability).
 Top P: a value between 0-1 meaning percent (0%-100%).
 Adjusts the cumulative probability of the batch of tokens, so only the top that percent probability get considered.
-Min-P: controls hallucinations, cutting off tokens below a certsin threshold. The higher the number, the wackier it can get. It takes the top token probability and multiplies it by the value, cutting off probability of the tokens below that being used. If the top token is 99% probable and this value is set to 0.1, it curs off tokens below a 9.9% probability. 
+Min-P: controls hallucinations, cutting off tokens below a certain threshold. The higher the number, the wackier it can get. It takes the top token probability and multiplies it by the value, cutting off probability of the tokens below that being used. If the top token is 99% probable and this value is set to 0.1, it curs off tokens below a 9.9% probability. 
 Repetition Penalty: stops repeats. -2.0 to 2.0. Higher the number is more restricted.
 
 Frequency Penalty: restricts tokens that appear frequently. -2.0 to 2.0. Higher number is more restriction.
 Top-K: restricts the next most likely tokens so only that many are considered.
 Begin! Starts the model. (Clicking on the level does the same)
-It turns to Offload, which frees up memory.
-Live launches the Live interface (use with caution, running two llms at once can clog your memory easily)
-Video allows you to load a video, activating the video engine selected in settings. 
+It turns to Offload, which frees up memory. 
 Set Vision in settings selects the vision model (not all support this)
 Projector: make sure to select the respective .mmproj proector file associated with the model so it can actually process the video. This feeds the llm the right data.
 BF16 is reccomended for NVIDIA graphics cards, 
 F16 is more universally compatible. If you have the wrong version, contact me.
 Pulse simulates a DMN (Default Mode Network), allowing Serenity to ponder recent histories, enhancing her understandings. This feeds prime.chronicles.txt.
-RGB, if supported, os a miche feature still under development, allowing light sync with its own little UI. It can allow automatic light switching or change the RGBs to the model color. Please not this is an experimental feature that probably doesn't work yet.
+RGB, if supported, is a niche feature still under development, allowing lighting sync with its own little UI. It can allow automatic light switching or change the RGBs to the model color. Please not this is an experimental feature that probably doesn't work yet.
 Clean clears the selected media from memory (Video)
-The plus sign next to the level slider adds inages, audio, or documents to the prompt.
+The plus sign next to the level slider adds images, audio, or documents to the prompt.
 Halt attempts to stop a running model, useful if it gets caught.
-The Backend Logs:
-Left was originally for thoughts, which became a dropdown right in the UI. it now mainly shows model loading statuses.
-The tool icon tab shows tool calls, such as web search.
-The warning triangle tab shows the entire model loading process and generation info, minus the super redundant parts.
-The right tab is a condensed version of the previous tab, showing choice model loading info and generation info.
-t/s is tokens per second. You can see how many layers the model has, as well as the current cache sizes and more.
-I believe that prerty much covers it. If you have any ideas, complaints, or notice something glaringly obvious that I should have caught, please reach out to me at ccrg69@gmail.com . I value input!
+
+If you have any ideas, complaints, or notice something glaringly obvious that I should have caught, please reach out to me at ccrg69@gmail.com . I value input!
 Thanks for reading, 
 -GhostHeartZer0
