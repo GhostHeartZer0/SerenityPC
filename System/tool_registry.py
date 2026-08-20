@@ -88,6 +88,16 @@ class GemmaToolRegistry:
             if not query:
                 return "Error: Search query cannot be empty."
             
+            # Check Offline Mode Guard
+            from System.network_guard import is_offline_mode
+            if is_offline_mode() or (self.app and getattr(self.app, 'config', {}).get("offline_mode", False)):
+                msg = f"[OFFLINE MODE] Live web search blocked by offline policy for query: '{query}'."
+                pq = getattr(self.app, "process_queue", None)
+                if pq:
+                    try: pq.put({"status": "tool_log_update", "content": f"\n{msg}"})
+                    except: pass
+                return msg
+
             import requests
             import urllib.parse
             from bs4 import BeautifulSoup

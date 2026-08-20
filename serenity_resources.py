@@ -14,17 +14,147 @@ DOCS_DIR = os.path.join(BASE_DIR, "Docs")
 APP_ICON = os.path.join(SYSTEM_DIR, "serenity.ico")
 LIVE_ICON = os.path.join(MEDIA_DIR, "transcendent_serenity_ws_hq2.png")
 
-# --- UI THEME ---
-THEME = {
-    "bg_color": "#000000",           # Pure Black Background
-    "fg_color": "#ffffff",           # White Text
-    "widget_bg_color": "#121212",    # Very Dark Grey
-    "button_bg_color": "#202020",    # Dark Grey for buttons
-    "button_active_color": "#404040",
-    "trim_color": "#333333",         # Border color
-    "electric_blue": "#007acc",      # Accent
-    "midnight_blue": "#101020"       # Slider Trough / Deep Dark
+# --- THEME PRESETS & TEXTURE STYLES ---
+THEMES = {
+    "default": {
+        "name": "Apex Dark (Default)",
+        "bg_color": "#000000",
+        "fg_color": "#ffffff",
+        "widget_bg_color": "#121212",
+        "button_bg_color": "#202020",
+        "button_active_color": "#404040",
+        "trim_color": "#333333",
+        "electric_blue": "#007acc",
+        "midnight_blue": "#101020",
+        "accent_highlight": "#00ffcc",
+        "accent_secondary": "#FFD700"
+    },
+    "goth": {
+        "name": "Goth / Obsidian Dark",
+        "bg_color": "#060408",
+        "fg_color": "#e8d8e8",
+        "widget_bg_color": "#100914",
+        "button_bg_color": "#1c0f24",
+        "button_active_color": "#331640",
+        "trim_color": "#42153b",
+        "electric_blue": "#c71f54",
+        "midnight_blue": "#14041a",
+        "accent_highlight": "#ff2a6d",
+        "accent_secondary": "#9b30ff"
+    },
+    "crystal_cavern": {
+        "name": "Crystal Cavern",
+        "bg_color": "#030a10",
+        "fg_color": "#e0f4ff",
+        "widget_bg_color": "#081622",
+        "button_bg_color": "#0f283d",
+        "button_active_color": "#1b4668",
+        "trim_color": "#134254",
+        "electric_blue": "#00e5ff",
+        "midnight_blue": "#041421",
+        "accent_highlight": "#9d4edd",
+        "accent_secondary": "#00ffa3"
+    },
+    "fractal_logic": {
+        "name": "Fractal Logic",
+        "bg_color": "#02070d",
+        "fg_color": "#e2fffa",
+        "widget_bg_color": "#061320",
+        "button_bg_color": "#0c2338",
+        "button_active_color": "#143f5e",
+        "trim_color": "#0f4742",
+        "electric_blue": "#00ffcc",
+        "midnight_blue": "#031526",
+        "accent_highlight": "#39ff14",
+        "accent_secondary": "#ff007f"
+    }
 }
+
+TEXTURE_STYLES = {
+    "default": {
+        "name": "Default Original",
+        "border_width": 1,
+        "relief": "flat",
+        "trim_tint": "#333333",
+        "highlight_tint": None,
+        "alpha_soft": False
+    },
+    "gloss": {
+        "name": "Gloss",
+        "border_width": 2,
+        "relief": "raised",
+        "trim_tint": "#555555",
+        "highlight_tint": "#ffffff",
+        "alpha_soft": False
+    },
+    "metallic": {
+        "name": "Metallic",
+        "border_width": 2,
+        "relief": "groove",
+        "trim_tint": "#4f5d68",
+        "highlight_tint": "#9cb3c9",
+        "alpha_soft": False
+    },
+    "muted": {
+        "name": "Muted",
+        "border_width": 1,
+        "relief": "flat",
+        "trim_tint": "#222222",
+        "highlight_tint": "#444444",
+        "alpha_soft": True
+    },
+    "iridescent": {
+        "name": "Iridescent",
+        "border_width": 2,
+        "relief": "ridge",
+        "trim_tint": "#7b2cbf",
+        "highlight_tint": "#00f0ff",
+        "alpha_soft": False
+    },
+    "pearlescent": {
+        "name": "Pearlescent",
+        "border_width": 2,
+        "relief": "solid",
+        "trim_tint": "#cce3de",
+        "highlight_tint": "#e8dff5",
+        "alpha_soft": True
+    }
+}
+
+# --- ACTIVE UI THEME (Runtime in-place mutable dict) ---
+THEME = dict(THEMES["default"])
+
+def apply_theme_to_global(theme_name: str = "default", texture_style: str = "default", frosted_glass: bool = False):
+    """Dynamically applies selected palette, texture style, and frosted glass modifiers in-place."""
+    t_key = theme_name if theme_name in THEMES else "default"
+    tex_key = texture_style if texture_style in TEXTURE_STYLES else "default"
+    
+    base_theme = THEMES[t_key].copy()
+    tex = TEXTURE_STYLES[tex_key]
+    
+    if frosted_glass:
+        # Diffuse borders, slight translucent lift on widget backgrounds
+        if t_key == "goth":
+            base_theme["widget_bg_color"] = "#160d1c"
+            base_theme["trim_color"] = "#541e4b"
+        elif t_key == "crystal_cavern":
+            base_theme["widget_bg_color"] = "#0c202e"
+            base_theme["trim_color"] = "#1a5468"
+        elif t_key == "fractal_logic":
+            base_theme["widget_bg_color"] = "#0a1d2e"
+            base_theme["trim_color"] = "#145952"
+        else:
+            base_theme["widget_bg_color"] = "#181818"
+            base_theme["trim_color"] = "#444444"
+    elif tex.get("trim_tint") and tex_key != "default":
+        base_theme["trim_color"] = tex["trim_tint"]
+        
+    THEME.clear()
+    THEME.update(base_theme)
+    THEME["_theme_name"] = t_key
+    THEME["_texture_style"] = tex_key
+    THEME["_frosted_glass"] = frosted_glass
+    return THEME
 
 # --- DYNAMIC COLORS (Vibrant / Input Box) ---
 THERMO_COLORS = {
@@ -68,7 +198,7 @@ INPUT_FG_COLORS = {
     1: "#000000", 
     2: "#FFFFFF",
     3: "#FFFFFF",
-    4: "#AFEEEE",
+    4: "#AFEEEE", 
     5: "#FFFFFF",
     6: "#E0F7FA",
     7: "#FFFFFF",

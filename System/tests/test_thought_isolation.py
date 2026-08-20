@@ -77,10 +77,19 @@ def test_no_thought_tags():
     assert ans == "Just a direct response with no thinking."
     print("[PASS] Direct response without thoughts handled cleanly")
 
+def test_draft_preamble_before_think():
+    sample = "Initial draft reaction before thinking.<think>\nWait, let me reconsider and formulate a better plan.\n</think>\nHere is the refined final answer."
+    think, ans = split_thoughts_and_answer(sample)
+    assert "Initial draft reaction before thinking." in think
+    assert "Wait, let me reconsider and formulate a better plan." in think
+    assert "Here is the refined final answer." == ans
+    print("[PASS] Draft preamble before <think> isolated to think_log")
+
 if __name__ == "__main__":
     test_qwen_thought_split()
     test_deepseek_think_split()
     test_gemma_channel_split()
     test_chatml_thought_split()
+    test_draft_preamble_before_think()
     test_no_thought_tags()
     print("\nALL THOUGHT ISOLATION TESTS PASSED.")

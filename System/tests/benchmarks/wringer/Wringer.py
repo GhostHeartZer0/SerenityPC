@@ -372,21 +372,21 @@ class WringerFramework:
             print(f"[-] Failed to load model {model_name}: {e}")
             return ["Error loading model."] * len(prompts)
             
-        responses = []
-        
+        is_nemotron = "nemotron" in model_name.lower()
+        is_gemma = "gemma" in model_name.lower()
         is_qwen = "qwen" in model_name.lower()
-        is_reasoning = any(kw in model_name.lower() for kw in ["qwq", "thinking", "r1"])
+        is_reasoning = any(kw in model_name.lower() for kw in ["qwq", "thinking", "r1", "deepseek"])
         
-        # Qwen models often perform better at slightly lower temperatures compared to Gemma
-        temp = 0.7 if is_qwen else 1.0
+        # Qwen and Nemotron models often perform better at slightly lower temperatures compared to Gemma
+        temp = 0.7 if (is_qwen or is_nemotron) else 1.0
         
         for i, prompt in enumerate(prompts):
             print(f"    -> Generating response {i+1}/{len(prompts)}...", end="\r")
             try:
                 sys_content = "You are a helpful and precise reasoning assistant. Provide clear and concise answers."
-                
-                # Reasoning models expect the thought tag specifically
-                if is_reasoning:
+                if is_nemotron:
+                    sys_content = "You are a helpful and precise reasoning assistant. Provide clear, accurate, and direct answers without meta-commentary."
+                elif is_gemma or is_reasoning:
                     sys_content = "<|think|>\n" + sys_content
                     
                 messages = [
