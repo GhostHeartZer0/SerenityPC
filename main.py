@@ -48,7 +48,8 @@ from serenity_resources import (THEME, THEMES, TEXTURE_STYLES, apply_theme_to_gl
 from System.serenity_utils import (WidgetLogger, FileAndWidgetLogger, LoadingScreen, 
                             log_uncaught_exception, HardwareProfile, MediaProcessor, SystemMonitor,
                             enable_fault_debugging, ThreadSafeDict, ThreadSafeList, ThinkingDisplay,
-                            patch_gguf_architecture, patch_llama_deallocator, ToolTip, TutorialOverlay)
+                            patch_gguf_architecture, patch_llama_deallocator, ToolTip, TutorialOverlay,
+                            enable_high_dpi_awareness)
 #from System.ui_watchdog import UIWatchdog #commented out for now to save threads
 from System.kv_manager import KVManager, TurboVecIndex
 from System.tool_registry import GemmaToolRegistry
@@ -62,7 +63,8 @@ from System.stt_manager import STTManager
 # --- Debugging & Fault Handling ---
 enable_fault_debugging()
 
-# --- Hardware Initialization ---
+# --- DPI & Hardware Initialization ---
+enable_high_dpi_awareness()
 HardwareProfile.initialize_gpu_acceleration()
 
 
@@ -203,10 +205,49 @@ def kill_engine_on_shutdown(*args, **kwargs):
 atexit.register(kill_engine_on_shutdown)
 
 
-# ponytail: ThreadSafeDict, ThreadSafeList, and ThinkingDisplay moved to System/serenity_utils.py
+# ThreadSafeDict, ThreadSafeList, and ThinkingDisplay moved to System/serenity_utils.py
+# GemmaToolRegistry and TurboVecIndex moved to System/tool_registry.py and System/kv_manager.py
 
+# Global Font Specifications (Base Sizes for 100% Text Scale)
+BASE_FONT_SPECS = {
+    "main": {"family": "Segoe UI", "size": 13},
+    "small": {"family": "Segoe UI", "size": 12},
+    "italic": {"family": "Segoe UI", "size": 13, "slant": "italic"},
+    "large": {"family": "Segoe UI", "size": 14},
+    "bold": {"family": "Segoe UI", "size": 13, "weight": "bold"},
+    "ui_button": {"family": "Segoe UI", "size": 12},
+    "ui_label": {"family": "Segoe UI", "size": 11},
+    "ui_small": {"family": "Segoe UI", "size": 10},
+    "log": {"family": "Consolas", "size": 8},
+    "log_bold": {"family": "Consolas", "size": 8, "weight": "bold"},
+    "stats": {"family": "Consolas", "size": 8},
+    "stats_bold": {"family": "Consolas", "size": 8, "weight": "bold"},
+    # Markdown Support
+    "md_bold": {"family": "Segoe UI", "size": 13, "weight": "bold"},
+    "md_italic": {"family": "Segoe UI", "size": 13, "slant": "italic"},
+    "md_bold_italic": {"family": "Segoe UI", "size": 13, "weight": "bold", "slant": "italic"},
+    "md_thought": {"family": "Consolas", "size": 11, "slant": "italic"},
+    "md_math_inline": {"family": "Consolas", "size": 12, "slant": "italic"},
+    "md_math_block": {"family": "Consolas", "size": 12, "slant": "italic"},
+    "md_table": {"family": "Consolas", "size": 11},
+    "md_code": {"family": "Consolas", "size": 11},
+    "md_header": {"family": "Segoe UI", "size": 15, "weight": "bold"},
+    "md_header_1": {"family": "Segoe UI", "size": 17, "weight": "bold"},
+    "md_header_2": {"family": "Segoe UI", "size": 15, "weight": "bold"},
+    "md_header_3": {"family": "Segoe UI", "size": 13, "weight": "bold"},
+    "md_quote": {"family": "Segoe UI", "size": 13, "slant": "italic"},
+    "md_strike": {"family": "Segoe UI", "size": 13, "overstrike": True}
+}
 
-# ponytail: GemmaToolRegistry and TurboVecIndex moved to System/tool_registry.py and System/kv_manager.py
+# Window-responsive scaling: how much each font grows with window size.
+# 1.0 = full response (UI text), 0.0 = fixed (ignores window size).
+# Code/log fonts intentionally low so they stay compact.
+_FONT_WINDOW_RESPONSIVENESS = {
+    "log": 0.3, "log_bold": 0.3,
+    "stats": 0.15, "stats_bold": 0.15,
+    "md_thought": 0.5, "md_math_inline": 0.5, "md_math_block": 0.5,
+    "md_table": 0.5, "md_code": 0.5,
+}
 
 class ChatbotApp:
     if TYPE_CHECKING:
@@ -347,28 +388,18 @@ class ChatbotApp:
         self._migrate_legacy_user_files()
 
         # --- Visual Resources ---
-        self.fonts = {
-            "main": tkFont.Font(family="Open Sans", size=12),
-            "small": tkFont.Font(family="Open Sans", size=14),
-            "italic": tkFont.Font(family="Open Sans", size=14, slant="italic"),
-            "large": tkFont.Font(family="Open Sans", size=18),
-            "bold": tkFont.Font(family="Open Sans", size=18, weight="bold"),
-            # Markdown Support
-            "md_bold": tkFont.Font(family="Open Sans", size=12, weight="bold"),
-            "md_italic": tkFont.Font(family="Open Sans", size=12, slant="italic"),
-            "md_bold_italic": tkFont.Font(family="Open Sans", size=12, weight="bold", slant="italic"),
-            "md_thought": tkFont.Font(family="Consolas", size=9, slant="italic"),
-            "md_math_inline": tkFont.Font(family="Consolas", size=11, slant="italic"),
-            "md_math_block": tkFont.Font(family="Consolas", size=11, slant="italic"),
-            "md_table": tkFont.Font(family="Consolas", size=10),
-            "md_code": tkFont.Font(family="Consolas", size=10),
-            "md_header": tkFont.Font(family="Open Sans", size=13, weight="bold"),
-            "md_header_1": tkFont.Font(family="Open Sans", size=15, weight="bold"),
-            "md_header_2": tkFont.Font(family="Open Sans", size=13, weight="bold"),
-            "md_header_3": tkFont.Font(family="Open Sans", size=12, weight="bold"),
-            "md_quote": tkFont.Font(family="Open Sans", size=11, slant="italic"),
-            "md_strike": tkFont.Font(family="Open Sans", size=12, overstrike=True)
-        }
+        self.fonts = {}
+        for k, spec in BASE_FONT_SPECS.items():
+            self.fonts[k] = tkFont.Font(**spec)
+        
+        # Apply initial text scale and font family from config
+        initial_scale = 100
+        if hasattr(self, "config") and self.config:
+            initial_scale = self.config.get("text_scale", 100)
+            ui_fam = self.config.get("ui_font", "Segoe UI")
+            mono_fam = self.config.get("mono_font", "Consolas")
+            self.apply_font_family(ui_fam, mono_fam, persist=False)
+        self.apply_text_scale(initial_scale, persist=False)
         
         # --- State Management ---
         self.state = ThreadSafeDict({
@@ -544,6 +575,15 @@ class ChatbotApp:
 
         self._setup_llama_log_capture()
         self.setup_ui()
+        
+        # --- Global Zoom Keyboard Shortcuts ---
+        for k in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
+            self.root.bind_all(k, self.zoom_in)
+        for k in ("<Control-minus>", "<Control-KP_Subtract>"):
+            self.root.bind_all(k, self.zoom_out)
+        for k in ("<Control-0>", "<Control-KP_0>"):
+            self.root.bind_all(k, self.zoom_reset)
+
         self.root.after(100, lambda *args: self.final_initial_setup())
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.set_ui_state(model_loaded=False, generating=False)
@@ -620,7 +660,15 @@ class ChatbotApp:
         self.config = self.load_config()
         if 'main_window' in self.config and self.config['main_window']: 
             self.root.geometry(self.config['main_window'])
-        self.root.minsize(960, 640)
+        else:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            w = min(1280, max(1000, int(sw * 0.75)))
+            h = min(880, max(680, int(sh * 0.80)))
+            x = max(0, (sw - w) // 2)
+            y = max(0, (sh - h) // 2)
+            self.root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.minsize(960, 600)
         
         if self.loading_screen:
             self.loading_screen.stop_and_destroy()
@@ -722,20 +770,20 @@ class ChatbotApp:
             unlock_win.geometry(f"420x280+{x}+{y}")
         except: pass
 
-        tk.Label(unlock_win, text="🔒 SERENITY VAULT", font=("Segoe UI", 13, "bold"), 
+        tk.Label(unlock_win, text="🔒 SERENITY VAULT", font=self.fonts["large"], 
                  bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(pady=(20, 4))
 
         tk.Label(unlock_win, text="Enter Master Password to access system & archives:", 
-                 font=("Segoe UI", 9), bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(pady=(0, 15))
+                 font=self.fonts["small"], bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(pady=(0, 15))
 
         pwd_var = tk.StringVar()
         pwd_entry = tk.Entry(unlock_win, textvariable=pwd_var, show="*", width=26, 
                              bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
-                             insertbackground=THEME["fg_color"], font=("Segoe UI", 11), relief=tk.SUNKEN)
+                             insertbackground=THEME["fg_color"], font=self.fonts["main"], relief=tk.SUNKEN)
         pwd_entry.pack(pady=5)
         pwd_entry.focus_set()
 
-        err_lbl = tk.Label(unlock_win, text="", font=("Segoe UI", 9, "bold"), bg=THEME["bg_color"], fg="#ff4444")
+        err_lbl = tk.Label(unlock_win, text="", font=self.fonts["ui_button"], bg=THEME["bg_color"], fg="#ff4444")
         err_lbl.pack(pady=4)
 
         def _try_unlock(event=None):
@@ -768,7 +816,7 @@ class ChatbotApp:
 
         tk.Button(btn_row, text="🔓 Unlock", command=_try_unlock,
                   bg=THEME["button_active_color"], fg=THEME["fg_color"], 
-                  font=("Segoe UI", 9, "bold"), padx=12, pady=3, relief=tk.FLAT).pack(side=tk.LEFT, padx=6)
+                  font=self.fonts["ui_button"], padx=12, pady=3, relief=tk.FLAT).pack(side=tk.LEFT, padx=6)
 
         def _on_close_modal():
             if self.vault_manager.is_locked():
@@ -799,7 +847,7 @@ class ChatbotApp:
         btn_relief = kwargs.pop('relief', tk.FLAT)
         btn_anchor = kwargs.pop('anchor', None) # Default to None if not specified
         
-        style = {"font": self.fonts["large"], "bg": THEME["button_bg_color"], "fg": THEME["fg_color"]}
+        style = {"font": self.fonts["ui_button"], "bg": THEME["button_bg_color"], "fg": THEME["fg_color"]}
         style.update(kwargs)
         
         # Explicitly pass relief and anchor to help the linter
@@ -950,12 +998,12 @@ class ChatbotApp:
         ToolTip(btn_tab_hist, "Search and review archived conversation histories.", app=self)
 
         lbl_status = tk.Label(tab_frame, text="System: Ready", bg=THEME["trim_color"], 
-                                          fg="#888888", font=("Open Sans", 10, "italic"))
+                                          fg="#888888", font=self.fonts["italic"])
         self.system_status_label = lbl_status
         lbl_status.pack(side=tk.RIGHT, padx=10)
         ToolTip(lbl_status, "System engine status and telemetry indicator.", app=self)
 
-        lbl_hw = tk.Label(tab_frame, text="", bg=THEME["trim_color"], font=("Open Sans", 10, "bold"))
+        lbl_hw = tk.Label(tab_frame, text="", bg=THEME["trim_color"], font=self.fonts["bold"])
         self.hw_mode_label = lbl_hw
         lbl_hw.pack(side=tk.RIGHT, padx=5)
         ToolTip(lbl_hw, "Hardware architecture optimization mode (Apex i7 / Legacy i5) and offline guard status.", app=self)
@@ -976,7 +1024,7 @@ class ChatbotApp:
 
         # 2. User-Provided Timeline Progress (Apex Dark Theme)
         self.timeline_frame = tk.Frame(chat_frame, bg="#1e1e1e")
-        self.progress_label = tk.Label(self.timeline_frame, text="TIMELINE: 0%", bg="#1e1e1e", fg="#00ffcc", font=("Consolas", 9))
+        self.progress_label = tk.Label(self.timeline_frame, text="TIMELINE: 0%", bg="#1e1e1e", fg="#00ffcc", font=self.fonts["stats"])
         ToolTip(self.progress_label, "Real-time timeline token generation progress.", app=self)
         self.progress_label.pack(side="top", anchor="w")
         
@@ -1084,8 +1132,18 @@ class ChatbotApp:
             new_width = event.width - 40
             if new_width > 50:
                 lbl_desc.config(wraplength=new_width)
+            # Dynamic slider length auto-scaling
+            if hasattr(self, 'depth_slider') and self.depth_slider:
+                dynamic_len = max(70, min(160, int(event.width * 0.22)))
+                try: self.depth_slider.config(length=dynamic_len)
+                except Exception: pass
         
         left.bind("<Configure>", _on_left_resize)
+
+        # Window-responsive font scaling: fonts grow with window size
+        self._window_scale_factor = 1.0
+        self._root_resize_job = None
+        self.root.bind("<Configure>", self._on_root_configure)
 
         # --- FOOTER BUTTONS ---
         ctrl_frame = tk.Frame(left, bg=THEME["bg_color"])
@@ -1163,40 +1221,40 @@ class ChatbotApp:
         ToolTip(lbl_p, "Adjust persona depth (click 6 times for Secret Level 7).", app=self)
 
         # Extended to Level 6 dynamically
-        scale_d = tk.Scale(p_frame, from_=1, to=self.max_persona_level, orient=tk.HORIZONTAL, length=200, 
+        scale_d = tk.Scale(p_frame, from_=1, to=self.max_persona_level, orient=tk.HORIZONTAL, length=110, 
                                     bg=THEME["bg_color"], fg=THEME["fg_color"], relief=tk.FLAT, 
                                     command=self.update_persona_display, showvalue=False)
         self.depth_slider = scale_d
         scale_d.set(3)
-        scale_d.pack(side=tk.LEFT, padx=10)
+        scale_d.pack(side=tk.LEFT, padx=(6, 2))
         ToolTip(scale_d, "Slide between Persona Levels 1 to 6/7.", app=self)
 
         # SECRET TRIGGER: Invisible gap right next to the slider
-        lbl_sec = tk.Label(p_frame, text="      ", bg=THEME["bg_color"], cursor="arrow", width=4)
+        lbl_sec = tk.Label(p_frame, text="  ", bg=THEME["bg_color"], cursor="arrow", width=2)
         self.secret_trigger = lbl_sec
         lbl_sec.pack(side=tk.LEFT)
         lbl_sec.bind("<Double-Button-1>", self._load_secret_model_event)
 
         btn_name = tk.Button(p_frame, text="", command=self.model_swap, 
                                              font=self.fonts["bold"], bg=THEME["button_bg_color"], 
-                                             fg=THEME["fg_color"], relief=tk.FLAT)
+                                             fg=THEME["fg_color"], relief=tk.FLAT, padx=6, pady=2)
         self.persona_name_button = btn_name
-        btn_name.pack(side=tk.LEFT, padx=5)
+        btn_name.pack(side=tk.LEFT, padx=3)
         ToolTip(btn_name, "Active persona level name and tier.", app=self)
 
         # Plus button for attachments
         btn_add = tk.Button(p_frame, text="+", command=self._show_attachment_menu,
                             font=self.fonts["bold"], bg=THEME["button_bg_color"], 
-                            fg=THEME["fg_color"], relief=tk.FLAT, padx=5)
-        btn_add.pack(side=tk.LEFT)
+                            fg=THEME["fg_color"], relief=tk.FLAT, padx=6, pady=2)
+        btn_add.pack(side=tk.LEFT, padx=2)
         ToolTip(btn_add, "Attach images, documents, or video slices.", app=self)
 
         # STT Voice input trigger (to the right of plus sign)
         btn_mic = tk.Button(p_frame, text="🎙️", command=self.toggle_voice_recording,
                             font=self.fonts["main"], bg=THEME["button_bg_color"],
-                            fg=THEME["fg_color"], relief=tk.FLAT, padx=5)
+                            fg=THEME["fg_color"], relief=tk.FLAT, padx=4, pady=2)
         self.mic_button = btn_mic
-        btn_mic.pack(side=tk.LEFT, padx=(4, 0))
+        btn_mic.pack(side=tk.LEFT, padx=2)
         ToolTip(btn_mic, "Dictate voice input offline using local speech recognition.", app=self)
         
         # Attachments Popup Menu
@@ -1206,10 +1264,9 @@ class ChatbotApp:
         self.attachment_menu.add_command(label="📄 Add Document", command=lambda: self._browse_attachment("document"))
 
         btn_lore = tk.Button(p_frame, text="📜 Open Chronicles", command=self.launch_lore_book,
-                                 font=("Open Sans", 10, "bold"), bg="#1a1a1a", fg=THEME["electric_blue"], 
-                                 relief=tk.FLAT, padx=10)
+                                 font=self.fonts["ui_button"], bg="#1a1a1a", fg=THEME["electric_blue"], 
+                                 relief=tk.FLAT, padx=6, pady=2)
         self.lore_btn = btn_lore
-        btn_lore.pack(side=tk.LEFT, padx=15)
         ToolTip(btn_lore, "Open Prime Chronicles and subconscious dream journals.", app=self)
 
     def _show_attachment_menu(self, event=None):
@@ -1285,11 +1342,11 @@ class ChatbotApp:
             icons = {"image": "📷", "audio": "🎵", "document": "📄", "video": "🎥"}
             icon = icons.get(att_type, "📄")
             
-            lbl = tk.Label(token_frame, text=f"{icon} {fname[:15]}{'...' if len(fname)>15 else ''}", bg="#2a2a2a", fg="#00ffcc", font=("Consolas", 8))
+            lbl = tk.Label(token_frame, text=f"{icon} {fname[:15]}{'...' if len(fname)>15 else ''}", bg="#2a2a2a", fg="#00ffcc", font=self.fonts["stats"])
             lbl.pack(side=tk.LEFT, padx=(2,0))
             
             # Remove Button
-            btn_rm = tk.Button(token_frame, text="X", bg="#4a0000", fg="#ffffff", relief=tk.FLAT, font=("Consolas", 8),
+            btn_rm = tk.Button(token_frame, text="X", bg="#4a0000", fg="#ffffff", relief=tk.FLAT, font=self.fonts["stats"],
                                command=lambda af=att, tf=token_frame: self._remove_staged_attachment(af, tf))
             btn_rm.pack(side=tk.LEFT, padx=2)
             
@@ -1384,7 +1441,7 @@ class ChatbotApp:
         if view == "content":
             back_btn = tk.Button(nav_bar, text="⬅ Back to Archives", command=self._back_history, 
                                 bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT,
-                                font=("Segoe UI", 9, "bold"), cursor="hand2")
+                                font=self.fonts["ui_button"], cursor="hand2")
             back_btn.pack(side=tk.LEFT, padx=5)
             
             title = f"Archive: {self.history_state.get('current_display_name', 'Chat Log')}"
@@ -1399,12 +1456,12 @@ class ChatbotApp:
             edit_text = "💾 Save" if self.past_history_view.cget("state") == "normal" else "✏️ Edit"
             edit_bg = "#005a9e" if self.past_history_view.cget("state") == "normal" else THEME["button_bg_color"]
             tk.Button(act_frame, text=edit_text, command=self._toggle_history_edit, 
-                      bg=edit_bg, fg="white", relief=tk.FLAT, font=("Segoe UI", 9, "bold"),
+                      bg=edit_bg, fg="white", relief=tk.FLAT, font=self.fonts["ui_button"],
                       cursor="hand2").pack(side=tk.LEFT, padx=5)
             
             # Delete Button
             tk.Button(act_frame, text="🗑️ Delete", command=self._delete_current_archive, 
-                      bg="#4a0000", fg="white", relief=tk.FLAT, font=("Segoe UI", 9, "bold"),
+                      bg="#4a0000", fg="white", relief=tk.FLAT, font=self.fonts["ui_button"],
                       cursor="hand2").pack(side=tk.LEFT, padx=5)
 
             # Content Area for Text View
@@ -1414,7 +1471,7 @@ class ChatbotApp:
             return
 
         # --- LIST VIEW: UNIFIED FILTER & SEARCH CONTROLS ---
-        tk.Label(nav_bar, text="📁 History Archive", font=("Segoe UI", 10, "bold"), 
+        tk.Label(nav_bar, text="📁 History Archive", font=self.fonts["bold"], 
                  bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT, padx=6)
         
         # Search Entry Bar (Enter to search, Search button, No auto-search)
@@ -1439,13 +1496,13 @@ class ChatbotApp:
         # Dedicated Search Button
         btn_search = tk.Button(search_frame, text="🔍 Search", command=_execute_search,
                                bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT,
-                               font=("Segoe UI", 8, "bold"), cursor="hand2", padx=6, pady=1)
+                               font=self.fonts["ui_button"], cursor="hand2", padx=6, pady=1)
         btn_search.pack(side=tk.RIGHT, padx=(2, 2))
         
         if search_var.get():
             btn_clear_search = tk.Button(search_frame, text="✕", command=lambda: self._clear_history_search(search_var),
                                          bg=THEME["widget_bg_color"], fg="#aaaaaa", relief=tk.FLAT, 
-                                         font=("Segoe UI", 8), cursor="hand2", bd=0)
+                                         font=self.fonts["ui_small"], cursor="hand2", bd=0)
             btn_clear_search.pack(side=tk.RIGHT, padx=2)
 
         # Dropdowns Frame
@@ -1456,7 +1513,7 @@ class ChatbotApp:
         level_options = ["All Levels", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7"]
         lvl_var = tk.StringVar(value=self.history_state.get("level_filter", "All Levels"))
         lvl_combo = ttk.Combobox(filter_frame, textvariable=lvl_var, values=level_options, 
-                                 state="readonly", width=11, font=("Segoe UI", 9))
+                                 state="readonly", width=11, font=self.fonts["small"])
         lvl_combo.pack(side=tk.LEFT, padx=3)
         lvl_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("level_filter", lvl_var.get()))
 
@@ -1464,7 +1521,7 @@ class ChatbotApp:
         date_options = ["All Dates", "Today", "Yesterday", "Past 7 Days", "Past 30 Days", "Older"]
         date_var = tk.StringVar(value=self.history_state.get("date_filter", "All Dates"))
         date_combo = ttk.Combobox(filter_frame, textvariable=date_var, values=date_options, 
-                                  state="readonly", width=11, font=("Segoe UI", 9))
+                                  state="readonly", width=11, font=self.fonts["small"])
         date_combo.pack(side=tk.LEFT, padx=3)
         date_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("date_filter", date_var.get()))
 
@@ -1472,7 +1529,7 @@ class ChatbotApp:
         sort_options = ["Newest First", "Oldest First", "Name (A-Z)", "Name (Z-A)", "Size (Largest)"]
         sort_var = tk.StringVar(value=self.history_state.get("sort_by", "Newest First"))
         sort_combo = ttk.Combobox(filter_frame, textvariable=sort_var, values=sort_options, 
-                                  state="readonly", width=12, font=("Segoe UI", 9))
+                                  state="readonly", width=12, font=self.fonts["small"])
         sort_combo.pack(side=tk.LEFT, padx=3)
         sort_combo.bind("<<ComboboxSelected>>", lambda e: self._on_history_dropdown_change("sort_by", sort_var.get()))
 
@@ -1563,7 +1620,7 @@ class ChatbotApp:
                 sep_frame = tk.Frame(scroll_frame, bg=THEME["bg_color"])
                 sep_frame.pack(fill=tk.X, padx=12, pady=(10, 3))
                 tk.Label(sep_frame, text=f"── {bucket.upper()} ──", bg=THEME["bg_color"], 
-                         fg=THEME["electric_blue"], font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+                         fg=THEME["electric_blue"], font=self.fonts["ui_button"]).pack(side=tk.LEFT)
                 self._bind_targeted_history_scroll(sep_frame, canvas)
 
             # Item Card Container
@@ -1581,7 +1638,7 @@ class ChatbotApp:
             lvl_text = f" L{lvl_val} " if lvl_val is not None else " ARCH "
             lvl_bg = "#5c007a" if lvl_val in [6, 7] else ("#005a9e" if lvl_val == 5 else "#2a4d3a")
             badge = tk.Label(hdr_row, text=lvl_text, bg=lvl_bg, fg="white", 
-                             font=("Segoe UI", 8, "bold"), padx=4, pady=1)
+                             font=self.fonts["ui_button"], padx=4, pady=1)
             badge.pack(side=tk.LEFT, padx=(0, 8))
             self._bind_targeted_history_scroll(badge, canvas)
 
@@ -1595,7 +1652,7 @@ class ChatbotApp:
             # Date & Size Subtitle
             meta_str = f"{item.get('date_str', '')} • {item.get('size_str', '')}"
             meta_lbl = tk.Label(hdr_row, text=meta_str, bg=THEME["widget_bg_color"], 
-                                fg="#888888", font=("Segoe UI", 8))
+                                fg="#888888", font=self.fonts["ui_small"])
             meta_lbl.pack(side=tk.RIGHT, padx=4)
             self._bind_targeted_history_scroll(meta_lbl, canvas)
 
@@ -1605,7 +1662,7 @@ class ChatbotApp:
                 snip_frame.pack(fill=tk.X, padx=8, pady=(0, 6))
                 self._bind_targeted_history_scroll(snip_frame, canvas)
                 snip_lbl = tk.Label(snip_frame, text=f"💬 {item['snippet']}", bg="#1a2332", 
-                                    fg="#70a5ff", font=("Segoe UI", 8, "italic"), anchor="w", justify="left")
+                                    fg="#70a5ff", font=self.fonts["ui_small"], anchor="w", justify="left")
                 snip_lbl.pack(side=tk.LEFT, padx=6, pady=3, fill=tk.X, expand=True)
                 self._bind_targeted_history_scroll(snip_lbl, canvas)
 
@@ -1965,14 +2022,14 @@ class ChatbotApp:
         header.grid(row=0, column=0, sticky="ew")
         tk.Label(header, text="Backend Logs", font=self.fonts["italic"], bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT)
         
-        self.self_analysis_btn = tk.Label(header, text="🩺 Self-Analysis", font=("Consolas", 9, "bold"), bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
+        self.self_analysis_btn = tk.Label(header, text="🩺 Self-Analysis", font=self.fonts["log_bold"], bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
         self.self_analysis_btn.pack(side=tk.LEFT, padx=15)
         self.self_analysis_btn.bind("<Button-1>", lambda e: self._run_self_analysis())
         
         self.log_switch_canvas = tk.Canvas(header, width=104, height=28, bg=THEME["bg_color"], highlightthickness=0)
         self.log_switch_canvas.pack(side=tk.RIGHT, padx=(2, 5))
         
-        self.clear_log_btn = tk.Label(header, text="🗑", font=("Consolas", 12), bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
+        self.clear_log_btn = tk.Label(header, text="🗑", font=self.fonts["log"], bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
         self.clear_log_btn.pack(side=tk.RIGHT, padx=(5, 2))
         self.clear_log_btn.bind("<Button-1>", self._clear_active_log)
         if self.log_switch_canvas is not None:
@@ -1988,35 +2045,35 @@ class ChatbotApp:
         self.log_frame.grid(row=1, column=0, sticky="nsew")
         self.log_frame.grid_rowconfigure(0, weight=1); self.log_frame.grid_columnconfigure(0, weight=1)
 
-        self.thought_log = scrolledtext.ScrolledText(self.log_frame, font=("Consolas", 10), bg=THEME["widget_bg_color"], fg="#cccccc", relief=tk.FLAT)
+        self.thought_log = scrolledtext.ScrolledText(self.log_frame, font=self.fonts["log"], bg=THEME["widget_bg_color"], fg="#cccccc", relief=tk.FLAT)
         self.thought_log.grid(row=0, column=0, sticky="nsew")
         self.thought_log.tag_config("stdout", foreground="#cccccc")
-        self.thought_log.tag_config("system", foreground=THEME["electric_blue"], font=("Consolas", 10, "bold"))
+        self.thought_log.tag_config("system", foreground=THEME["electric_blue"], font=self.fonts["log_bold"])
         
-        self.error_log = scrolledtext.ScrolledText(self.log_frame, font=("Consolas", 10), bg=THEME["widget_bg_color"], fg="#ff8a8a", relief=tk.FLAT)
+        self.error_log = scrolledtext.ScrolledText(self.log_frame, font=self.fonts["log"], bg=THEME["widget_bg_color"], fg="#ff8a8a", relief=tk.FLAT)
         self.error_log.grid(row=0, column=0, sticky="nsew")
         self.error_log.tag_config("stderr", foreground="#ff8a8a")
         self.error_log.grid_remove()
 
-        self.tool_log = scrolledtext.ScrolledText(self.log_frame, font=("Consolas", 10), bg=THEME["widget_bg_color"], fg="#00ffcc", relief=tk.FLAT)
+        self.tool_log = scrolledtext.ScrolledText(self.log_frame, font=self.fonts["log"], bg=THEME["widget_bg_color"], fg="#00ffcc", relief=tk.FLAT)
         self.tool_log.grid(row=0, column=0, sticky="nsew")
         self.tool_log.grid_remove()
         
-        self.diag_log = scrolledtext.ScrolledText(self.log_frame, font=("Consolas", 10), bg=THEME["widget_bg_color"], fg="#ffa500", relief=tk.FLAT)
+        self.diag_log = scrolledtext.ScrolledText(self.log_frame, font=self.fonts["log"], bg=THEME["widget_bg_color"], fg="#ffa500", relief=tk.FLAT)
         self.diag_log.grid(row=0, column=0, sticky="nsew")
         self.diag_log.tag_config("diag", foreground="#ffa500")
         self.diag_log.grid_remove()
         
         self.stats_frame = tk.Frame(self.log_container, bg=THEME["widget_bg_color"])
         if self.stats_frame is not None:
-            self.stats_frame.grid(row=2, column=0, sticky="nsew", pady=5)
+            self.stats_frame.grid(row=2, column=0, sticky="nsew", pady=4)
         self.stats_labels = {}
         
         # Grid Layout: Left Column (GPU/VRAM) | Right Column (System/CPU)
         stats_to_show = [
             ("GPU Use", "GPU Use"), ("CPU", "CPU Use"),
-            ("VRAM", "VRAM"), ("VRAM", "Total VRAM"),
-            ("Shared VRAM", "Shared VRAM"), ("Total RAM", "Total RAM"),
+            ("VRAM", "VRAM"), ("Total VRAM", "Total VRAM"),
+            ("Shared VRAM", "Shared VRAM"), ("RAM", "Total RAM"),
             ("GPU Temp", "GPU Temp"), ("CPU Temp", "CPU Temp"),
             ("Power", "GPU Power"), ("CPU Power", "CPU Power")
         ] if SYSTEM_MONITOR_LOADED else [("CPU", "CPU"), ("RAM", "RAM")]
@@ -2025,11 +2082,11 @@ class ChatbotApp:
             row = i // 2
             col = i % 2
             f = tk.Frame(self.stats_frame, bg=THEME["widget_bg_color"])
-            f.grid(row=row, column=col, sticky="ew", padx=10, pady=2)
+            f.grid(row=row, column=col, sticky="ew", padx=6, pady=1)
             self.stats_frame.columnconfigure(col, weight=1)
             
-            tk.Label(f, text=f"{label}:", bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=("Consolas", 9)).pack(side=tk.LEFT)
-            self.stats_labels[key] = tk.Label(f, text="N/A", bg=THEME["widget_bg_color"], fg=THEME["electric_blue"], font=("Consolas", 9, "bold"))
+            tk.Label(f, text=f"{label}:", bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=self.fonts["stats"]).pack(side=tk.LEFT)
+            self.stats_labels[key] = tk.Label(f, text="N/A", bg=THEME["widget_bg_color"], fg=THEME["electric_blue"], font=self.fonts["stats_bold"])
             self.stats_labels[key].pack(side=tk.RIGHT)
         
         if not SYSTEM_MONITOR_LOADED: self.stats_frame.grid_remove()
@@ -3752,7 +3809,8 @@ class ChatbotApp:
             if tools and self.active_persona_level >= 2:
                 has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\(.*?\)', final_answer, re.DOTALL | re.IGNORECASE)
                 has_tag_tool = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{', final_answer, re.DOTALL | re.IGNORECASE)
-                if has_py_tool or has_tag_tool:
+                has_json_tool = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'](?:web_search|read_file|get_system_stats|control_rgb|generate_image)["\']', final_answer, re.IGNORECASE)
+                if has_py_tool or has_tag_tool or has_json_tool:
                     self.process_queue.put({"status": "thinking_status", "content": "Executing tool..."})
                     final_answer = self._run_tool_loop(final_answer, msgs, params)
 
@@ -4539,7 +4597,7 @@ class ChatbotApp:
                     tag = f"link_popup_{self.link_counter}"
                     hist.delete(match_start, match_end)
                     hist.insert(match_start, f" [View Media: {os.path.basename(url)}] ", (tag,))
-                    hist.tag_config(tag, foreground="#ffcc00", underline=1, font=("Open Sans", 9, "bold"))
+                    hist.tag_config(tag, foreground="#ffcc00", underline=1, font=self.fonts["ui_button"])
                     hist.tag_bind(tag, "<Button-1>", lambda e, u=url: self._spawn_media_popup(u))
             else:
                 # Standard Text Link
@@ -4602,7 +4660,7 @@ class ChatbotApp:
         popup.configure(bg="#0a0a0a")
         
         # Basic Viewer Logic
-        loading = tk.Label(popup, text="Loading...", fg="white", bg="#0a0a0a", font=("Open Sans", 12))
+        loading = tk.Label(popup, text="Loading...", fg="white", bg="#0a0a0a", font=self.fonts["large"])
         loading.pack(padx=50, pady=50)
         
         def load():
@@ -4668,6 +4726,8 @@ class ChatbotApp:
         py_match = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\((.*?)\)(?:\s*```)?', full_resp, re.DOTALL | re.IGNORECASE)
         # 2. Legacy / Tag-based Tool Calls
         call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
+        # 3. JSON Action Block (e.g. {"action": "generate_image", "action_input": ...} or {"name": "...", "arguments": ...})
+        json_match = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'][\w_]+["\']', full_resp, re.IGNORECASE)
 
         if py_match:
             call_name = py_match.group(1).strip().lower()
@@ -4723,6 +4783,80 @@ class ChatbotApp:
                             if call_name == "web_search": args["query"] = bare_val
                             elif call_name == "read_file": args["path"] = bare_val
                     except Exception: pass
+        elif json_match:
+            start_idx = json_match.start()
+            brace_count = 0
+            end_idx = -1
+            in_str = False
+            str_char = ''
+            escape = False
+            for i in range(start_idx, len(full_resp)):
+                ch = full_resp[i]
+                if escape:
+                    escape = False
+                    continue
+                if ch == '\\':
+                    escape = True
+                    continue
+                if in_str:
+                    if ch == str_char:
+                        in_str = False
+                elif ch in ('"', "'"):
+                    in_str = True
+                    str_char = ch
+                elif ch == '{':
+                    brace_count += 1
+                elif ch == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
+            
+            candidate_raw = full_resp[start_idx:end_idx].strip() if end_idx != -1 else full_resp[start_idx:].strip()
+            import ast
+            parsed_dict = None
+            clean_cand = candidate_raw.replace(r"\'", "'")
+            try:
+                parsed_dict = json.loads(clean_cand)
+            except Exception:
+                try:
+                    parsed_dict = ast.literal_eval(clean_cand)
+                except Exception:
+                    try:
+                        parsed_dict = json.loads(candidate_raw)
+                    except Exception:
+                        try:
+                            parsed_dict = ast.literal_eval(candidate_raw)
+                        except Exception: pass
+            
+            if isinstance(parsed_dict, dict):
+                raw_call = parsed_dict.get("action") or parsed_dict.get("tool") or parsed_dict.get("name") or parsed_dict.get("function")
+                if raw_call:
+                    call_name = str(raw_call).strip().lower()
+                    raw_input = parsed_dict.get("action_input") or parsed_dict.get("arguments") or parsed_dict.get("parameters") or parsed_dict.get("input")
+                    if isinstance(raw_input, dict):
+                        args = raw_input
+                    elif isinstance(raw_input, str):
+                        clean_inp = raw_input.replace(r"\'", "'")
+                        try:
+                            args = json.loads(clean_inp)
+                        except Exception:
+                            try:
+                                args = ast.literal_eval(clean_inp)
+                            except Exception:
+                                try:
+                                    args = json.loads(raw_input)
+                                except Exception:
+                                    try:
+                                        args = ast.literal_eval(raw_input)
+                                    except Exception:
+                                        if not isinstance(args, dict):
+                                            args = {}
+                                        if call_name == "generate_image": args["prompt"] = raw_input
+                                        elif call_name == "web_search": args["query"] = raw_input
+                                        elif call_name == "read_file": args["path"] = raw_input
+                    elif raw_input is None:
+                        args = {k: v for k, v in parsed_dict.items() if k not in ("action", "tool", "name", "function")}
 
         if not call_name:
             return full_resp
@@ -4943,14 +5077,14 @@ class ChatbotApp:
                 hist.tag_config(t, elide=new_state)
                 if b: b.config(text=f"{'[+] View' if new_state else '[-] Hide'} Cycle {c}")
             
-            btn = tk.Button(hist, text=f"[+] View Cycle {cnum}", bg="#202020", fg="#888888", relief=tk.FLAT, font=("Consolas", 8))
+            btn = tk.Button(hist, text=f"[+] View Cycle {cnum}", bg="#202020", fg="#888888", relief=tk.FLAT, font=self.fonts["stats"])
             btn.config(command=lambda t=tag, b=btn, c=cnum: toggle_cyc(t, b, c))
             
             hist.insert(tk.END, "\n", ("ai",))
             hist.window_create(tk.END, window=btn)
             hist.insert(tk.END, "\n", ("ai",))
             hist.insert(tk.END, f"{title}\n", (tag, "ai"))
-            hist.tag_config(tag, elide=True, foreground="#808080", font=("Consolas", 9))
+            hist.tag_config(tag, elide=True, foreground="#808080", font=self.fonts["log"])
             self.state[f"nested_tags_{tag}"] = []
 
         elif ctype == "draft":
@@ -4964,14 +5098,14 @@ class ChatbotApp:
                     hist.tag_config(t, elide=new_state)
                     if b: b.config(text=f"{'[+]' if new_state else '[-]'} Step {d}")
 
-                btn = tk.Button(hist, text=f"[+] Step {dnum}", bg="#151515", fg="#777777", relief=tk.FLAT, font=("Consolas", 7))
+                btn = tk.Button(hist, text=f"[+] Step {dnum}", bg="#151515", fg="#777777", relief=tk.FLAT, font=self.fonts["stats"])
                 btn.config(command=lambda t=tag, b=btn, d=dnum: toggle_draft(t, b, d))
                 
                 hist.insert(tk.END, "  ", (cyc_tag, "ai"))
                 hist.window_create(tk.END, window=btn)
                 hist.insert(tk.END, "\n", (cyc_tag, "ai"))
                 hist.insert(tk.END, f"  --- {title} ---\n  ", (tag, cyc_tag, "ai"))
-                hist.tag_config(tag, elide=True, foreground="#707070", font=("Consolas", 8))
+                hist.tag_config(tag, elide=True, foreground="#707070", font=self.fonts["log"])
 
         elif ctype == "memory":
             def toggle_mem(t=tag, b=None):
@@ -4980,14 +5114,14 @@ class ChatbotApp:
                 hist.tag_config(t, elide=new_state)
                 if b: b.config(text=f"{'[+]' if new_state else '[-]'} {title or 'Context Assessment'}")
 
-            btn = tk.Button(hist, text=f"[+] {title or 'Context Assessment'}", bg="#1a1a2e", fg="#ababab", relief=tk.FLAT, font=("Consolas", 8, "italic"))
+            btn = tk.Button(hist, text=f"[+] {title or 'Context Assessment'}", bg="#1a1a2e", fg="#ababab", relief=tk.FLAT, font=self.fonts["stats"])
             btn.config(command=lambda t=tag, b=btn: toggle_mem(t, b))
             
             hist.insert(tk.END, "\n", ("ai",))
             hist.window_create(tk.END, window=btn)
             hist.insert(tk.END, "\n", ("ai",))
             hist.insert(tk.END, "", (tag, "ai"))
-            hist.tag_config(tag, elide=True, foreground="#ababab", font=("Consolas", 9))
+            hist.tag_config(tag, elide=True, foreground="#ababab", font=self.fonts["log"])
 
         hist.config(state='disabled')
         hist.see(tk.END)
@@ -5051,7 +5185,7 @@ class ChatbotApp:
                 comp_tag = f"comp_block_{id(text[:20])}"
                 hist.config(state='normal')
                 hist.insert(tk.END, f"{text}\n\n", (comp_tag, "ai"))
-                hist.tag_config(comp_tag, foreground="#00ffcc", font=("Consolas", 10))
+                hist.tag_config(comp_tag, foreground="#00ffcc", font=self.fonts["log"])
                 hist.config(state='disabled')
         
         hist.see(tk.END)
@@ -5848,7 +5982,7 @@ class ChatbotApp:
             
             btn = tk.Button(hist, text="[+] View Thinking Process", bg="#1a1a1a", fg="#00bfff", 
                             activebackground="#333333", activeforeground="#00bfff", 
-                            relief=tk.FLAT, font=("Consolas", 8))
+                            relief=tk.FLAT, font=self.fonts["stats"])
             btn.config(command=lambda t=think_tag, b=btn: toggle_thoughts(t, b))
             
             hist.insert(tk.END, "\n", ("ai",))
@@ -5885,7 +6019,7 @@ class ChatbotApp:
         if not error and final_answer:
             try:
                 rlhf_frame = tk.Frame(hist, bg=THEME["bg_color"])
-                lbl_fb = tk.Label(rlhf_frame, text="Feedback: ", bg=THEME["bg_color"], fg="#666666", font=("Consolas", 8))
+                lbl_fb = tk.Label(rlhf_frame, text="Feedback: ", bg=THEME["bg_color"], fg="#666666", font=self.fonts["stats"])
                 lbl_fb.pack(side=tk.LEFT)
                 
                 def _submit_fb(rating):
@@ -5894,9 +6028,9 @@ class ChatbotApp:
                     self._save_rlhf_log(user_msg, final_answer, rating)
 
                 btn_up = tk.Button(rlhf_frame, text="👍", bg=THEME["bg_color"], fg="#00ff88", activebackground=THEME["widget_bg_color"],
-                                   relief=tk.FLAT, font=("Consolas", 9), command=lambda: _submit_fb(1))
+                                   relief=tk.FLAT, font=self.fonts["log"], command=lambda: _submit_fb(1))
                 btn_down = tk.Button(rlhf_frame, text="👎", bg=THEME["bg_color"], fg="#ff4444", activebackground=THEME["widget_bg_color"],
-                                     relief=tk.FLAT, font=("Consolas", 9), command=lambda: _submit_fb(-1))
+                                     relief=tk.FLAT, font=self.fonts["log"], command=lambda: _submit_fb(-1))
                 btn_up.pack(side=tk.LEFT, padx=2)
                 btn_down.pack(side=tk.LEFT, padx=2)
                 
@@ -6016,10 +6150,107 @@ class ChatbotApp:
                             bars = int(pct / 10)
                             val_str = f"[{'█' * bars}{'░' * (10 - bars)}] {pct:.0f}%"
                         except Exception: pass
-                    elif k == "Power" and isinstance(v, (int, float)):
+                    elif k in ("Power", "CPU Power") and isinstance(v, (int, float)):
                         val_str = f"{v:.1f}W"
                     self.stats_labels[k].config(text=val_str)
         except: pass
+
+    def apply_text_scale(self, scale_pct=100, persist=True):
+        """
+        Dynamically adjusts font sizes across all UI components and markdown tags.
+        Supports continuous scaling (70% - 250%).
+        Incorporates window-responsive factor so fonts grow with window size.
+        """
+        try:
+            scale_pct = max(70, min(250, int(scale_pct)))
+        except (ValueError, TypeError):
+            scale_pct = 100
+        
+        user_factor = scale_pct / 100.0
+        win_factor = getattr(self, '_window_scale_factor', 1.0)
+        
+        for k, spec in BASE_FONT_SPECS.items():
+            if k in self.fonts:
+                base_sz = spec.get("size", 10)
+                # Per-font responsiveness: UI fonts scale fully, code/log fonts barely change
+                resp = _FONT_WINDOW_RESPONSIVENESS.get(k, 1.0)
+                effective_win = 1.0 + resp * (win_factor - 1.0)
+                new_sz = max(6, int(round(base_sz * user_factor * effective_win)))
+                self.fonts[k].configure(size=new_sz)
+        
+        if persist and hasattr(self, 'config') and self.config is not None:
+            self.config["text_scale"] = scale_pct
+            if hasattr(self, 'model_paths'):
+                self.save_config()
+
+    def apply_font_family(self, ui_family=None, mono_family=None, persist=True):
+        """
+        Dynamically adjusts font families across all UI components and markdown tags.
+        """
+        if ui_family is None and hasattr(self, 'config') and self.config:
+            ui_family = self.config.get("ui_font", "Segoe UI")
+        if mono_family is None and hasattr(self, 'config') and self.config:
+            mono_family = self.config.get("mono_font", "Consolas")
+            
+        ui_family = ui_family or "Segoe UI"
+        mono_family = mono_family or "Consolas"
+        
+        mono_keys = {
+            "log", "log_bold", "stats", "stats_bold",
+            "md_thought", "md_math_inline", "md_math_block", "md_table", "md_code"
+        }
+        
+        for k in self.fonts:
+            fam = mono_family if k in mono_keys else ui_family
+            try:
+                self.fonts[k].configure(family=fam)
+            except Exception:
+                pass
+                
+        if persist and hasattr(self, 'config') and self.config is not None:
+            self.config["ui_font"] = ui_family
+            self.config["mono_font"] = mono_family
+            if hasattr(self, 'model_paths'):
+                self.save_config()
+
+    def zoom_in(self, event=None):
+        curr_scale = self.config.get("text_scale", 100) if hasattr(self, 'config') and self.config else 100
+        new_scale = min(250, curr_scale + 10)
+        self.apply_text_scale(new_scale, persist=True)
+        return "break"
+
+    def zoom_out(self, event=None):
+        curr_scale = self.config.get("text_scale", 100) if hasattr(self, 'config') and self.config else 100
+        new_scale = max(70, curr_scale - 10)
+        self.apply_text_scale(new_scale, persist=True)
+        return "break"
+
+    def zoom_reset(self, event=None):
+        self.apply_text_scale(100, persist=True)
+        return "break"
+
+    def _on_root_configure(self, event=None):
+        """Debounced handler: recompute font scale on window resize."""
+        if event and event.widget != self.root:
+            return
+        if hasattr(self, '_root_resize_job') and self._root_resize_job:
+            self.root.after_cancel(self._root_resize_job)
+        self._root_resize_job = self.root.after(150, self._apply_responsive_scale)
+
+    def _apply_responsive_scale(self):
+        """Recompute window-responsive scale factor and re-apply text scale."""
+        try:
+            w = self.root.winfo_width()
+            if w < 100:
+                return  # Window not yet mapped
+            base_w = 960  # Minimum window width
+            ratio = max(1.0, w / base_w)
+            # Soft linear growth: at 1920px -> factor ~1.4, at 2560px -> factor ~1.67
+            self._window_scale_factor = 1.0 + 0.4 * (ratio - 1.0)
+        except Exception:
+            self._window_scale_factor = 1.0
+        curr_scale = self.config.get("text_scale", 100) if hasattr(self, 'config') and self.config else 100
+        self.apply_text_scale(curr_scale, persist=False)
 
     def update_persona_display(self, val=None):
         if self.depth_slider is None: return
@@ -7186,6 +7417,7 @@ sys.excepthook = log_uncaught_exception
 
 if __name__ == "__main__":
     try:
+        enable_high_dpi_awareness()
         print("Starting SerenityPC...")
         root = tk.Tk()
         root.withdraw()

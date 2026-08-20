@@ -26,6 +26,21 @@ from PIL import Image, ImageTk
 from serenity_resources import ANIMATION_SEQUENCE, MEDIA_DIR, THEME
 import struct
 
+def enable_high_dpi_awareness():
+    """
+    Enables Windows High-DPI awareness before Tkinter initialization to prevent blurry scaling.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            try:
+                # PROCESS_SYSTEM_DPI_AWARE = 1, PROCESS_PER_MONITOR_DPI_AWARE = 2
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception as e:
+            print(f"[DPI] Warning setting DPI awareness: {e}")
+
 def patch_llama_deallocator():
     """
     Safely patches llama_cpp._internals.LlamaModel.close to prevent AttributeError
@@ -369,6 +384,8 @@ class LoadingScreen:
 class HardwareProfile:
     """Auto-detects CPU cores and RAM to optimize inference and background tasking."""
     
+    enable_high_dpi_awareness = staticmethod(enable_high_dpi_awareness)
+    
     @staticmethod
     def initialize_gpu_acceleration():
         """Finds the latest CUDA toolkit installation and adds it to the DLL search path."""
@@ -571,13 +588,14 @@ class SystemMonitor:
             try:
                 nvidia_ml.nvmlInit()
                 self.gpu_handle = nvidia_ml.nvmlDeviceGetHandleByIndex(0)
-            except:
+            except Exception:
                 self.gpu_handle = None
             
         threading.Thread(target=self._stats_loop, daemon=True).start()
 
     @staticmethod
-    def _get_cpu_temp():
+    def _get_cpu_temp(wmi_cimv2=None):
+        # 1. Cross-platform / psutil sensors_temperatures
         try:
             if hasattr(psutil, "sensors_temperatures"):
                 temps = psutil.sensors_temperatures()
@@ -585,114 +603,224 @@ class SystemMonitor:
                     for name, entries in temps.items():
                         if entries and entries[0].current > 0:
                             return f"{entries[0].current:.0f}°C"
-        except: pass
-        try:
-            import wmi
-            w = wmi.WMI(namespace="root\\wmi")
-            temp_info = w.MSAcpi_ThermalZoneTemperature()
-            if temp_info:
-                celsius = (temp_info[0].CurrentTemperature / 10.0) - 273.15
-                if 0 < celsius < 120:
-                    return f"{celsius:.0f}°C"
-        except: pass
-        try:
-            import wmi
-            for ns in ["root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"]:
-                try:
-                    w = wmi.WMI(namespace=ns)
-                    sensors = w.Sensor()
-                    for s in sensors:
-                        if s.SensorType == 'Temperature' and 'cpu' in s.Name.lower():
-                            return f"{s.Value:.0f}°C"
-                except: pass
-        except: pass
-        return "N/A"
+        except Exception: pass
 
-    @staticmethod
-    def _get_cpu_power():
-        try:
-            import wmi
-            for ns in ["root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"]:
-                try:
-                    w = wmi.WMI(namespace=ns)
-                    sensors = w.Sensor()
-                    for s in sensors:
-                        if s.SensorType == 'Power' and 'cpu' in s.Name.lower():
-                            return f"{s.Value:.1f}W"
-                except: pass
-        except: pass
-        return "N/A"
+        # 2. LibreHardwareMonitor / OpenHardwareMonitor via win32com
+        for ns in ["root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"]:
+            try:
+                import win32com.client
+                w = win32com.client.GetObject(f"winmgmts:\\\\.\\{ns}")
+                sensors = w.ExecQuery("SELECT SensorType, Name, Value FROM Sensor")
+                for s in sensors:
+                    if s.SensorType == 'Temperature' and 'cpu' in str(s.Name).lower():
+                        return f"{float(s.Value):.0f}°C"
+            except Exception: pass
 
-    @staticmethod
-    def _get_shared_vram_used_bytes():
-        try:
-            import wmi
-            w = wmi.WMI(namespace="root\\cimv2")
-            perf = w.Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory()
-            if perf:
-                total_shared = sum(int(getattr(p, 'SharedUsage', 0)) for p in perf)
-                if total_shared > 0:
-                    return total_shared
-        except: pass
+        # 3. Windows ThermalZoneInformation (root\\cimv2 standard perf counters, non-admin)
+        if wmi_cimv2 is None:
+            try:
+                import win32com.client
+                wmi_cimv2 = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+            except Exception: pass
+        if wmi_cimv2:
+            try:
+                tzs = wmi_cimv2.ExecQuery("SELECT HighPrecisionTemperature, Temperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation")
+                for tz in tzs:
+                    hp = getattr(tz, "HighPrecisionTemperature", None)
+                    t = getattr(tz, "Temperature", None)
+                    if hp is not None:
+                        try:
+                            hp_val = float(hp)
+                            if hp_val > 2730:
+                                c = (hp_val / 10.0) - 273.15
+                                if 0 < c < 125:
+                                    return f"{c:.0f}°C"
+                        except Exception: pass
+                    if t is not None:
+                        try:
+                            t_val = float(t)
+                            if t_val > 273:
+                                c = t_val - 273.15
+                                if 0 < c < 125:
+                                    return f"{c:.0f}°C"
+                        except Exception: pass
+            except Exception: pass
+
+        # 4. MSAcpi_ThermalZoneTemperature (root\\wmi, admin fallback)
         try:
             import win32com.client
-            wmi_obj = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
-            perf = wmi_obj.ExecQuery("SELECT SharedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory")
-            if perf:
-                total_shared = sum(int(getattr(p, 'SharedUsage', 0)) for p in perf)
-                if total_shared > 0:
-                    return total_shared
-        except: pass
+            w_wmi = win32com.client.GetObject("winmgmts:\\\\.\\root\\wmi")
+            temp_info = w_wmi.ExecQuery("SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature")
+            for t in temp_info:
+                c = (float(t.CurrentTemperature) / 10.0) - 273.15
+                if 0 < c < 125:
+                    return f"{c:.0f}°C"
+        except Exception: pass
+
+        return "N/A"
+
+    @staticmethod
+    def _get_cpu_power(wmi_cimv2=None, cpu_pct=None):
+        # 1. LibreHardwareMonitor / OpenHardwareMonitor
+        for ns in ["root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"]:
+            try:
+                import win32com.client
+                w = win32com.client.GetObject(f"winmgmts:\\\\.\\{ns}")
+                sensors = w.ExecQuery("SELECT SensorType, Name, Value FROM Sensor")
+                for s in sensors:
+                    if s.SensorType == 'Power' and 'cpu' in str(s.Name).lower():
+                        return f"{float(s.Value):.1f}W"
+            except Exception: pass
+
+        # 2. Windows RAPL Energy Meter Counters (root\\cimv2, non-admin)
+        if wmi_cimv2 is None:
+            try:
+                import win32com.client
+                wmi_cimv2 = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+            except Exception: pass
+        if wmi_cimv2:
+            try:
+                meters = wmi_cimv2.ExecQuery("SELECT Name, Power FROM Win32_PerfFormattedData_PowerMeterCounter_EnergyMeter")
+                for m in meters:
+                    name = str(getattr(m, "Name", "")).lower()
+                    if any(k in name for k in ("pkg", "package", "cpu", "pp0")):
+                        try:
+                            pwr_mw = float(m.Power)
+                            if pwr_mw > 0:
+                                return f"{pwr_mw / 1000.0:.1f}W"
+                        except Exception: pass
+            except Exception: pass
+
+        # 3. Dynamic Load-based TDP Power Estimation Fallback
+        try:
+            pct = cpu_pct if cpu_pct is not None else psutil.cpu_percent()
+            # Standard desktop/mobile TDP curve: Idle base ~8-12W up to 65-125W
+            est_watts = 10.0 + (float(pct) / 100.0) * 55.0
+            return f"{est_watts:.1f}W"
+        except Exception: pass
+
+        return "N/A"
+
+    @staticmethod
+    def _get_shared_vram_used_bytes(wmi_cimv2=None):
+        if wmi_cimv2 is None:
+            try:
+                import win32com.client
+                wmi_cimv2 = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+            except Exception: pass
+        if wmi_cimv2:
+            try:
+                perf = wmi_cimv2.ExecQuery("SELECT SharedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory")
+                if perf:
+                    total_shared = sum(int(getattr(p, 'SharedUsage', 0)) for p in perf if getattr(p, 'SharedUsage', None) is not None)
+                    if total_shared > 0:
+                        return total_shared
+            except Exception: pass
         return 0
 
+    @staticmethod
+    def _get_gpu_adapter_counters(wmi_cimv2=None):
+        """Fallback for non-NVML / integrated GPUs via Windows WMI GPU counters."""
+        if wmi_cimv2 is None:
+            try:
+                import win32com.client
+                wmi_cimv2 = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+            except Exception: pass
+        ded_used = 0
+        shared_used = 0
+        if wmi_cimv2:
+            try:
+                perf = wmi_cimv2.ExecQuery("SELECT DedicatedUsage, SharedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory")
+                for p in perf:
+                    ded_val = getattr(p, 'DedicatedUsage', 0)
+                    sh_val = getattr(p, 'SharedUsage', 0)
+                    if ded_val: ded_used += int(ded_val)
+                    if sh_val: shared_used += int(sh_val)
+            except Exception: pass
+        return ded_used, shared_used
 
     def _stats_loop(self):
-        while not self.stop_event.is_set():
-            try:
-                stats = {}
-                
-                # System Stats (CPU, RAM, Temp, Power)
-                p = psutil.Process()
-                with p.oneshot():
-                    vm = psutil.virtual_memory()
-                    stats["CPU"] = f"{psutil.cpu_percent():.1f}%"
-                    stats["RAM"] = f"{vm.used / (1024**2):.0f} / {vm.total / (1024**2):.0f} MB"
-                
-                stats["CPU Temp"] = SystemMonitor._get_cpu_temp()
-                stats["CPU Power"] = SystemMonitor._get_cpu_power()
-                
-                # GPU Stats (NVML & Shared VRAM)
-                if nvidia_ml and self.gpu_handle:
-                    try:
-                        util = nvidia_ml.nvmlDeviceGetUtilizationRates(self.gpu_handle)
-                        mem = nvidia_ml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
-                        temp = nvidia_ml.nvmlDeviceGetTemperature(self.gpu_handle, nvidia_ml.NVML_TEMPERATURE_GPU)
-                        
-                        ded_used_gb = mem.used / (1024**3)
-                        ded_total_gb = mem.total / (1024**3)
-                        
-                        shared_total_gb = vm.total / (2 * 1024**3)
-                        shared_used_bytes = SystemMonitor._get_shared_vram_used_bytes()
-                        shared_used_gb = shared_used_bytes / (1024**3)
-                        
-                        tot_used_gb = ded_used_gb + shared_used_gb
-                        tot_total_gb = ded_total_gb + shared_total_gb
-                        
-                        stats["GPU Use"] = f"{util.gpu}%"
-                        stats["VRAM"] = f"{mem.used / (1024**2):.0f} / {mem.total / (1024**2):.0f} MB"
-                        stats["Shared VRAM"] = f"{shared_used_gb:.2f} / {shared_total_gb:.1f} GB"
-                        stats["Total VRAM"] = f"{tot_used_gb:.2f} / {tot_total_gb:.1f} GB"
-                        stats["GPU Temp"] = f"{temp}°C"
-                        
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception: pass
+
+        wmi_cimv2 = None
+        try:
+            import win32com.client
+            wmi_cimv2 = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+        except Exception: pass
+
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    stats = {}
+                    
+                    # System Stats (CPU, RAM, Temp, Power)
+                    p = psutil.Process()
+                    with p.oneshot():
+                        vm = psutil.virtual_memory()
+                        cpu_pct_val = psutil.cpu_percent()
+                        stats["CPU"] = f"{cpu_pct_val:.1f}%"
+                        stats["RAM"] = f"{vm.used / (1024**2):.0f} / {vm.total / (1024**2):.0f} MB"
+                    
+                    stats["CPU Temp"] = SystemMonitor._get_cpu_temp(wmi_cimv2)
+                    stats["CPU Power"] = SystemMonitor._get_cpu_power(wmi_cimv2, cpu_pct_val)
+                    
+                    # GPU Stats (NVML & Shared VRAM)
+                    shared_total_gb = vm.total / (2 * 1024**3)
+                    if nvidia_ml and self.gpu_handle:
                         try:
-                            pwr_mw = nvidia_ml.nvmlDeviceGetPowerUsage(self.gpu_handle)
-                            stats["Power"] = pwr_mw / 1000.0
-                        except: pass
-                    except: pass
-                
-                self.process_queue.put({"status": "stats_update", "stats": stats})
-            except: pass
-            time.sleep(2)
+                            util = nvidia_ml.nvmlDeviceGetUtilizationRates(self.gpu_handle)
+                            mem = nvidia_ml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
+                            temp = nvidia_ml.nvmlDeviceGetTemperature(self.gpu_handle, nvidia_ml.NVML_TEMPERATURE_GPU)
+                            
+                            ded_used_gb = mem.used / (1024**3)
+                            ded_total_gb = mem.total / (1024**3)
+                            
+                            shared_used_bytes = SystemMonitor._get_shared_vram_used_bytes(wmi_cimv2)
+                            shared_used_gb = shared_used_bytes / (1024**3)
+                            
+                            tot_used_gb = ded_used_gb + shared_used_gb
+                            tot_total_gb = ded_total_gb + shared_total_gb
+                            
+                            stats["GPU Use"] = f"{util.gpu}%"
+                            stats["VRAM"] = f"{mem.used / (1024**2):.0f} / {mem.total / (1024**2):.0f} MB"
+                            stats["Shared VRAM"] = f"{shared_used_gb:.2f} / {shared_total_gb:.1f} GB"
+                            stats["Total VRAM"] = f"{tot_used_gb:.2f} / {tot_total_gb:.1f} GB"
+                            stats["GPU Temp"] = f"{temp}°C"
+                            
+                            try:
+                                pwr_mw = nvidia_ml.nvmlDeviceGetPowerUsage(self.gpu_handle)
+                                stats["Power"] = pwr_mw / 1000.0
+                            except Exception: pass
+                        except Exception: pass
+                    else:
+                        # Non-NVML / Integrated GPU fallback
+                        try:
+                            ded_used_bytes, shared_used_bytes = SystemMonitor._get_gpu_adapter_counters(wmi_cimv2)
+                            shared_used_gb = shared_used_bytes / (1024**3)
+                            ded_used_mb = ded_used_bytes / (1024**2)
+                            ded_used_gb = ded_used_bytes / (1024**3)
+                            tot_used_gb = ded_used_gb + shared_used_gb
+                            
+                            stats["GPU Use"] = "0%"
+                            stats["VRAM"] = f"{ded_used_mb:.0f} MB"
+                            stats["Shared VRAM"] = f"{shared_used_gb:.2f} / {shared_total_gb:.1f} GB"
+                            stats["Total VRAM"] = f"{tot_used_gb:.2f} GB"
+                            stats["GPU Temp"] = "N/A"
+                            stats["Power"] = "N/A"
+                        except Exception: pass
+                    
+                    self.process_queue.put({"status": "stats_update", "stats": stats})
+                except Exception: pass
+                time.sleep(2)
+        finally:
+            wmi_cimv2 = None
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except Exception: pass
 
 def log_uncaught_exception(exc_type, exc_value, exc_traceback):
     """Catches fatal app crashes and saves them to error_log.txt"""
@@ -906,14 +1034,19 @@ class DynamicStatusWidget(tk.Frame):
         self.header_frame = tk.Frame(self, bg=THEME["bg_color"])
         self.header_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
         
+        lbl_font = self.app.fonts["italic"] if self.app and hasattr(self.app, "fonts") and "italic" in self.app.fonts else ("Segoe UI", 10, "italic")
+        tel_font = self.app.fonts["stats"] if self.app and hasattr(self.app, "fonts") and "stats" in self.app.fonts else ("Consolas", 8)
+        gauge_font = self.app.fonts["stats_bold"] if self.app and hasattr(self.app, "fonts") and "stats_bold" in self.app.fonts else ("Consolas", 8, "bold")
+        task_font = self.app.fonts["stats"] if self.app and hasattr(self.app, "fonts") and "stats" in self.app.fonts else ("Consolas", 8)
+        
         self.label = tk.Label(
-            self.header_frame, text="System: Ready", font=("Open Sans", 10, "italic"),
+            self.header_frame, text="System: Ready", font=lbl_font,
             fg=THEME["electric_blue"], bg=THEME["bg_color"], anchor="w"
         )
         self.label.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
 
         self.telemetry_label = tk.Label(
-            self.header_frame, text="", font=("Consolas", 9),
+            self.header_frame, text="", font=tel_font,
             fg="#888888", bg=THEME["bg_color"], anchor="e"
         )
         self.telemetry_label.pack(side=tk.RIGHT, padx=5)
@@ -925,7 +1058,7 @@ class DynamicStatusWidget(tk.Frame):
         self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
         self.gauge_label = tk.Label(
-            self.progress_container, text="", font=("Consolas", 9, "bold"),
+            self.progress_container, text="", font=gauge_font,
             fg="#00ffcc", bg=THEME["bg_color"], width=18, anchor="e"
         )
         self.gauge_label.pack(side=tk.RIGHT, padx=5)
@@ -934,13 +1067,13 @@ class DynamicStatusWidget(tk.Frame):
         
         self.tasks_frame = tk.Frame(self, bg=THEME["bg_color"])
         self.task_lines_label = tk.Label(
-            self.tasks_frame, text="", font=("Consolas", 9),
+            self.tasks_frame, text="", font=task_font,
             fg="#a0c0e0", bg=THEME["bg_color"], justify=tk.LEFT, anchor="w"
         )
         self.task_lines_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
         self.prayer_label = tk.Label(
-            self, text="", font=("Open Sans", 10, "italic"),
+            self, text="", font=lbl_font,
             fg=THEME["electric_blue"], bg=THEME["bg_color"], justify=tk.CENTER
         )
 
@@ -1321,9 +1454,10 @@ class ToolTip:
             frame = tk.Frame(tw, bg=bg_col, highlightbackground=accent, highlightthickness=1, bd=0, padx=8, pady=5)
             frame.pack()
 
+            tip_font = self.app.fonts["ui_small"] if self.app and hasattr(self.app, "fonts") and "ui_small" in self.app.fonts else ("Segoe UI", 9)
             lbl = tk.Label(frame, text=text, justify=tk.LEFT,
                            bg=bg_col, fg=fg_col,
-                           font=("Segoe UI", 9),
+                           font=tip_font,
                            wraplength=self.wraplength)
             lbl.pack()
         except Exception:
@@ -1538,23 +1672,28 @@ class TutorialOverlay:
         btn_bar = tk.Frame(self.card, bg=card_bg)
         btn_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
 
+        btn_font = self.app.fonts["ui_button"] if self.app and hasattr(self.app, "fonts") and "ui_button" in self.app.fonts else ("Segoe UI", 9, "bold")
+        small_font = self.app.fonts["ui_small"] if self.app and hasattr(self.app, "fonts") and "ui_small" in self.app.fonts else ("Segoe UI", 9)
+        title_font = self.app.fonts["large"] if self.app and hasattr(self.app, "fonts") and "large" in self.app.fonts else ("Segoe UI", 13, "bold")
+        body_font = self.app.fonts["main"] if self.app and hasattr(self.app, "fonts") and "main" in self.app.fonts else ("Segoe UI", 10)
+
         self.btn_back = tk.Button(btn_bar, text="< Back", command=self.prev_step,
                                   bg=THEME.get("button_bg_color", "#202020"), fg=fg_col,
-                                  font=("Segoe UI", 9, "bold"), padx=14, pady=4, relief=tk.FLAT)
+                                  font=btn_font, padx=14, pady=4, relief=tk.FLAT)
         self.btn_back.pack(side=tk.LEFT, padx=(0, 10))
 
         self.btn_skip = tk.Button(btn_bar, text="Skip Tutorial", command=self.skip,
                                   bg=card_bg, fg="#ffaa00",
-                                  font=("Segoe UI", 9), padx=10, pady=4, relief=tk.FLAT)
+                                  font=small_font, padx=10, pady=4, relief=tk.FLAT)
         self.btn_skip.pack(side=tk.LEFT)
 
         self.btn_next = tk.Button(btn_bar, text="Next >", command=self.next_step,
                                   bg=THEME.get("button_active_color", "#007acc"), fg=fg_col,
-                                  font=("Segoe UI", 9, "bold"), padx=18, pady=4, relief=tk.FLAT)
+                                  font=btn_font, padx=18, pady=4, relief=tk.FLAT)
         self.btn_next.pack(side=tk.RIGHT)
 
         # Hint Banner - pack above bottom buttons
-        self.hint_lbl = tk.Label(self.card, text="", font=("Segoe UI", 9, "italic"),
+        self.hint_lbl = tk.Label(self.card, text="", font=small_font,
                                  bg=card_bg, fg="#888888", anchor="w", justify=tk.LEFT)
         self.hint_lbl.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 4))
 
@@ -1562,11 +1701,11 @@ class TutorialOverlay:
         header_f = tk.Frame(self.card, bg=card_bg)
         header_f.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
 
-        self.area_lbl = tk.Label(header_f, text="OVERVIEW", font=("Segoe UI", 9, "bold"),
+        self.area_lbl = tk.Label(header_f, text="OVERVIEW", font=btn_font,
                                  bg=card_bg, fg=accent)
         self.area_lbl.pack(side=tk.LEFT)
 
-        self.badge_lbl = tk.Label(header_f, text="Step 1 of 9", font=("Segoe UI", 9, "bold"),
+        self.badge_lbl = tk.Label(header_f, text="Step 1 of 9", font=btn_font,
                                   bg=THEME.get("button_bg_color", "#202020"), fg=fg_col, padx=8, pady=2)
         self.badge_lbl.pack(side=tk.RIGHT)
 
@@ -1577,11 +1716,11 @@ class TutorialOverlay:
         self.progress_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, 6))
 
         # Title & Subtitle
-        self.title_lbl = tk.Label(self.card, text="", font=("Segoe UI", 13, "bold"),
+        self.title_lbl = tk.Label(self.card, text="", font=title_font,
                                   bg=card_bg, fg=THEME.get("accent_highlight", "#00ffcc"), anchor="w", justify=tk.LEFT)
         self.title_lbl.pack(side=tk.TOP, fill=tk.X, pady=(0, 1))
 
-        self.sub_lbl = tk.Label(self.card, text="", font=("Segoe UI", 9, "italic"),
+        self.sub_lbl = tk.Label(self.card, text="", font=small_font,
                                 bg=card_bg, fg=accent, anchor="w", justify=tk.LEFT)
         self.sub_lbl.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
 
@@ -1590,7 +1729,7 @@ class TutorialOverlay:
         sep.pack(side=tk.TOP, fill=tk.X, pady=(0, 6))
 
         # Body Text - expands dynamically in remaining central space
-        self.body_lbl = tk.Label(self.card, text="", font=("Segoe UI", 9),
+        self.body_lbl = tk.Label(self.card, text="", font=body_font,
                                  bg=card_bg, fg=fg_col, anchor="nw", justify=tk.LEFT, wraplength=720)
         self.body_lbl.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 2))
 
@@ -1752,8 +1891,9 @@ class TutorialOverlay:
                 # Section Badge Banner
                 badge_text = f" 📍 SECTION IN FOCUS: {screen['area'].upper()} "
                 badge_y = by1 - 12 if by1 > 30 else by2 + 14
+                badge_font = self.app.fonts["ui_button"] if self.app and hasattr(self.app, "fonts") and "ui_button" in self.app.fonts else ("Segoe UI", 9, "bold")
                 self.canvas.create_text(bx1 + 10, badge_y, text=badge_text,
-                                        font=("Segoe UI", 9, "bold"), fill="#00ffcc", anchor="w", tags="spotlight")
+                                        font=badge_font, fill="#00ffcc", anchor="w", tags="spotlight")
                 
                 # Adaptive Smart Placement for the dialog card
                 target_mid_x = (bx1 + bx2) / 2
