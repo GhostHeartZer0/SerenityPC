@@ -1,5 +1,19 @@
 # Changelog
 
+## Version 1.6.3
+- **Thought Channel Isolation & Dropdown Fix**:
+  - Added missing `<thought>` / `</thought>`, `</|think|>`, `<|im_start|>thought`, and `<|im_end|>` delimiters to inference scout & split logic (`closers`, opener detection, `tag_clean_pattern`) in `main.py` and `_sanitize_synthesis_output`.
+  - Fixed issue where Qwen3.8 native `<thought>` tags were stripped but thoughts failed to demux into the UI dropdown due to missing closer delimiters in scout splitting.
+  - Added unit test suite in `System/tests/test_thought_isolation.py` verifying thought isolation across Qwen, DeepSeek, Gemma, and ChatML formats.
+- **Wringer Benchmark .venv Self-Bootstrap & Click Execution**:
+  - Added `_bootstrap_venv()` to Wringer.py before non-standard imports to auto-detect and re-execute within the workspace `.venv` upon file double-click or global Python invocation.
+  - Added crash-protection traceback capture in `__main__` to prevent instant terminal closure on unhandled errors.
+  - Installed `matplotlib` into workspace `.venv` and added it to requirements.txt.
+  - Fixed chart generation in Wringer.py and analyze.py to sort level axes sequentially (`lvl1`..`lvl7`, `carwash_test`) rather than by score descending.
+  - Regenerated all 26 model breakdown chart PNGs and consolidated comparison charts.
+  - Integrated `split_thoughts_and_answer` into Wringer.py and formatted internal model reasoning into `<details><summary>Reasoning</summary></details>` collapsible blocks in `.md` reports.
+  - Retroactively converted all existing `.md` benchmark reports to format reasoning in dedicated `<details>` dropdowns.
+
 ## Version 1.6.2
 
 - **History Archive Usability **:

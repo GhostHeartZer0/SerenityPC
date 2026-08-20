@@ -21,3 +21,5 @@ turboquant
 opencv-python
 pynvml
 cryptography
+matplotlib
+

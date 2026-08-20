@@ -3437,7 +3437,7 @@ class ChatbotApp:
             thought_detected = False
             stream_lead_buffer = ""
             streamed_answer_chars = 0
-            closers_regex = r'(?:<\/think>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\/thought>|\[\/DRAFT\])'
+            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\])'
 
             gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
             for chunk in gen_iterator:
@@ -3450,7 +3450,7 @@ class ChatbotApp:
                     
                     # 1. Opening detection with buffer protection (prevents raw <|channel> from leaking to UI)
                     if not thought_detected:
-                        if any(tag in lower_resp for tag in ["<think>", "<|channel>thought", "<thought>", "<|think|>", "[draft]"]):
+                        if any(tag in lower_resp for tag in ["<think>", "<|channel>thought", "<thought>", "<|think|>", "<|im_start|>thought", "[draft]"]):
                             thought_detected = True
                             in_thought_channel = True
                             thought_opened = True
@@ -3467,7 +3467,7 @@ class ChatbotApp:
                     else:
                         if in_thought_channel:
                             # Check if thought channel has closed
-                            if any(c in lower_resp for c in ["</think>", "<channel|>", "</channel|>", "</thought>", "[/draft]", "<|channel>text", "<|channel>assistant"]):
+                            if any(c in lower_resp for c in ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "<|channel>text", "<|channel>assistant"]):
                                 in_thought_channel = False
                                 parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
                                 if len(parts) > 1 and parts[-1]:
@@ -3520,7 +3520,8 @@ class ChatbotApp:
 
             # Advanced Scout & Split
             closers = [
-                r'<\/think>', r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+                r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
+                r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
                 r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
             ]
             all_splits = []
@@ -3528,7 +3529,7 @@ class ChatbotApp:
                 for m in re.finditer(tag_pattern, final_answer, re.IGNORECASE):
                     all_splits.append(m.end())
             
-            if not all_splits and ("<think>" in final_answer or "<|channel>thought" in final_answer):
+            if not all_splits and any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<|im_start|>thought", "<|im_start>thought", "[draft]"]):
                 all_splits.append(len(final_answer))
             
             all_splits.sort()
@@ -3536,7 +3537,7 @@ class ChatbotApp:
             if all_splits:
                 for split in all_splits:
                     remaining = final_answer[split:].strip()
-                    if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>', remaining, re.IGNORECASE):
+                    if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought', remaining, re.IGNORECASE):
                         continue
                     best_split = split
                     break
@@ -3547,7 +3548,7 @@ class ChatbotApp:
                 think_log = final_answer[:best_split].strip()
                 final_answer = final_answer[best_split:].strip()
             else:
-                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<\|think\|>', final_answer, re.IGNORECASE))
+                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<\|think\|>|<\|im_start\|?>thought', final_answer, re.IGNORECASE))
                 if has_thought_openers:
                     think_log = final_answer
                     final_answer = ""
@@ -3570,7 +3571,7 @@ class ChatbotApp:
                     final_answer = self._run_tool_loop(final_answer, msgs, params)
 
             # Strip wrapper tags and residual tool markers
-            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>'
+            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>'
             think_log = re.sub(tag_clean_pattern, '', think_log).strip()
             final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
 
@@ -5339,7 +5340,7 @@ class ChatbotApp:
         if not raw_text: return ""
         
         # Split raw response at the end of the thinking tag and discard the thought prefix
-        closers = [r'<\/think>', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]']
+        closers = [r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<channel\|>', r'<\/channel\|>', r'<\|channel>text', r'<\|channel>assistant', r'\[\/DRAFT\]']
         best_split = -1
         for pattern in closers:
             match = re.search(pattern, raw_text, re.IGNORECASE)
@@ -5352,7 +5353,7 @@ class ChatbotApp:
             cleaned = raw_text
             
         tags = [
-            "<think>", "</think>", "<|channel>thought", "<channel|>", "Final Response:", "Final Answer:",
+            "<think>", "</think>", "<thought>", "</thought>", "<|think|>", "</|think|>", "<|channel>thought", "<channel|>", "Final Response:", "Final Answer:",
             "<|channel>text", "<|channel>assistant", "</channel|>", "###", "<|im_start|>", "<|im_end|>", "<|endoftext|>"
         ]
         for tag in tags:
