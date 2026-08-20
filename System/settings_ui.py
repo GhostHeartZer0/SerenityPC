@@ -466,6 +466,15 @@ def open_settings_window(app):
                            selectcolor=THEME["electric_blue"], indicatoron=False,
                            activebackground=THEME["electric_blue"], width=0).pack(side=tk.LEFT, padx=5, pady=2)
 
+        repeat_mode_var = tk.StringVar(value=app.config.get("repeat_detection_mode", "lazy"))
+        tk.Label(left_over_col, text="Repeat Loop Detection:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        repeat_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); repeat_f.pack(anchor="w", padx=10)
+        for o in ["hyper", "lazy", "off"]:
+            tk.Radiobutton(repeat_f, text=o.capitalize(), variable=repeat_mode_var, value=o, 
+                           bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                           selectcolor=THEME["electric_blue"], indicatoron=False,
+                           activebackground=THEME["electric_blue"], width=8).pack(side=tk.LEFT, padx=3, pady=2)
+
         # Right Sub-Column Controls (4 Dropdowns)
         UNIVERSAL_KV_TYPES = ["fp16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"]
         k_val = app.config.get("k_cache_type", "q8_0").lower()
@@ -541,6 +550,109 @@ def open_settings_window(app):
         frosted_glass_var = tk.BooleanVar(value=app.config.get("frosted_glass", False))
         tk.Checkbutton(kv_frame, text="Frosted Glass Texture", variable=frosted_glass_var,
                        bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).grid(row=8, column=0, columnspan=2, sticky="w", pady=2)
+
+        # STT Audio Input Settings
+        from System.stt_manager import STTManager
+        stt_devs = STTManager.get_input_devices()
+        dev_names = ["Default Input Device"] + [f"{d['id']}: {d['name'][:24]}" for d in stt_devs]
+        dev_id_map = {"Default Input Device": None}
+        for d in stt_devs:
+            dev_id_map[f"{d['id']}: {d['name'][:24]}"] = d["id"]
+        
+        curr_dev_idx = app.config.get("stt_device_index", None)
+        curr_dev_label = "Default Input Device"
+        if curr_dev_idx is not None:
+            for k, v in dev_id_map.items():
+                if v == curr_dev_idx:
+                    curr_dev_label = k
+                    break
+
+        stt_dev_var = tk.StringVar(value=curr_dev_label)
+        tk.Label(kv_frame, text="STT Mic Input:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=9, column=0, sticky="w", pady=2)
+        stt_dev_dropdown = ttk.Combobox(kv_frame, textvariable=stt_dev_var, values=dev_names, state="readonly", width=14)
+        stt_dev_dropdown.grid(row=9, column=1, padx=5, pady=2)
+
+        stt_lang_var = tk.StringVar(value=app.config.get("stt_language", "en-US"))
+        tk.Label(kv_frame, text="STT Language:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=10, column=0, sticky="w", pady=2)
+        stt_lang_dropdown = ttk.Combobox(kv_frame, textvariable=stt_lang_var, values=["en-US", "en-GB", "es-ES", "fr-FR", "de-DE", "ja-JP", "zh-CN"], state="readonly", width=14)
+        stt_lang_dropdown.grid(row=10, column=1, padx=5, pady=2)
+
+        # --- USER PROFILE & HISTORY SEPARATION ---
+        user_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
+        user_section.pack(fill=tk.X, padx=10, pady=(15, 5))
+
+        user_header = tk.Frame(user_section, bg=THEME["widget_bg_color"])
+        user_header.pack(fill=tk.X, padx=0, pady=0)
+        tk.Label(user_header, text="👤 User Profile & Mind Separation (Users/<Username>/)", bg=THEME["widget_bg_color"], 
+                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(side=tk.LEFT, padx=8, pady=4)
+
+        user_body = tk.Frame(user_section, bg=THEME["bg_color"])
+        user_body.pack(fill=tk.X, padx=10, pady=6)
+
+        tk.Label(user_body, text="Active Username:", bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(side=tk.LEFT, padx=(0, 5))
+        
+        user_profiles_list = app.list_user_profiles() if hasattr(app, 'list_user_profiles') else ["Default"]
+        username_var = tk.StringVar(value=app.get_active_username() if hasattr(app, 'get_active_username') else app.config.get("username", "Default"))
+        user_combo = ttk.Combobox(user_body, textvariable=username_var, values=user_profiles_list, width=16)
+        user_combo.pack(side=tk.LEFT, padx=5)
+
+        def _apply_switch_user():
+            target_un = username_var.get().strip()
+            if target_un and hasattr(app, 'switch_user'):
+                app.switch_user(target_un)
+                user_profiles_list = app.list_user_profiles()
+                user_combo['values'] = user_profiles_list
+                messagebox.showinfo("User Profile Switched", f"Active user profile set to '{target_un}'.")
+
+        tk.Button(user_body, text="Switch / Create Profile", command=_apply_switch_user,
+                  bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT).pack(side=tk.LEFT, padx=8)
+
+        # --- LOADING BAR & STATUS AREA CONFIGURATION ---
+        status_bar_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
+        status_bar_section.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        sb_header = tk.Frame(status_bar_section, bg=THEME["widget_bg_color"])
+        sb_header.pack(fill=tk.X, padx=0, pady=0)
+        tk.Label(sb_header, text="⏳ Loading Bar & Status Area Overhaul", bg=THEME["widget_bg_color"], 
+                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(side=tk.LEFT, padx=8, pady=4)
+
+        sb_body = tk.Frame(status_bar_section, bg=THEME["bg_color"])
+        sb_body.pack(fill=tk.X, padx=10, pady=6)
+
+        opts_frame = tk.Frame(sb_body, bg=THEME["bg_color"])
+        opts_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+
+        tk.Label(opts_frame, text="Display Options:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold")).pack(anchor="w", pady=(0, 2))
+
+        STATUS_MODES = [
+            ("hybrid", "Hybrid / Smart Feature (State-Aware with Finish t/s)"),
+            ("tasks", "Active Generation Tasks (Prefill, Reasoning, Streaming)"),
+            ("percentage", "Percentage Gauge (Load % & TTFT / Estimated Duration)"),
+            ("animation", "Selectable Animation (Custom Canvas Animation)"),
+            ("prayer", "Serenity Prayer (Smooth Line Fading Transition)")
+        ]
+        status_mode_var = tk.StringVar(value=app.config.get("status_bar_mode", "hybrid"))
+        for val, lbl in STATUS_MODES:
+            tk.Radiobutton(opts_frame, text=lbl, variable=status_mode_var, value=val,
+                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", padx=4, pady=1)
+
+        toggles_frame = tk.Frame(sb_body, bg=THEME["bg_color"])
+        toggles_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15)
+
+        tk.Label(toggles_frame, text="Animation Style:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w")
+        anim_style_var = tk.StringVar(value=app.config.get("status_bar_anim_style", "spinner"))
+        anim_combo = ttk.Combobox(toggles_frame, textvariable=anim_style_var, values=["spinner", "pulse", "orbit"], state="readonly", width=12)
+        anim_combo.pack(anchor="w", pady=(2, 6))
+
+        tk.Label(toggles_frame, text="Status Area Toggles:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold")).pack(anchor="w", pady=(4, 2))
+
+        sb_dmn_var = tk.BooleanVar(value=app.config.get("status_bar_dmn_idle", True))
+        tk.Checkbutton(toggles_frame, text="Swaps to DMN timer showing idle time", variable=sb_dmn_var,
+                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=1)
+
+        sb_fallback_var = tk.BooleanVar(value=app.config.get("status_bar_fallback_info", True))
+        tk.Checkbutton(toggles_frame, text="Defaults back to active level & KV quant/ctx info", variable=sb_fallback_var,
+                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=1)
 
         # --- SECURITY & VAULT ENCRYPTION PANEL ---
         vault_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
@@ -817,6 +929,8 @@ def open_settings_window(app):
             app.config["image_handling"] = image_handling_var.get()
             app.config["muse_reasoning_strength"] = muse_reasoning_var.get()
             app.config["dmn_timeout"] = dmn_ent.get().strip()
+            app.config["stt_device_index"] = dev_id_map.get(stt_dev_var.get(), None)
+            app.config["stt_language"] = stt_lang_var.get()
             if hasattr(app, 'vault_manager'):
                 try: app.vault_manager.set_auto_lock_seconds(int(auto_lock_var.get()))
                 except: pass
@@ -849,6 +963,7 @@ def open_settings_window(app):
             for t, e in freq_ents.items():
                 try: app.frequency_penalty_config[t] = float(e.get())
                 except: pass
+            app.config["repeat_detection_mode"] = repeat_mode_var.get()
             app.config["offline_mode"] = offline_mode_var.get()
             try:
                 from System.network_guard import set_offline_mode
@@ -862,6 +977,18 @@ def open_settings_window(app):
             app.config["theme"] = theme_k
             app.config["texture_style"] = tex_k
             app.config["frosted_glass"] = f_glass
+
+            # User Profile & Status Bar config
+            new_un = username_var.get().strip() or "Default"
+            if new_un != app.config.get("username", "Default") and hasattr(app, "switch_user"):
+                app.switch_user(new_un)
+            else:
+                app.config["username"] = new_un
+            
+            app.config["status_bar_mode"] = status_mode_var.get()
+            app.config["status_bar_anim_style"] = anim_style_var.get()
+            app.config["status_bar_dmn_idle"] = sb_dmn_var.get()
+            app.config["status_bar_fallback_info"] = sb_fallback_var.get()
 
             try:
                 from serenity_resources import apply_theme_to_global

@@ -19,7 +19,7 @@ sentence-transformers
 turbovec
 turboquant
 opencv-python
-pynvml
+nvidia-ml-py>=13.610.0
 cryptography
 matplotlib
 

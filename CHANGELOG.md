@@ -1,22 +1,97 @@
 # Changelog
 
-## Version 1.6.4
-- **Fully Offline Mode Toggle (TODO #1)**:
+## V2.0 Roadmap (Planned Releases)
+### Version 2.0.0
+- Stable, polished release.
+### Version 1.9.0
+- Cleared TODO Verifications (Completed Logs)
+- Settings Reorganized
+### Version 1.8.0
+- Cleared TODO list for v2.0
+- Deep Cook Verified
+### Version 1.7.0
+- Subagents Implemented
+### Version 1.6.9
+- Image generation verified
+
+### Version 1.6.8
+- Verify Loading bar
+- Verify Info Hovers & Tutorial
+
+## Version 1.6.7
+
+## Version 1.6.6
+- **Loading Bar & Status Area Overhaul**:
+  - Replaced static indeterminate ping-pong progress bar with `DynamicStatusWidget` in `System/serenity_utils.py` and `main.py`.
+  - Added multi-phase generation tracking (`[Loading Model]`, `[Prefill]`, `[Reasoning / Thoughts]`, `[Generating]`, `[Complete]`).
+  - Added percentage gauge tracking TTFT and estimated duration without visual overlap.
+  - Added selectable canvas animations (`spinner`, `pulse`, `orbit`).
+  - Added smooth Serenity Prayer text fader with long transition pauses.
+  - Added DMN idle timer mode and hybrid smart mode displaying finish speed (`t/s`).
+  - Added fallback telemetry displaying active persona level, KV cache format, and context size.
+  - Added loading bar configuration panel in `System/settings_ui.py`.
+- **Username Profile & Mind State Isolation**:
+  - Implemented multi-user profile separation with directory namespaces: `History/<username>/` and `Users/<username>/` under Serenity root.
+  - Preserved backward compatibility by auto-migrating legacy root archives to `History/Default/`.
+  - Added user switching via `switch_user()` in `main.py`, reloading scoped history archives and isolated user `dmn_backbone.json` reflection state.
+  - Updated `VaultManager` in `System/vault_manager.py` to recursively scan, encrypt, decrypt, and migrate user subdirectory archives safely with zero data loss.
+  - Added User Profile selection and creation UI controls to `System/settings_ui.py`.
+
+## Version 1.6.5-alpha
+- **Wringer Speed Telemetry & Graph Popup Overhaul**:
+  - **Streaming Tokens/Sec (`t/s`) Telemetry**: Added per-prompt streaming token measurement in `System/tests/benchmarks/wringer/Wringer.py` calculating precise prefill (`t/s`), decode (`t/s`), and overall generation speed (`t/s`).
+  - **Outlier / Anomaly Detection**: Integrated interquartile range (IQR) detection (`detect_anomalies_and_stats`) to track speed spikes/drops and report clean means along with an `anomaly_count`.
+  - **Separate High-Scores & Speed Weighting**: Separated quality score and decode speed highscore records in `wringer_highscores.json`. Added user weighting toggle (`n` = strictly separate, `y` = 75% quality + 25% throughput composite score).
+  - **Redone Graph Popup Handling**: Redesigned chart layouts with dual-axis quality and speed visualization, disabled disruptive auto-popups by default, and added menu actions for on-demand opening of generated charts and report folders.
+- **Edge Cases & Button State Fixes**:
+  - **Prompt Visibility Preservation During Model Load**: Updated `clear_chat_ui(preserve_pending=True)` to retain pending user prompt in `chat_history` during dynamic model swaps and asynchronous engine loads.
+  - **Button State & Color Synchronization**: Updated `set_ui_state()` and `final_initial_setup()` to dynamically synchronize `ghost_button` and `history_usage_button` labels, colors, and disabled states with `self.config` on launch and during inference.
+  - **History Search Bar / Pinned Prompt Collision Fix**: Made `show_active_chat()` check whether `prompt_display` contains text before packing, preventing empty grey prompt bars from appearing as residual search bars after switching tabs.
+- **Offline Speech-to-Text (STT) Integration**:
+  - Created `STTManager` in `System/stt_manager.py` using `sounddevice` for microphone PCM recording and local `speech_recognition` (offline Sphinx, local Vosk, or multimodal LLM ASR fallback).
+  - Added push-to-record `[🎙️] Mic` button to UI footer controls in `main.py` with dynamic recording (`[🔴 Rec...]`) and transcription (`[⏳ Dictating...]`) indicators.
+  - Added audio input device selection and language dropdowns in `System/settings_ui.py`.
+- **Offline Tool Declaration Enforcement**:
+  - Updated `get_definitions()` in `System/tool_registry.py` to strictly omit `web_search` and remote internet services from model system prompts and programmatic stubs when Offline Mode is active.
+
+## Version 1.6.4-alpha
+- **nvidia-ml-py Official Migration**:
+  - Replaced deprecated `pynvml` package in `requirements.txt` with official `nvidia-ml-py>=13.610.0`.
+  - Uninstalled deprecated PyPI redirector package from `.venv`, resolving runtime `FutureWarning` deprecation warnings on NVML initialization and GPU telemetry retrieval.
+  - Updated system monitoring import diagnostics and warnings in `main.py`.
+- **Repeat Detection & Loop Handling Overhaul**:
+  - Re-architected `_detect_repetition` in `main.py` to support three configurable operational modes:
+    - **`off`**: Fully disables stream repetition checks for unrestrained code generation, data manipulation, and batch tasks.
+    - **`lazy` (Default)**: Sanitizes markdown code fences (` ```...``` `) and tool-call signatures (`web_search(...)`, `action:...`, `<ctrl42>call:...`) before checking repetition; raises repetition thresholds (`min_len=80`, `max_repeats=4` across an 800-character window, or 5+ consecutive identical lines) to prevent false-positive inference abortion during programming and multi-turn tool calling (`search hi`, `search low`, `search windows`).
+    - **`hyper`**: Strict loop detector (`min_len=35`, `max_repeats=3` across 400 characters) with stall-phrase loop detection (`re-read`, `reread`, `look again`, etc.).
+  - Added "Repeat Loop Detection:" setting radio buttons in `System/settings_ui.py` (Global Engine Overrides) and persisted selection to `System/config.json` (`repeat_detection_mode`).
+  - Cleaned up duplicate `_run_tool_loop` method definition in `main.py`.
+  - Added unit test suite `System/tests/test_repeat_detection.py` validating mode behavior across tool calls, code blocks, and degenerate loops.
+
+- **Fully Offline Mode Toggle**:
   - Built `NetworkGuard` in `System/network_guard.py` with system-level `socket.socket.connect` and `socket.create_connection` interception, blocking outbound external network traffic while allowing local loopback (`127.0.0.1`, `localhost`).
   - Added offline guard checks to `handle_web_search` in `System/tool_registry.py`, preventing remote HTTP requests and browser launching with clear user-facing refusal telemetry.
   - Added network fetch guards to `_fetch_and_populate_media` and `_spawn_media_popup` in `main.py`.
   - Added "Fully Offline Mode (Block Net)" checkbox in `System/settings_ui.py` and `[OFFLINE]` status badge to hardware/status telemetry bar in `main.py`.
-- **History Window Refresh States & Offload Void Fix (TODO #9)**:
+- **History Window Refresh States & Offload Void Fix**:
   - Added explicit tab state tracking (`self.active_tab = "active" | "history"`) in `main.py`.
   - Made `clear_chat_ui()` tab-aware: when on the History Archive tab, it preserves `history_menu_frame` and invokes `_render_history_menu()` to update file sizes, timestamps, and newly archived sessions without leaving the window blank upon model offload.
   - Resolved history view disappearance when swapping or offloading models.
-- **Theme & Dark Mode Overhaul (TODO #6)**:
+- **Theme & Dark Mode Overhaul**:
   - Added comprehensive theme palettes in `serenity_resources.py`: **Apex Dark (Default)**, **Goth / Obsidian Dark**, **Crystal Cavern**, and **Fractal Logic**.
   - Added 6 modular texture styles: `default` (original flat), `gloss` (polished sheen), `metallic` (brushed gunmetal), `muted` (soft matte), `iridescent` (prismatic shimmer), and `pearlescent` (luminous pearl luster).
   - Added **Frosted Glass Texture** toggle modifier for soft diffusion and glassmorphic card backgrounds.
   - Implemented dynamic runtime theme applier `apply_current_theme()` in `main.py` and `apply_theme_to_global()` in `serenity_resources.py` with live Theme & Texture dropdowns in `System/settings_ui.py`.
+- **UI Spacing & Scaling Offsets**:
+  - Added `root.minsize(960, 640)` enforcing minimum window geometry to eliminate widget overlap on resize.
+  - Integrated `main_window` geometry persistence and sash positioning in `save_config_to_file()` and `final_initial_setup()`.
+  - Padded and constrained right canvas log container in `_position_canvas_elements` to maintain centered alignment without clipping adjacent widgets.
+- **Muse-Glimmer Onyx/ATEM Architecture Alignment**:
+  - Mapped `muse-glimmer` architecture string lookup to `LLM_ARCH_QWEN2` in `llama-arch.cpp` and `serenity_utils.py`.
+  - Added per-head `attn_q_norm` and `attn_k_norm` RMS normalization in tensor loader (`llama-model.cpp`) and graph builder (`models/qwen2.cpp`) executed prior to RoPE.
+  - Aligned sampling stop tokens (`<|end_of_text|>`, `<|eot|>`) and filtered `<|eom|>` in `main.py` to prevent premature generation cutoffs.
 
-## Version 1.6.3
+## Version 1.6.3-alpha
 - **Thought Channel Isolation & Dropdown Fix**:
   - Added missing `<thought>` / `</thought>`, `</|think|>`, `<|im_start|>thought`, and `<|im_end|>` delimiters to inference scout & split logic (`closers`, opener detection, `tag_clean_pattern`) in `main.py` and `_sanitize_synthesis_output`.
   - Fixed issue where Qwen3.8 native `<thought>` tags were stripped but thoughts failed to demux into the UI dropdown due to missing closer delimiters in scout splitting.
@@ -29,7 +104,7 @@
   - Regenerated all 26 model breakdown chart PNGs and consolidated comparison charts.
   - Integrated `split_thoughts_and_answer` into Wringer.py and formatted internal model reasoning into `<details><summary>Reasoning</summary></details>` collapsible blocks in `.md` reports.
   - Retroactively converted all existing `.md` benchmark reports to format reasoning in dedicated `<details>` dropdowns.
-- **Thought Channel Protocol Alignment & Nemotron Meta-Loop Fix (TODO #9 & #10)**:
+- **Thought Channel Protocol Alignment & Nemotron Meta-Loop Fix**:
   - Replaced contradictory meta-restriction prompt injections with clean architecture-aware reasoning directives (`is_nemotron`, `is_qwen`, `is_deepseek`, `is_gemma`) in main.py and Wringer.py.
   - Built real-time streaming thought demuxer in `_generation_worker`: live thinking tokens route directly to the Thought Log (`tool_log_update`), while chat streaming is held until post-closer to eliminate draft preamble and UI rewrite flicker.
   - Added pre-thought draft rollback protection (`streaming_replace`) if speculative text is emitted prior to late `<think>` opening.
