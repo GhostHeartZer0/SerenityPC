@@ -1,4 +1,29 @@
 import os
+import sys
+import subprocess
+
+def _bootstrap_venv():
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", "..", "..", ".."))
+    
+    scripts_dir = os.path.join(project_root, ".venv", "Scripts") if sys.platform == "win32" else os.path.join(project_root, ".venv", "bin")
+    venv_py = os.path.join(scripts_dir, "python.exe" if sys.platform == "win32" else "python")
+    
+    if os.path.exists(venv_py):
+        cur_py = os.path.normcase(os.path.abspath(sys.executable))
+        tgt_py = os.path.normcase(os.path.abspath(venv_py))
+        if cur_py != tgt_py:
+            env = os.environ.copy()
+            env["VIRTUAL_ENV"] = os.path.join(project_root, ".venv")
+            env["PATH"] = scripts_dir + os.pathsep + env.get("PATH", "")
+            result = subprocess.run([venv_py, os.path.abspath(__file__)] + sys.argv[1:], env=env, cwd=project_root)
+            sys.exit(result.returncode)
+
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+_bootstrap_venv()
+
 import json
 import time
 import re
@@ -6,6 +31,7 @@ import math
 import gc
 import numpy as np
 from typing import List, Dict, Any
+
 
 class WringerFramework:
     def __init__(self, judge_model_path: str = None, manual_grading: bool = False):
@@ -487,6 +513,48 @@ class WringerFramework:
         
         return scores
 
+    @staticmethod
+    def split_thoughts_and_answer(raw_output: str):
+        if not raw_output:
+            return "", ""
+        closers = [
+            r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
+            r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+            r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
+        ]
+        all_splits = []
+        for tag_pattern in closers:
+            for m in re.finditer(tag_pattern, raw_output, re.IGNORECASE):
+                all_splits.append(m.end())
+
+        if not all_splits and any(t in raw_output.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<|im_start|>thought", "<|im_start>thought", "[draft]"]):
+            all_splits.append(len(raw_output))
+
+        all_splits.sort()
+        best_split = -1
+        if all_splits:
+            for split in all_splits:
+                remaining = raw_output[split:].strip()
+                if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought', remaining, re.IGNORECASE):
+                    continue
+                best_split = split
+                break
+            if best_split == -1:
+                best_split = all_splits[-1]
+
+        if best_split != -1:
+            think_log = raw_output[:best_split].strip()
+            final_answer = raw_output[best_split:].strip()
+        else:
+            think_log = ""
+            final_answer = raw_output.strip()
+
+        tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>'
+        think_log = re.sub(tag_clean_pattern, '', think_log).strip()
+        final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+
+        return think_log, final_answer
+
     def run_evaluation(self, model_path: str, selected_levels: List[str] = None) -> Dict[str, Any]:
         """Runs the Wringer benchmark for a single designated model."""
         levels_to_run = selected_levels if selected_levels else list(self.test_bank.keys())
@@ -503,7 +571,15 @@ class WringerFramework:
             print(f"\n--- Processing Level: {lvl} ---")
             responses = self.generate_responses(model_path, prompts)
             
-            qa_pairs = [{"prompt": p, "response": r} for p, r in zip(prompts, responses)]
+            # Grade clean answers when thoughts are present
+            qa_pairs = []
+            parsed_pairs = []
+            for p, r in zip(prompts, responses):
+                thought, answer = self.split_thoughts_and_answer(r)
+                clean_ans = answer if answer else r
+                qa_pairs.append({"prompt": p, "response": clean_ans})
+                parsed_pairs.append((p, clean_ans, thought))
+
             scores = self.grade_responses(qa_pairs)
             
             if scores:
@@ -511,8 +587,11 @@ class WringerFramework:
                 lvl_percentage = (lvl_avg / 10.0) * 100
                 
                 details = []
-                for p, r, s in zip(prompts, responses, scores):
-                    details.append({"prompt": p, "response": r, "score": round(s, 2)})
+                for (p, ans, thought), s in zip(parsed_pairs, scores):
+                    item = {"prompt": p, "response": ans, "score": round(s, 2)}
+                    if thought:
+                        item["thought"] = thought
+                    details.append(item)
                     
                 model_results[lvl] = {
                     "average_score": round(lvl_avg, 2),
@@ -522,7 +601,7 @@ class WringerFramework:
         
         total_duration = time.time() - start_time
         
-        # Export detailed markdown
+        # Export detailed markdown with dropdown for reasoning
         report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
         os.makedirs(report_dir, exist_ok=True)
         report_path = os.path.join(report_dir, f"{model_name}_report.md")
@@ -536,6 +615,8 @@ class WringerFramework:
                         for d in data["details"]:
                             rf.write(f"### Prompt:\n```text\n{d['prompt']}\n```\n\n")
                             rf.write(f"**Score:** {d['score']}/10\n\n")
+                            if d.get("thought"):
+                                rf.write(f"<details>\n<summary>Reasoning</summary>\n\n```text\n{d['thought']}\n```\n</details>\n\n")
                             rf.write(f"**Response:**\n```text\n{d['response']}\n```\n\n")
                             rf.write("---\n\n")
             print(f"[+] Detailed report saved to: {report_path}")
@@ -615,24 +696,38 @@ class WringerFramework:
                 print(f"[-] Warning: Failed to save high scores: {e}")
 
 
-    def generate_comparison_chart(self, data: Dict[str, Any], title: str, filename: str) -> None:
+    def generate_comparison_chart(self, data: Dict[str, Any], title: str, filename: str, auto_open: bool = True) -> None:
         try:
             import matplotlib.pyplot as plt
             import numpy as np
+            import re
             
             if not data:
                 return
+
+            def level_sort_key(lvl_name: str):
+                if lvl_name == "Overall":
+                    return (-1, 0, "")
+                match = re.match(r"^lvl(\d+)", str(lvl_name), re.IGNORECASE)
+                if match:
+                    return (0, int(match.group(1)), str(lvl_name))
+                return (1, 0, str(lvl_name))
                 
             is_2d = any(isinstance(v, dict) for v in data.values())
             
             if not is_2d:
-                sorted_items = sorted(data.items(), key=lambda x: x[1], reverse=True)
+                is_level_data = any(re.match(r"^(lvl\d+|carwash)", str(k), re.IGNORECASE) for k in data.keys())
+                if is_level_data:
+                    sorted_items = sorted(data.items(), key=lambda x: level_sort_key(x[0]))
+                else:
+                    sorted_items = sorted(data.items(), key=lambda x: x[1], reverse=True)
+
                 models = [k for k, v in sorted_items]
                 scores = [v for k, v in sorted_items]
                 
                 plt.figure(figsize=(10, 6))
                 bars = plt.bar(models, scores, color='skyblue')
-                plt.xlabel('Models')
+                plt.xlabel('Levels' if is_level_data else 'Models')
                 plt.ylabel('Average Score (out of 10)')
                 plt.title(title)
                 plt.ylim(0, 10)
@@ -650,23 +745,19 @@ class WringerFramework:
                 sorted_items = sorted(data.items(), key=lambda x: get_overall(x[1]), reverse=True)
                 models = [k for k, v in sorted_items]
                 
-                levels = []
+                levels_set = set()
                 for k, v in sorted_items:
                     for lvl in v.keys():
-                        if lvl not in levels:
-                            levels.append(lvl)
+                        levels_set.add(lvl)
                 
-                if "Overall" in levels:
-                    levels.remove("Overall")
-                    levels.insert(0, "Overall")
-                    
+                other_levels = sorted([lvl for lvl in levels_set if lvl != "Overall"], key=level_sort_key)
+                
                 report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
                 os.makedirs(report_dir, exist_ok=True)
                 
                 import math
                 import matplotlib.gridspec as gridspec
 
-                other_levels = [lvl for lvl in levels if lvl != "Overall"]
                 cols = 2
                 rows = math.ceil(len(other_levels) / cols) if other_levels else 0
                 
@@ -707,18 +798,19 @@ class WringerFramework:
                 plt.close(fig)
                 print(f"[+] Saved consolidated comparison chart to: {chart_path}")
                 
-                try:
-                    import sys
-                    if os.name == 'nt':
-                        os.startfile(chart_path)
-                    elif sys.platform == 'darwin':
-                        import subprocess
-                        subprocess.call(['open', chart_path])
-                    else:
-                        import subprocess
-                        subprocess.call(['xdg-open', chart_path])
-                except Exception as e:
-                    print(f"[-] Could not auto-open chart: {e}")
+                if auto_open:
+                    try:
+                        import sys
+                        if os.name == 'nt':
+                            os.startfile(chart_path)
+                        elif sys.platform == 'darwin':
+                            import subprocess
+                            subprocess.call(['open', chart_path])
+                        else:
+                            import subprocess
+                            subprocess.call(['xdg-open', chart_path])
+                    except Exception as e:
+                        print(f"[-] Could not auto-open chart: {e}")
                 
                 return # Exit early so we don't hit the 1D chart save logic below
             
@@ -731,18 +823,19 @@ class WringerFramework:
             print(f"[+] Saved comparison chart to: {chart_path}")
             
             # Automatically open the chart
-            try:
-                import sys
-                if os.name == 'nt':
-                    os.startfile(chart_path)
-                elif sys.platform == 'darwin':
-                    import subprocess
-                    subprocess.call(['open', chart_path])
-                else:
-                    import subprocess
-                    subprocess.call(['xdg-open', chart_path])
-            except Exception as e:
-                print(f"[-] Could not auto-open chart: {e}")
+            if auto_open:
+                try:
+                    import sys
+                    if os.name == 'nt':
+                        os.startfile(chart_path)
+                    elif sys.platform == 'darwin':
+                        import subprocess
+                        subprocess.call(['open', chart_path])
+                    else:
+                        import subprocess
+                        subprocess.call(['xdg-open', chart_path])
+                except Exception as e:
+                    print(f"[-] Could not auto-open chart: {e}")
                 
         except ImportError:
             print("[-] Matplotlib not installed. Skipping chart generation. (pip install matplotlib)")
@@ -923,4 +1016,13 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nExiting Wringer Framework.")
         sys.exit(0)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            input("\n[!] Fatal error occurred. Press Enter to exit...")
+        except Exception:
+            pass
+        sys.exit(1)
+
 
