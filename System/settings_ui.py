@@ -197,7 +197,8 @@ def open_settings_window(app):
             tk.Radiobutton(muse_reasoning_frame, text=opt.capitalize(), variable=muse_reasoning_var, value=opt,
                            bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=2)
 
-        # 3 Checkboxes relocated from Global Overrides to left column
+        # Checkboxes in left column
+        offline_mode_var = tk.BooleanVar(value=app.config.get("offline_mode", False))
         auto_vram_var = tk.BooleanVar(value=app.config.get("auto_vram_offload", False))
         spec_draft_var = tk.BooleanVar(value=app.config.get("speculative_drafting", False))
         ghost_var = tk.BooleanVar(value=app.config.get("ghost_mode", False))
@@ -208,6 +209,8 @@ def open_settings_window(app):
 
         auto_vram_f = tk.Frame(left_header, bg=THEME["bg_color"])
         auto_vram_f.pack(anchor="w", pady=(10, 0))
+        tk.Checkbutton(auto_vram_f, text="Fully Offline Mode (Block Net)", variable=offline_mode_var,
+                       bg=THEME["bg_color"], fg="#ff8800", selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
         tk.Checkbutton(auto_vram_f, text="Dynamic Auto-Offload", variable=auto_vram_var,
                        bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
         tk.Checkbutton(auto_vram_f, text="Speculative MTP Drafting", variable=spec_draft_var,
@@ -503,6 +506,41 @@ def open_settings_window(app):
         turbovec_mode_var = tk.StringVar(value=app.config.get("turbovec_mode", "fallback"))
         turbovec_mode_dropdown = ttk.Combobox(kv_frame, textvariable=turbovec_mode_var, values=["on", "fallback", "off"], state="readonly", width=14)
         turbovec_mode_dropdown.grid(row=5, column=1, padx=5, pady=2)
+
+        # --- THEME & TEXTURE OVERHAUL CONTROLS ---
+        THEME_MAP = {
+            "Apex Dark (Default)": "default",
+            "Goth / Obsidian Dark": "goth",
+            "Crystal Cavern": "crystal_cavern",
+            "Fractal Logic": "fractal_logic"
+        }
+        THEME_REV_MAP = {v: k for k, v in THEME_MAP.items()}
+        curr_theme_key = app.config.get("theme", "default")
+        theme_display_var = tk.StringVar(value=THEME_REV_MAP.get(curr_theme_key, "Apex Dark (Default)"))
+
+        tk.Label(kv_frame, text="Theme / Dark Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=6, column=0, sticky="w", pady=2)
+        theme_dropdown = ttk.Combobox(kv_frame, textvariable=theme_display_var, values=list(THEME_MAP.keys()), state="readonly", width=14)
+        theme_dropdown.grid(row=6, column=1, padx=5, pady=2)
+
+        TEXTURE_MAP = {
+            "Default Original": "default",
+            "Gloss": "gloss",
+            "Metallic": "metallic",
+            "Muted": "muted",
+            "Iridescent": "iridescent",
+            "Pearlescent": "pearlescent"
+        }
+        TEXTURE_REV_MAP = {v: k for k, v in TEXTURE_MAP.items()}
+        curr_tex_key = app.config.get("texture_style", "default")
+        tex_display_var = tk.StringVar(value=TEXTURE_REV_MAP.get(curr_tex_key, "Default Original"))
+
+        tk.Label(kv_frame, text="Texture Style:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=7, column=0, sticky="w", pady=2)
+        tex_dropdown = ttk.Combobox(kv_frame, textvariable=tex_display_var, values=list(TEXTURE_MAP.keys()), state="readonly", width=14)
+        tex_dropdown.grid(row=7, column=1, padx=5, pady=2)
+
+        frosted_glass_var = tk.BooleanVar(value=app.config.get("frosted_glass", False))
+        tk.Checkbutton(kv_frame, text="Frosted Glass Texture", variable=frosted_glass_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).grid(row=8, column=0, columnspan=2, sticky="w", pady=2)
 
         # --- SECURITY & VAULT ENCRYPTION PANEL ---
         vault_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
@@ -811,6 +849,30 @@ def open_settings_window(app):
             for t, e in freq_ents.items():
                 try: app.frequency_penalty_config[t] = float(e.get())
                 except: pass
+            app.config["offline_mode"] = offline_mode_var.get()
+            try:
+                from System.network_guard import set_offline_mode
+                set_offline_mode(offline_mode_var.get())
+            except Exception as e:
+                print(f"[SETTINGS] Failed to set offline guard: {e}")
+
+            theme_k = THEME_MAP.get(theme_display_var.get(), "default")
+            tex_k = TEXTURE_MAP.get(tex_display_var.get(), "default")
+            f_glass = frosted_glass_var.get()
+            app.config["theme"] = theme_k
+            app.config["texture_style"] = tex_k
+            app.config["frosted_glass"] = f_glass
+
+            try:
+                from serenity_resources import apply_theme_to_global
+                apply_theme_to_global(theme_k, tex_k, f_glass)
+                if hasattr(app, "apply_current_theme"):
+                    app.apply_current_theme()
+                if hasattr(app, "_update_hw_indicator"):
+                    app._update_hw_indicator()
+            except Exception as te:
+                print(f"[SETTINGS] Failed to apply theme: {te}")
+
             app.save_config()
             if draft_toggled and hasattr(app, "swap_tier") and hasattr(app, "current_model_tier"):
                 app.swap_tier(app.current_model_tier)

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     import psutil
 
 # --- Import Custom Modules ---
-from serenity_resources import (THEME, THERMO_COLORS, CHAT_BG_COLORS, CHAT_FG_COLORS, 
+from serenity_resources import (THEME, THEMES, TEXTURE_STYLES, apply_theme_to_global, THERMO_COLORS, CHAT_BG_COLORS, CHAT_FG_COLORS, 
                               INPUT_FG_COLORS, GPU_LAYER_MAP, CONTEXT_SIZE_MAP, 
                               PERSONA_DISPLAY_INFO, PERSONA_IDLE_MAP, PERSONA_PROMPTS, 
                                AVATAR_FILENAMES, ANIMATION_SEQUENCE, DEEP_COOK_PHASES, 
@@ -56,6 +56,7 @@ from System.modular_registry import ModularRegistry, DynamicParamRegistry
 from System.markdown_engine import MarkdownEngine
 from System.settings_ui import open_settings_window, run_auto_detect
 from System.vault_manager import VaultManager, DISCLAIMER_WARNING_TEXT
+from System.network_guard import set_offline_mode, is_offline_mode
 
 # --- Debugging & Fault Handling ---
 enable_fault_debugging()
@@ -491,6 +492,7 @@ class ChatbotApp:
         self.btn_clear_queue = None
         self.btn_active = None
         self.btn_history = None
+        self.active_tab = "active"
         self.send_button = None
         self.deep_thought_button = None
         self.hurry_button = None
@@ -1024,15 +1026,18 @@ class ChatbotApp:
         self.root.after(250, lambda *args: self._position_canvas_elements())
 
     def _update_hw_indicator(self):
-        """Updates the Hardware Mode indicator based on CPU specs."""
+        """Updates the Hardware Mode indicator based on CPU specs and offline status."""
         info = HardwareProfile.get_cpu_info()
         physical = info["physical"]
+        is_off = is_offline_mode() or bool(self.config.get("offline_mode", False))
+        off_tag = " [OFFLINE]" if is_off else ""
+        
         # Threshold: i7 usually has > 8 physical cores (or 12+ logical)
         if self.hw_mode_label is not None:
             if physical >= 8:
-                self.hw_mode_label.config(text="[APEX i7]", fg="#00FF7F") # Spring Green
+                self.hw_mode_label.config(text=f"[APEX i7]{off_tag}", fg="#ffaa00" if is_off else "#00FF7F")
             else:
-                self.hw_mode_label.config(text="[LEGACY i5]", fg="#FFD700") # Gold
+                self.hw_mode_label.config(text=f"[LEGACY i5]{off_tag}", fg="#ffaa00" if is_off else "#FFD700")
 
     def _setup_persona_controls(self, p_frame):
         """Sets up the persona selection buttons and slider in the given frame."""
@@ -1174,6 +1179,7 @@ class ChatbotApp:
         print(f"[SYSTEM] Removed attachment: {att['name']}")
 
     def show_active_chat(self):
+        self.active_tab = "active"
         if self.past_history_view is not None:
             self.past_history_view.pack_forget()
         if self.history_menu_frame is not None:
@@ -1197,6 +1203,7 @@ class ChatbotApp:
             self.btn_history.config(bg=THEME["button_bg_color"], fg="#aaaaaa")
 
     def show_history(self):
+        self.active_tab = "history"
         # Hide the pinned prompt and chat history
         if self.prompt_display is not None:
             self.prompt_display.pack_forget()
@@ -1799,8 +1806,17 @@ class ChatbotApp:
                     self.state["response_started"] = False
             except tk.TclError: pass
             
-        if hasattr(self, 'history_menu_frame') and self.history_menu_frame:
-            self.history_menu_frame.pack_forget()
+        # Tab-aware History frame handling
+        if getattr(self, 'active_tab', 'active') == 'history':
+            if hasattr(self, 'history_menu_frame') and self.history_menu_frame:
+                if not self.history_menu_frame.winfo_viewable():
+                    self.history_menu_frame.pack(side=tk.TOP, fill="both", expand=True, padx=2, pady=2)
+                self._render_history_menu()
+        else:
+            if hasattr(self, 'history_menu_frame') and self.history_menu_frame:
+                self.history_menu_frame.pack_forget()
+            if hasattr(self, 'chat_history') and self.chat_history and not self.chat_history.winfo_viewable():
+                self.chat_history.pack(side=tk.TOP, fill="both", expand=True, padx=2, pady=0)
 
     def _setup_logs_and_stats(self):
         if self.right_panel is None: return
@@ -3382,22 +3398,27 @@ class ChatbotApp:
                 sys_clean += f"\n[PROGRAMMATIC TOOL CALLING]: To retrieve live data or execute system actions, invoke tools via Python function calls (e.g. `web_search(query='...')`).\n{tool_defs}"
 
             # Level 3+ or Deep Cook need the thought channel constraint
-            is_diffusion = "diffusion" in self.model_path.lower()
+            is_diffusion = "diffusion" in (self.model_path or "").lower()
+            model_name_lower = os.path.basename(self.model_path or "").lower()
+            is_nemotron = "nemotron" in model_name_lower
+            is_qwen = "qwen" in model_name_lower
+            is_deepseek = any(k in model_name_lower for k in ["deepseek", "r1", "qwq"])
+
             if not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
                 if is_gemma:
                     sys_clean = f"<|think|>\n{sys_clean}"
+                elif is_nemotron:
+                    sys_clean += "\n[REASONING]: Provide clear, direct, and rigorous answers without conversational meta-commentary."
+                elif is_qwen or is_deepseek:
+                    sys_clean += "\n[REASONING]: Analyze the query thoroughly and provide a direct, precise answer."
                 else:
-                    sys_clean += (
-                        "\n[CRITICAL RESTRICTION]: Wrap your internal reasoning, analysis, and planning inside <think>...</think>. "
-                        "Keep thoughts direct and structured. Once closed with </think>, provide only the clean final response."
-                    )
+                    sys_clean += "\n[REASONING]: Think step by step before answering and provide a clear, accurate response."
             elif self.active_persona_level == 2:
                 sys_clean += "\n[SEARCH PROTOCOL]: If you need live information, invoke a search tool immediately."
             
             sys_content = sys_clean
 
             # TriAttention KV Pruning
-            is_diffusion = "diffusion" in self.model_path.lower()
             if is_diffusion:
                 # Diffusion architectures allocate massive contiguous ubatches. Limit history strictly.
                 processed_msgs = temp_messages[-6:]
@@ -3430,14 +3451,16 @@ class ChatbotApp:
             status_text = "Analyzing logical momentum..." if self.active_persona_level >= 3 else "Direct Strike: Pre-computing..."
             self.process_queue.put({"status": "thinking_status", "content": status_text})
             
-            # GIL-Safety: Internal Streaming via Native Embedded Jinja Template (Thought Stream Demuxed)
+            # GIL-Safety: Internal Streaming with Thought Stream Demuxing & Draft Rollback Protection
             full_resp = ""
             in_thought_channel = False
-            thought_opened = False
             thought_detected = False
             stream_lead_buffer = ""
+            streamed_draft_to_ui = False
             streamed_answer_chars = 0
             closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\])'
+            openers = ["<think>", "<|channel>thought", "<thought>", "<|think|>", "<|im_start|>thought", "[draft]"]
+            closers = ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "<|channel>text", "<|channel>assistant"]
 
             gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
             for chunk in gen_iterator:
@@ -3445,29 +3468,30 @@ class ChatbotApp:
                 if "content" in chunk["choices"][0]["delta"]:
                     txt = chunk["choices"][0]["delta"]["content"]
                     full_resp += txt
-                    
                     lower_resp = full_resp.lower()
                     
-                    # 1. Opening detection with buffer protection (prevents raw <|channel> from leaking to UI)
                     if not thought_detected:
-                        if any(tag in lower_resp for tag in ["<think>", "<|channel>thought", "<thought>", "<|think|>", "<|im_start|>thought", "[draft]"]):
+                        if any(tag in lower_resp for tag in openers):
                             thought_detected = True
                             in_thought_channel = True
-                            thought_opened = True
-                            stream_lead_buffer = "" # Discard buffered opener
-                        elif full_resp.strip().startswith("<") and len(full_resp.strip()) < 25:
-                            # Potential opener still forming; buffer without streaming
+                            if streamed_draft_to_ui:
+                                self.process_queue.put({"status": "streaming_replace", "content": ""})
+                                streamed_draft_to_ui = False
+                            stream_lead_buffer = ""
+                            self.process_queue.put({"status": "tool_log_update", "content": txt})
+                        elif full_resp.strip().startswith("<") and len(full_resp.strip()) < 30:
                             stream_lead_buffer += txt
                         else:
-                            # Not an opener; flush any lead buffer and stream directly
                             if stream_lead_buffer:
                                 self.process_queue.put({"status": "streaming", "content": stream_lead_buffer})
                                 stream_lead_buffer = ""
+                                streamed_draft_to_ui = True
                             self.process_queue.put({"status": "streaming", "content": txt})
+                            streamed_draft_to_ui = True
                     else:
                         if in_thought_channel:
-                            # Check if thought channel has closed
-                            if any(c in lower_resp for c in ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "<|channel>text", "<|channel>assistant"]):
+                            self.process_queue.put({"status": "tool_log_update", "content": txt})
+                            if any(c in lower_resp for c in closers):
                                 in_thought_channel = False
                                 parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
                                 if len(parts) > 1 and parts[-1]:
@@ -3476,7 +3500,6 @@ class ChatbotApp:
                                         self.process_queue.put({"status": "streaming", "content": ans_chunk})
                                         streamed_answer_chars += len(ans_chunk)
                         else:
-                            # Post-thought active answer streaming
                             parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
                             if len(parts) > 1 and parts[-1]:
                                 ans_chunk = parts[-1][streamed_answer_chars:]
@@ -4370,6 +4393,9 @@ class ChatbotApp:
         try:
             pil_img = None
             if url.startswith("http"):
+                if is_offline_mode() or bool(self.config.get("offline_mode", False)):
+                    print(f"[OFFLINE MODE] Blocked external media fetch for: {url}")
+                    return
                 # Web Fetch
                 headers = {"User-Agent": "SerenityPC/4.0 RichMediaFetcher"}
                 resp = requests.get(url, headers=headers, timeout=10)
@@ -4420,6 +4446,9 @@ class ChatbotApp:
             try:
                 # (Re-use fetch logic or just open)
                 if url.startswith("http"):
+                    if is_offline_mode() or bool(self.config.get("offline_mode", False)):
+                        loading.config(text="[OFFLINE MODE] External media fetch blocked.")
+                        return
                     resp = requests.get(url, timeout=10); pil_img = Image.open(io.BytesIO(resp.content))
                 else:
                     if any(url.lower().endswith(ext) for ext in [".mp4", ".avi", ".mkv", ".mov"]) and cv2:
@@ -6297,6 +6326,30 @@ class ChatbotApp:
         if "monitor_graph_mode" not in self.config:
             self.config["monitor_graph_mode"] = False
 
+        if "offline_mode" not in self.config:
+            self.config["offline_mode"] = False
+        if "theme" not in self.config:
+            self.config["theme"] = "default"
+        if "texture_style" not in self.config:
+            self.config["texture_style"] = "default"
+        if "frosted_glass" not in self.config:
+            self.config["frosted_glass"] = False
+
+        # Apply active theme and network guard
+        try:
+            apply_theme_to_global(
+                self.config.get("theme", "default"),
+                self.config.get("texture_style", "default"),
+                self.config.get("frosted_glass", False)
+            )
+        except Exception as te:
+            print(f"[THEME] Failed to apply theme from config: {te}")
+
+        try:
+            set_offline_mode(self.config.get("offline_mode", False))
+        except Exception as ne:
+            print(f"[OFFLINE] Failed to apply offline guard from config: {ne}")
+
         if "custom_templates" not in self.config or not self.config["custom_templates"]:
             self.config["custom_templates"] = {
                 "T1": {"name": "Thinking (Gen)", "temp": 1.0, "top_p": 0.95, "min_p": 0.0, "rep": 1.0, "pres": 1.5, "top_k": 20, "batch": 512, "layers": -1, 
@@ -6319,6 +6372,79 @@ class ChatbotApp:
             # Keep -1 placeholders in gpu_layer_config; they will be replaced on save.
         
         return self.config
+
+    def apply_current_theme(self):
+        """Applies active THEME and TEXTURE_STYLES across all widgets and tags dynamically."""
+        from serenity_resources import THEME, TEXTURE_STYLES
+        
+        bg = THEME.get("bg_color", "#000000")
+        fg = THEME.get("fg_color", "#ffffff")
+        widget_bg = THEME.get("widget_bg_color", "#121212")
+        btn_bg = THEME.get("button_bg_color", "#202020")
+        btn_active = THEME.get("button_active_color", "#404040")
+        trim = THEME.get("trim_color", "#333333")
+        accent = THEME.get("electric_blue", "#007acc")
+        accent_hl = THEME.get("accent_highlight", "#00ffcc")
+        
+        try:
+            self.root.config(bg=bg)
+            if hasattr(self, 'paned') and self.paned and self.paned.winfo_exists():
+                self.paned.config(bg=bg)
+                
+            if hasattr(self, 'chat_history') and self.chat_history and self.chat_history.winfo_exists():
+                self.chat_history.config(bg=widget_bg, fg=fg)
+                self.chat_history.tag_config("user_lead", foreground="#87CEFA")
+                self.chat_history.tag_config("user", foreground=accent)
+                self.chat_history.tag_config("ai_lead", foreground=THEME.get("accent_secondary", "#FFD700"))
+                self.chat_history.tag_config("md_header", foreground=accent_hl)
+                self.chat_history.tag_config("md_header_1", foreground=accent_hl)
+                self.chat_history.tag_config("md_header_2", foreground=accent_hl)
+                self.chat_history.tag_config("md_header_3", foreground=accent_hl)
+                
+            if hasattr(self, 'past_history_view') and self.past_history_view and self.past_history_view.winfo_exists():
+                self.past_history_view.config(bg=widget_bg, fg="#aaaaaa")
+                self.past_history_view.tag_config("user", foreground=accent)
+                self.past_history_view.tag_config("ai_lead", foreground=THEME.get("accent_secondary", "#FFD700"))
+                self.past_history_view.tag_config("md_header", foreground=accent_hl)
+                self.past_history_view.tag_config("md_header_1", foreground=accent_hl)
+                self.past_history_view.tag_config("md_header_2", foreground=accent_hl)
+                
+            if hasattr(self, 'user_input') and self.user_input and self.user_input.winfo_exists():
+                self.user_input.config(bg=widget_bg, fg=fg, insertbackground=fg)
+                
+            if hasattr(self, 'prompt_display') and self.prompt_display and self.prompt_display.winfo_exists():
+                self.prompt_display.config(bg=trim, fg="#87CEFA")
+                
+            if hasattr(self, 'persona_desc_label') and self.persona_desc_label and self.persona_desc_label.winfo_exists():
+                self.persona_desc_label.config(bg=bg, fg=accent)
+                
+            if hasattr(self, 'btn_active') and self.btn_active and self.btn_active.winfo_exists():
+                if getattr(self, 'active_tab', 'active') == 'active':
+                    self.btn_active.config(bg=btn_active, fg=fg)
+                    if hasattr(self, 'btn_history') and self.btn_history:
+                        self.btn_history.config(bg=btn_bg, fg="#aaaaaa")
+                else:
+                    self.btn_active.config(bg=btn_bg, fg="#aaaaaa")
+                    if hasattr(self, 'btn_history') and self.btn_history:
+                        self.btn_history.config(bg=btn_active, fg=fg)
+                        
+            if hasattr(self, 'timeline_frame') and self.timeline_frame and self.timeline_frame.winfo_exists():
+                self.timeline_frame.config(bg=widget_bg)
+                if hasattr(self, 'progress_label') and self.progress_label:
+                    self.progress_label.config(bg=widget_bg, fg=accent_hl)
+                    
+            if hasattr(self, 'style'):
+                try:
+                    self.style.configure("Apex.Horizontal.TProgressbar", troughcolor=widget_bg, background=accent_hl)
+                except: pass
+                
+            if getattr(self, 'active_tab', 'active') == 'history':
+                self._render_history_menu()
+                
+            if hasattr(self, '_update_hw_indicator'):
+                self._update_hw_indicator()
+        except Exception as e:
+            print(f"[THEME] Theme re-application warning: {e}")
 
     def _load_dmn_backbone(self):
         p = os.path.join(self.dirs["System"], "dmn_backbone.json")
@@ -6371,6 +6497,10 @@ class ChatbotApp:
             'ghost_mode': self.config.get("ghost_mode", False),
             'dynamic_params_enabled': self.config.get("dynamic_params_enabled", True),
             'startup_count': self.config.get("startup_count", 0),
+            'offline_mode': self.config.get("offline_mode", False),
+            'theme': self.config.get("theme", "default"),
+            'texture_style': self.config.get("texture_style", "default"),
+            'frosted_glass': self.config.get("frosted_glass", False),
         }
         with open(self.config_file, 'w') as f: json.dump(data, f, indent=4)
 

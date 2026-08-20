@@ -1,5 +1,21 @@
 # Changelog
 
+## Version 1.6.4
+- **Fully Offline Mode Toggle (TODO #1)**:
+  - Built `NetworkGuard` in `System/network_guard.py` with system-level `socket.socket.connect` and `socket.create_connection` interception, blocking outbound external network traffic while allowing local loopback (`127.0.0.1`, `localhost`).
+  - Added offline guard checks to `handle_web_search` in `System/tool_registry.py`, preventing remote HTTP requests and browser launching with clear user-facing refusal telemetry.
+  - Added network fetch guards to `_fetch_and_populate_media` and `_spawn_media_popup` in `main.py`.
+  - Added "Fully Offline Mode (Block Net)" checkbox in `System/settings_ui.py` and `[OFFLINE]` status badge to hardware/status telemetry bar in `main.py`.
+- **History Window Refresh States & Offload Void Fix (TODO #9)**:
+  - Added explicit tab state tracking (`self.active_tab = "active" | "history"`) in `main.py`.
+  - Made `clear_chat_ui()` tab-aware: when on the History Archive tab, it preserves `history_menu_frame` and invokes `_render_history_menu()` to update file sizes, timestamps, and newly archived sessions without leaving the window blank upon model offload.
+  - Resolved history view disappearance when swapping or offloading models.
+- **Theme & Dark Mode Overhaul (TODO #6)**:
+  - Added comprehensive theme palettes in `serenity_resources.py`: **Apex Dark (Default)**, **Goth / Obsidian Dark**, **Crystal Cavern**, and **Fractal Logic**.
+  - Added 6 modular texture styles: `default` (original flat), `gloss` (polished sheen), `metallic` (brushed gunmetal), `muted` (soft matte), `iridescent` (prismatic shimmer), and `pearlescent` (luminous pearl luster).
+  - Added **Frosted Glass Texture** toggle modifier for soft diffusion and glassmorphic card backgrounds.
+  - Implemented dynamic runtime theme applier `apply_current_theme()` in `main.py` and `apply_theme_to_global()` in `serenity_resources.py` with live Theme & Texture dropdowns in `System/settings_ui.py`.
+
 ## Version 1.6.3
 - **Thought Channel Isolation & Dropdown Fix**:
   - Added missing `<thought>` / `</thought>`, `</|think|>`, `<|im_start|>thought`, and `<|im_end|>` delimiters to inference scout & split logic (`closers`, opener detection, `tag_clean_pattern`) in `main.py` and `_sanitize_synthesis_output`.
@@ -13,6 +29,11 @@
   - Regenerated all 26 model breakdown chart PNGs and consolidated comparison charts.
   - Integrated `split_thoughts_and_answer` into Wringer.py and formatted internal model reasoning into `<details><summary>Reasoning</summary></details>` collapsible blocks in `.md` reports.
   - Retroactively converted all existing `.md` benchmark reports to format reasoning in dedicated `<details>` dropdowns.
+- **Thought Channel Protocol Alignment & Nemotron Meta-Loop Fix (TODO #9 & #10)**:
+  - Replaced contradictory meta-restriction prompt injections with clean architecture-aware reasoning directives (`is_nemotron`, `is_qwen`, `is_deepseek`, `is_gemma`) in main.py and Wringer.py.
+  - Built real-time streaming thought demuxer in `_generation_worker`: live thinking tokens route directly to the Thought Log (`tool_log_update`), while chat streaming is held until post-closer to eliminate draft preamble and UI rewrite flicker.
+  - Added pre-thought draft rollback protection (`streaming_replace`) if speculative text is emitted prior to late `<think>` opening.
+  - Added unit test case in test_thought_isolation.py validating draft preamble isolation before thinking blocks.
 
 ## Version 1.6.2
 
