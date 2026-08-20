@@ -4,6 +4,10 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from serenity_resources import THEME
+try:
+    from System.serenity_utils import ToolTip, TutorialOverlay
+except ImportError:
+    from serenity_utils import ToolTip, TutorialOverlay
 
 def run_auto_detect(app, window=None):
     """
@@ -83,11 +87,18 @@ def open_settings_window(app):
             except: pass
         win.geometry(app.config.get("settings_window_geometry", "800x950"))
         win.config(bg=THEME["bg_color"])
+        win.transient(app.root)
         win.attributes("-topmost", False)
         
         # --- Fixed Top Action Bar ---
         btn_frame = tk.Frame(win, bg=THEME["bg_color"], pady=5)
         btn_frame.pack(side=tk.TOP, fill=tk.X, padx=10)
+        
+        tut_btn = tk.Button(btn_frame, text="🚀 Tutorial Walkthrough", 
+                            command=lambda: (win.destroy(), getattr(app, 'start_tutorial_walkthrough', lambda: None)()),
+                            bg=THEME["widget_bg_color"], fg=THEME.get("accent_highlight", "#00ffcc"), font=("Segoe UI", 9, "bold"), relief=tk.FLAT)
+        tut_btn.pack(side=tk.LEFT, padx=2)
+        ToolTip(tut_btn, "Launch the interactive translucent tutorial walkthrough for Serenity PC.", app=app)
         
         # --- Scrollable Container ---
         container = tk.Frame(win, bg=THEME["bg_color"])
@@ -133,35 +144,49 @@ def open_settings_window(app):
         left_header = tk.Frame(header_settings, bg=THEME["bg_color"])
         left_header.pack(side=tk.LEFT, fill=tk.Y)
         
-        tk.Label(left_header, text="Deep Cook:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w")
+        lbl_dc = tk.Label(left_header, text="Deep Cook:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_dc.pack(anchor="w")
+        ToolTip(lbl_dc, "Select whether Deep Cook cycles operate in one-shot or persistent toggle mode.", app=app)
         v_behavior = tk.StringVar(value=app.state.get("deep_cook_behavior", "oneshot"))
         behavior_frame = tk.Frame(left_header, bg=THEME["bg_color"])
         behavior_frame.pack(anchor="w", padx=10)
         for val, txt in [("oneshot", "One-Shot"), ("toggle", "Toggle Mode")]:
-             tk.Radiobutton(behavior_frame, text=txt, variable=v_behavior, value=val, bg=THEME["bg_color"], fg=THEME["fg_color"], 
-                            selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=5)
+             rb = tk.Radiobutton(behavior_frame, text=txt, variable=v_behavior, value=val, bg=THEME["bg_color"], fg=THEME["fg_color"], 
+                            selectcolor=THEME["widget_bg_color"])
+             rb.pack(side=tk.LEFT, padx=5)
+             ToolTip(rb, f"Set Deep Cook behavior to {txt}.", app=app)
         
         vram_frame = tk.Frame(left_header, bg=THEME["bg_color"])
         vram_frame.pack(anchor="w", pady=(5, 0))
-        tk.Label(vram_frame, text="VRAM (GB):", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT)
+        lbl_vram = tk.Label(vram_frame, text="VRAM (GB):", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_vram.pack(side=tk.LEFT)
+        ToolTip(lbl_vram, "Target VRAM threshold in Gigabytes for GPU layer calculation.", app=app)
         vram_ent = tk.Entry(vram_frame, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=6)
         vram_ent.pack(side=tk.LEFT, padx=5)
+        ToolTip(vram_ent, "Target VRAM threshold in Gigabytes for GPU layer calculation.", app=app)
         
         dmn_frame = tk.Frame(left_header, bg=THEME["bg_color"])
         dmn_frame.pack(anchor="w", pady=(5, 0))
-        tk.Label(dmn_frame, text="DMN Timeout (min:sec):", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT)
+        lbl_dmn = tk.Label(dmn_frame, text="DMN Timeout (min:sec):", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_dmn.pack(side=tk.LEFT)
+        ToolTip(lbl_dmn, "Default Mode Network idle countdown before Serenity begins background reflections.", app=app)
         dmn_ent = tk.Entry(dmn_frame, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=7)
         dmn_val = app.config.get("dmn_timeout", "05:00")
         dmn_ent.insert(0, str(dmn_val))
         dmn_ent.pack(side=tk.LEFT, padx=5)
+        ToolTip(dmn_ent, "Idle duration (mm:ss) before triggering Default Mode Network simmer reflections.", app=app)
         
         g_frame = tk.Frame(left_header, bg=THEME["bg_color"])
         g_frame.pack(anchor="w", pady=(10, 0))
-        tk.Label(g_frame, text="Glitch FX:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(side=tk.LEFT)
+        lbl_gfx = tk.Label(g_frame, text="Glitch FX:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_gfx.pack(side=tk.LEFT)
+        ToolTip(lbl_gfx, "Visual animation style for avatar transitions and glitch state effects.", app=app)
         glitch_anim_var = tk.StringVar(value=app.config.get("glitch_animation", "warp"))
         for opt in ["warp", "vortex", "off"]:
-            tk.Radiobutton(g_frame, text=opt, variable=glitch_anim_var, value=opt,
-                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=2)
+            rb = tk.Radiobutton(g_frame, text=opt, variable=glitch_anim_var, value=opt,
+                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
+            rb.pack(side=tk.LEFT, padx=2)
+            ToolTip(rb, f"Set glitch animation style to {opt}.", app=app)
 
         if app._is_rgb_supported():
             toggle_frame = tk.Frame(left_header, bg=THEME["bg_color"])
@@ -178,24 +203,34 @@ def open_settings_window(app):
                         app.rgb_button.pack_forget()
                 app.save_config()
     
-            tk.Checkbutton(toggle_frame, text="Show RGB Button", variable=show_rgb_var, command=_toggle_rgb,
-                           bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w")
+            cb_rgb = tk.Checkbutton(toggle_frame, text="Show RGB Button", variable=show_rgb_var, command=_toggle_rgb,
+                           bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+            cb_rgb.pack(anchor="w")
+            ToolTip(cb_rgb, "Toggle visibility of RGB lighting controls button.", app=app)
 
-        tk.Label(left_header, text="Image Handling Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", pady=(5, 0))
+        lbl_img = tk.Label(left_header, text="Image Handling Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_img.pack(anchor="w", pady=(5, 0))
+        ToolTip(lbl_img, "Choose between automated handling, dedicated vision model, or native multimodal.", app=app)
         image_handling_var = tk.StringVar(value=app.config.get("image_handling", "auto"))
         image_handling_frame = tk.Frame(left_header, bg=THEME["bg_color"])
         image_handling_frame.pack(anchor="w", padx=10)
         for opt in ["auto", "vision", "native"]:
-            tk.Radiobutton(image_handling_frame, text=opt.capitalize(), variable=image_handling_var, value=opt,
-                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=5)
+            rb = tk.Radiobutton(image_handling_frame, text=opt.capitalize(), variable=image_handling_var, value=opt,
+                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
+            rb.pack(side=tk.LEFT, padx=5)
+            ToolTip(rb, f"Use {opt} image handling mode.", app=app)
 
-        tk.Label(left_header, text="Muse Reasoning:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", pady=(5, 0))
+        lbl_muse = tk.Label(left_header, text="Muse Reasoning:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_muse.pack(anchor="w", pady=(5, 0))
+        ToolTip(lbl_muse, "Reasoning effort level for Muse-Glimmer thought cycles.", app=app)
         muse_reasoning_var = tk.StringVar(value=app.config.get("muse_reasoning_strength", "xhigh"))
         muse_reasoning_frame = tk.Frame(left_header, bg=THEME["bg_color"])
         muse_reasoning_frame.pack(anchor="w", padx=10)
         for opt in ["off", "low", "medium", "high", "xhigh"]:
-            tk.Radiobutton(muse_reasoning_frame, text=opt.capitalize(), variable=muse_reasoning_var, value=opt,
-                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=2)
+            rb = tk.Radiobutton(muse_reasoning_frame, text=opt.capitalize(), variable=muse_reasoning_var, value=opt,
+                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
+            rb.pack(side=tk.LEFT, padx=2)
+            ToolTip(rb, f"Set Muse reasoning strength to {opt}.", app=app)
 
         # Checkboxes in left column
         offline_mode_var = tk.BooleanVar(value=app.config.get("offline_mode", False))
@@ -206,35 +241,68 @@ def open_settings_window(app):
         benchmark_var = tk.BooleanVar(value=app.config.get("benchmark_enabled", False))
         inline_md_var = tk.BooleanVar(value=app.config.get("inline_markdown", True))
         monitor_graph_var = tk.BooleanVar(value=app.config.get("monitor_graph_mode", False))
+        show_tooltips_var = tk.BooleanVar(value=app.config.get("show_tooltips", True))
 
         auto_vram_f = tk.Frame(left_header, bg=THEME["bg_color"])
         auto_vram_f.pack(anchor="w", pady=(10, 0))
-        tk.Checkbutton(auto_vram_f, text="Fully Offline Mode (Block Net)", variable=offline_mode_var,
-                       bg=THEME["bg_color"], fg="#ff8800", selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
-        tk.Checkbutton(auto_vram_f, text="Dynamic Auto-Offload", variable=auto_vram_var,
-                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
-        tk.Checkbutton(auto_vram_f, text="Speculative MTP Drafting", variable=spec_draft_var,
-                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
-        tk.Checkbutton(auto_vram_f, text="Ghost Mode", variable=ghost_var,
-                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
-        tk.Checkbutton(auto_vram_f, text="Thinking Process", variable=thinking_var,
-                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
-        tk.Checkbutton(auto_vram_f, text="Loading Benchmark", variable=benchmark_var,
-                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
-        tk.Checkbutton(auto_vram_f, text="Inline Markdown", variable=inline_md_var,
-                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
-        tk.Checkbutton(auto_vram_f, text="Monitor Graph vs Line", variable=monitor_graph_var,
-                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=2)
+        cb_off = tk.Checkbutton(auto_vram_f, text="Fully Offline Mode (Block Net)", variable=offline_mode_var,
+                       bg=THEME["bg_color"], fg="#ff8800", selectcolor=THEME["widget_bg_color"])
+        cb_off.pack(anchor="w", pady=2)
+        ToolTip(cb_off, "Blocks all outbound internet traffic while allowing local loopback.", app=app)
 
-        tk.Label(center_header, text="Templating Engine (32 Slots):", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold")).pack(anchor="n")
+        cb_vram = tk.Checkbutton(auto_vram_f, text="Dynamic Auto-Offload", variable=auto_vram_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_vram.pack(anchor="w", pady=2)
+        ToolTip(cb_vram, "Automatically flushes inactive model layers from VRAM to prevent memory exhaustion.", app=app)
+
+        cb_spec = tk.Checkbutton(auto_vram_f, text="Speculative MTP Drafting", variable=spec_draft_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_spec.pack(anchor="w", pady=2)
+        ToolTip(cb_spec, "Accelerates token generation using assistant drafter speculative decoding.", app=app)
+
+        cb_ghost = tk.Checkbutton(auto_vram_f, text="Ghost Mode", variable=ghost_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_ghost.pack(anchor="w", pady=2)
+        ToolTip(cb_ghost, "Disables chat history persistence to disk for private sessions.", app=app)
+
+        cb_think = tk.Checkbutton(auto_vram_f, text="Thinking Process", variable=thinking_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_think.pack(anchor="w", pady=2)
+        ToolTip(cb_think, "Controls whether internal model thought logs and reasoning blocks are captured.", app=app)
+
+        cb_bench = tk.Checkbutton(auto_vram_f, text="Loading Benchmark", variable=benchmark_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_bench.pack(anchor="w", pady=2)
+        ToolTip(cb_bench, "Runs a quick memory throughput benchmark upon model initialization.", app=app)
+
+        cb_md = tk.Checkbutton(auto_vram_f, text="Inline Markdown", variable=inline_md_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_md.pack(anchor="w", pady=2)
+        ToolTip(cb_md, "Enables real-time formatting for bold, italics, tables, and math equations.", app=app)
+
+        cb_mon = tk.Checkbutton(auto_vram_f, text="Monitor Graph vs Line", variable=monitor_graph_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_mon.pack(anchor="w", pady=2)
+        ToolTip(cb_mon, "Switches hardware telemetry display between graphs and text lines.", app=app)
+
+        cb_tips = tk.Checkbutton(auto_vram_f, text="Enable Hover Tooltips / Help", variable=show_tooltips_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_tips.pack(anchor="w", pady=2)
+        ToolTip(cb_tips, "Displays helpful linger-hover information boxes across UI controls.", app=app)
+
+        lbl_templ = tk.Label(center_header, text="Templating Engine (32 Slots):", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold"))
+        lbl_templ.pack(anchor="n")
+        ToolTip(lbl_templ, "32 instant slots to Save, Write, or Modify parameter presets across tiers.", app=app)
         template_mode = tk.StringVar(value="modify")
         active_template = tk.StringVar(value="")
         
         t_action_frame = tk.Frame(center_header, bg=THEME["bg_color"])
         t_action_frame.pack(anchor="n", pady=2)
         for val, txt in [("save", "Save"), ("write", "Write"), ("modify", "Modify")]:
-            tk.Radiobutton(t_action_frame, text=txt, variable=template_mode, value=val, indicatoron=0, 
-                           bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["button_active_color"]).pack(side=tk.LEFT, padx=2)
+            rb_t = tk.Radiobutton(t_action_frame, text=txt, variable=template_mode, value=val, indicatoron=0, 
+                           bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["button_active_color"])
+            rb_t.pack(side=tk.LEFT, padx=2)
+            ToolTip(rb_t, f"Templating action mode: {txt} tier settings.", app=app)
 
         t_grid = tk.Frame(center_header, bg=THEME["bg_color"])
         t_grid.pack(anchor="n", pady=5)
@@ -248,6 +316,7 @@ def open_settings_window(app):
                                    bg=THEME["widget_bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["button_active_color"])
                 b.grid(row=i, column=j, padx=2, pady=2)
                 b.slot_id = slot_id
+                ToolTip(b, f"Template Slot {slot_id} ({t_name}). Click to apply or modify.", app=app)
                 template_buttons.append(b)
 
         def _on_template_select(*args):
@@ -259,6 +328,7 @@ def open_settings_window(app):
                 t_win.title(f"Modify {t_id}")
                 t_win.geometry("300x480")
                 t_win.config(bg=THEME["bg_color"])
+                t_win.transient(win)
                 t_win.attributes("-topmost", False)
                 current = app.config.get("custom_templates", {}).get(t_id, {})
                 tk.Label(t_win, text="Name:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=10, pady=(10,0))
@@ -296,20 +366,28 @@ def open_settings_window(app):
                         if btn.slot_id == t_id: btn.config(text=t_data["name"])
                     app.save_config()
                     t_win.destroy()
+                    try: win.lift()
+                    except Exception: pass
                 tk.Button(t_win, text="Save & Close", command=_save_mod, bg=THEME["button_active_color"], fg=THEME["fg_color"]).pack(pady=15)
         active_template.trace_add("write", _on_template_select)
 
         right_header = tk.Frame(header_settings, bg=THEME["bg_color"])
         right_header.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(20, 0))
-        tk.Label(right_header, text="Video Processing Sub-Chunk Size:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w")
+        lbl_sc = tk.Label(right_header, text="Video Processing Sub-Chunk Size:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_sc.pack(anchor="w")
+        ToolTip(lbl_sc, "Sub-chunk frame size for processing video analysis.", app=app)
         sc_frame = tk.Frame(right_header, bg=THEME["bg_color"])
         sc_frame.pack(fill=tk.X, padx=5)
         sc_val = tk.IntVar(value=getattr(app, 'sub_chunk_size', 8))
-        tk.Scale(sc_frame, from_=1, to=128, orient=tk.HORIZONTAL, variable=sc_val, 
-                 bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0, resolution=1).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        sc_scale = tk.Scale(sc_frame, from_=1, to=128, orient=tk.HORIZONTAL, variable=sc_val, 
+                 bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0, resolution=1)
+        sc_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ToolTip(sc_scale, "Adjust frame batch size for multimodal video analysis.", app=app)
         
         def _reset_sc(): sc_val.set(8)
-        tk.Button(sc_frame, text="Reset", command=_reset_sc).pack(side=tk.RIGHT, padx=5)
+        btn_reset_sc = tk.Button(sc_frame, text="Reset", command=_reset_sc)
+        btn_reset_sc.pack(side=tk.RIGHT, padx=5)
+        ToolTip(btn_reset_sc, "Reset video sub-chunk size to default (8 frames).", app=app)
 
         labels, ents, ctx_ents, n_batch_ents, temp_ents, top_p_ents, min_p_ents, top_k_ents, rep_ents, freq_ents, pres_ents, stop_ents = {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
         
@@ -345,7 +423,9 @@ def open_settings_window(app):
                 if "custom_templates" not in app.config: app.config["custom_templates"] = {}
                 app.config["custom_templates"][t_id] = t_data
                 app.save_config()
-                messagebox.showinfo("Templating", f"Saved {tier_name.upper()} settings to {t_data['name']}!")
+                messagebox.showinfo("Templating", f"Saved {tier_name.upper()} settings to {t_data['name']}!", parent=win)
+                try: win.lift()
+                except Exception: pass
             elif mode == "write":
                 t_data = app.config.get("custom_templates", {}).get(t_id, {})
                 if not t_data: return
@@ -354,7 +434,9 @@ def open_settings_window(app):
                     if k in t_data: 
                         d[tier_name].delete(0, tk.END)
                         d[tier_name].insert(0, str(t_data[k]))
-                messagebox.showinfo("Templating", f"Applied {t_data['name']} to {tier_name.upper()}!")
+                messagebox.showinfo("Templating", f"Applied {t_data['name']} to {tier_name.upper()}!", parent=win)
+                try: win.lift()
+                except Exception: pass
 
         def _create_tier_block(parent, tier_name, row=0, col=0, is_vision=False):
             key = f"vision_{tier_name}" if is_vision else tier_name
@@ -405,10 +487,14 @@ def open_settings_window(app):
 
         media_frame = tk.Frame(main, bg=THEME["bg_color"])
         media_frame.pack(fill=tk.X, pady=10)
-        tk.Label(media_frame, text="Rich Media Rendering:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(side=tk.LEFT, padx=10)
+        lbl_med = tk.Label(media_frame, text="Rich Media Rendering:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"))
+        lbl_med.pack(side=tk.LEFT, padx=10)
+        ToolTip(lbl_med, "Choose how rich media (images, plots, markdown) is displayed: None, Inline, or in a separate Popup.", app=app)
         media_var = tk.IntVar(value=app.config.get("media_rendering", 1))
         for v, t in [(0, "None"), (1, "Inline"), (2, "Popup")]:
-            tk.Radiobutton(media_frame, text=t, variable=media_var, value=v, bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(side=tk.LEFT, padx=5)
+            rb_m = tk.Radiobutton(media_frame, text=t, variable=media_var, value=v, bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
+            rb_m.pack(side=tk.LEFT, padx=5)
+            ToolTip(rb_m, f"Set media rendering mode to {t}.", app=app)
 
         over_lf = tk.LabelFrame(main, text="Global Engine & Memory Overrides", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"), pady=5)
         over_lf.pack(fill=tk.X, padx=10, pady=5)
@@ -426,57 +512,79 @@ def open_settings_window(app):
 
         # Left Sub-Column Controls
         dynamic_params_var = tk.BooleanVar(value=app.config.get("dynamic_params_enabled", True))
-        tk.Checkbutton(left_over_col, text="Dynamic Param Auto-Tune (Coding/Math/Creative)", variable=dynamic_params_var,
+        cb_dyn = tk.Checkbutton(left_over_col, text="Dynamic Param Auto-Tune (Coding/Math/Creative)", variable=dynamic_params_var,
                        bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"],
-                       activebackground=THEME["bg_color"], activeforeground=THEME["fg_color"]).pack(anchor="w", padx=5, pady=(2,0))
+                       activebackground=THEME["bg_color"], activeforeground=THEME["fg_color"])
+        cb_dyn.pack(anchor="w", padx=5, pady=(2,0))
+        ToolTip(cb_dyn, "Automatically optimizes sampling temperature and top-p when coding, math, or creative writing intent is detected.", app=app)
 
         hao_var = tk.StringVar(value=app.config.get("hao_preset", "exps=CPU"))
-        tk.Label(left_over_col, text="HAO Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        lbl_hao = tk.Label(left_over_col, text="HAO Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_hao.pack(anchor="w", padx=5, pady=(5,0))
+        ToolTip(lbl_hao, "Hardware Allocation Optimizer: configure MoE expert offloading strategies.", app=app)
         hao_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); hao_f.pack(anchor="w", padx=10)
         for o in ["None", "exps=CPU"]:
-            tk.Radiobutton(hao_f, text=o, variable=hao_var, value=o, 
+            rb = tk.Radiobutton(hao_f, text=o, variable=hao_var, value=o, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
                            selectcolor=THEME["electric_blue"], indicatoron=False,
-                           activebackground=THEME["electric_blue"], width=10).pack(side=tk.LEFT, padx=2)
+                           activebackground=THEME["electric_blue"], width=10)
+            rb.pack(side=tk.LEFT, padx=2)
+            ToolTip(rb, f"Set HAO preset to {o}.", app=app)
 
         swa_var = tk.StringVar(value=app.config.get("swa_kv_cache", "Auto"))
-        tk.Label(left_over_col, text="SWA Offload:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        lbl_swa = tk.Label(left_over_col, text="SWA Offload:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_swa.pack(anchor="w", padx=5, pady=(5,0))
+        ToolTip(lbl_swa, "Sliding Window Attention KV cache offloading for models supporting SWA.", app=app)
         swa_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); swa_f.pack(anchor="w", padx=10)
         for o in ["Auto", "CPU Only"]:
-            tk.Radiobutton(swa_f, text=o, variable=swa_var, value=o, 
+            rb = tk.Radiobutton(swa_f, text=o, variable=swa_var, value=o, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
                            selectcolor=THEME["electric_blue"], indicatoron=False,
-                           activebackground=THEME["electric_blue"], width=10).pack(side=tk.LEFT, padx=2)
+                           activebackground=THEME["electric_blue"], width=10)
+            rb.pack(side=tk.LEFT, padx=2)
+            ToolTip(rb, f"Set SWA offload mode to {o}.", app=app)
 
         stream_var = tk.StringVar(value=app.state.get("streaming_mode", "Buffered"))
-        tk.Label(left_over_col, text="Streaming Behavior:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        lbl_stream = tk.Label(left_over_col, text="Streaming Behavior:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_stream.pack(anchor="w", padx=5, pady=(5,0))
+        ToolTip(lbl_stream, "Select token streaming mode: Real-time, Buffered, Experimental Chunking, or Mass Dump.", app=app)
         stream_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); stream_f.pack(anchor="w", padx=10)
         for o in ["Real-time", "Buffered", "Experimental Chunking", "Mass Dump"]:
-            tk.Radiobutton(stream_f, text=o, variable=stream_var, value=o, 
+            rb = tk.Radiobutton(stream_f, text=o, variable=stream_var, value=o, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
                            selectcolor=THEME["electric_blue"], indicatoron=False,
-                           activebackground=THEME["electric_blue"], width=0).pack(side=tk.LEFT, padx=5, pady=2)
+                           activebackground=THEME["electric_blue"], width=0)
+            rb.pack(side=tk.LEFT, padx=5, pady=2)
+            ToolTip(rb, f"Use {o} response streaming strategy.", app=app)
 
         ratio_var = tk.IntVar(value=app.config.get("max_token_ratio", 4))
-        tk.Label(left_over_col, text="Response Headroom (ctx/N):", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        lbl_ratio = tk.Label(left_over_col, text="Response Headroom (ctx/N):", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_ratio.pack(anchor="w", padx=5, pady=(5,0))
+        ToolTip(lbl_ratio, "Maximum token generation headroom ratio relative to context size.", app=app)
         ratio_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); ratio_f.pack(anchor="w", padx=10)
         for val, lbl in [(16, "U-Fast (16)"), (8, "Fast (8)"), (4, "Balanced (4)"), (2, "Deep (2)")]:
-            tk.Radiobutton(ratio_f, text=lbl, variable=ratio_var, value=val, 
+            rb = tk.Radiobutton(ratio_f, text=lbl, variable=ratio_var, value=val, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
                            selectcolor=THEME["electric_blue"], indicatoron=False,
-                           activebackground=THEME["electric_blue"], width=0).pack(side=tk.LEFT, padx=5, pady=2)
+                           activebackground=THEME["electric_blue"], width=0)
+            rb.pack(side=tk.LEFT, padx=5, pady=2)
+            ToolTip(rb, f"Set response headroom to {lbl}.", app=app)
 
         repeat_mode_var = tk.StringVar(value=app.config.get("repeat_detection_mode", "lazy"))
-        tk.Label(left_over_col, text="Repeat Loop Detection:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=5, pady=(5,0))
+        lbl_repeat = tk.Label(left_over_col, text="Repeat Loop Detection:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_repeat.pack(anchor="w", padx=5, pady=(5,0))
+        ToolTip(lbl_repeat, "Configurable loop detector (Hyper, Lazy, Off) to prevent repetitive token generation stalls.", app=app)
         repeat_f = tk.Frame(left_over_col, bg=THEME["bg_color"]); repeat_f.pack(anchor="w", padx=10)
         for o in ["hyper", "lazy", "off"]:
-            tk.Radiobutton(repeat_f, text=o.capitalize(), variable=repeat_mode_var, value=o, 
+            rb = tk.Radiobutton(repeat_f, text=o.capitalize(), variable=repeat_mode_var, value=o, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
                            selectcolor=THEME["electric_blue"], indicatoron=False,
-                           activebackground=THEME["electric_blue"], width=8).pack(side=tk.LEFT, padx=3, pady=2)
+                           activebackground=THEME["electric_blue"], width=8)
+            rb.pack(side=tk.LEFT, padx=3, pady=2)
+            ToolTip(rb, f"Set repeat loop detection to {o}.", app=app)
 
         # Right Sub-Column Controls (4 Dropdowns)
-        UNIVERSAL_KV_TYPES = ["fp16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"]
+        UNIVERSAL_KV_TYPES = ["fp16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"]
         k_val = app.config.get("k_cache_type", "q8_0").lower()
         if k_val not in UNIVERSAL_KV_TYPES: k_val = "q8_0"
         v_val = app.config.get("v_cache_type", "q8_0").lower()
@@ -488,33 +596,51 @@ def open_settings_window(app):
         kv_frame = tk.Frame(right_over_col, bg=THEME["bg_color"])
         kv_frame.pack(anchor="w", padx=10, pady=5)
         
-        tk.Label(kv_frame, text="K Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=0, column=0, sticky="w", pady=2)
+        lbl_k = tk.Label(kv_frame, text="K Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_k.grid(row=0, column=0, sticky="w", pady=2)
+        ToolTip(lbl_k, "Quantized Key cache format (Q8_0, Q4_0, FP16, etc.) for VRAM savings.", app=app)
         k_cache_dropdown = ttk.Combobox(kv_frame, textvariable=k_cache_var, values=UNIVERSAL_KV_TYPES, state="readonly", width=14)
         k_cache_dropdown.grid(row=0, column=1, padx=5, pady=2)
+        ToolTip(k_cache_dropdown, "Select Key KV cache quantization type.", app=app)
         
-        tk.Label(kv_frame, text="V Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=1, column=0, sticky="w", pady=2)
+        lbl_v = tk.Label(kv_frame, text="V Cache Format:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_v.grid(row=1, column=0, sticky="w", pady=2)
+        ToolTip(lbl_v, "Quantized Value cache format (Q8_0, Q4_0, FP16, etc.) for VRAM savings.", app=app)
         v_cache_dropdown = ttk.Combobox(kv_frame, textvariable=v_cache_var, values=UNIVERSAL_KV_TYPES, state="readonly", width=14)
         v_cache_dropdown.grid(row=1, column=1, padx=5, pady=2)
+        ToolTip(v_cache_dropdown, "Select Value KV cache quantization type.", app=app)
 
-        tk.Label(kv_frame, text="History Lookup Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=2, column=0, sticky="w", pady=2)
+        lbl_hl = tk.Label(kv_frame, text="History Lookup Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_hl.grid(row=2, column=0, sticky="w", pady=2)
+        ToolTip(lbl_hl, "Scope of long-term history retrieval (targeted, model, level, all).", app=app)
         history_lookup_var = tk.StringVar(value=app.config.get("history_lookup_mode", "targeted"))
         history_lookup_dropdown = ttk.Combobox(kv_frame, textvariable=history_lookup_var, values=["targeted", "model", "level", "all"], state="readonly", width=14)
         history_lookup_dropdown.grid(row=2, column=1, padx=5, pady=2)
+        ToolTip(history_lookup_dropdown, "Choose filter scope for past conversation retrieval.", app=app)
 
-        tk.Label(kv_frame, text="History Usage Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=3, column=0, sticky="w", pady=2)
+        lbl_hu = tk.Label(kv_frame, text="History Usage Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_hu.grid(row=3, column=0, sticky="w", pady=2)
+        ToolTip(lbl_hu, "Whether past conversation histories are injected into active context.", app=app)
         history_usage_var = tk.StringVar(value=app.config.get("history_usage", "all"))
         history_usage_dropdown = ttk.Combobox(kv_frame, textvariable=history_usage_var, values=["all", "current_window", "off"], state="readonly", width=14)
         history_usage_dropdown.grid(row=3, column=1, padx=5, pady=2)
+        ToolTip(history_usage_dropdown, "Choose how much conversational history is loaded into memory.", app=app)
 
-        tk.Label(kv_frame, text="Budget Recovery Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=4, column=0, sticky="w", pady=2)
+        lbl_br = tk.Label(kv_frame, text="Budget Recovery Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_br.grid(row=4, column=0, sticky="w", pady=2)
+        ToolTip(lbl_br, "Context budget overflow recovery strategy (wrapup, autocont, respond, off).", app=app)
         budget_recovery_var = tk.StringVar(value=app.config.get("budget_recovery_mode", "wrapup"))
         budget_recovery_dropdown = ttk.Combobox(kv_frame, textvariable=budget_recovery_var, values=["off", "respond", "wrapup", "autocont"], state="readonly", width=14)
         budget_recovery_dropdown.grid(row=4, column=1, padx=5, pady=2)
+        ToolTip(budget_recovery_dropdown, "Strategy for wrapping up response when approaching context limit.", app=app)
 
-        tk.Label(kv_frame, text="TurboVec Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=5, column=0, sticky="w", pady=2)
+        lbl_tv = tk.Label(kv_frame, text="TurboVec Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_tv.grid(row=5, column=0, sticky="w", pady=2)
+        ToolTip(lbl_tv, "Vector database embedding acceleration for long-term semantic history recall.", app=app)
         turbovec_mode_var = tk.StringVar(value=app.config.get("turbovec_mode", "fallback"))
         turbovec_mode_dropdown = ttk.Combobox(kv_frame, textvariable=turbovec_mode_var, values=["on", "fallback", "off"], state="readonly", width=14)
         turbovec_mode_dropdown.grid(row=5, column=1, padx=5, pady=2)
+        ToolTip(turbovec_mode_dropdown, "Enable TurboVec vector index recall or fallback.", app=app)
 
         # --- THEME & TEXTURE OVERHAUL CONTROLS ---
         THEME_MAP = {
@@ -527,9 +653,12 @@ def open_settings_window(app):
         curr_theme_key = app.config.get("theme", "default")
         theme_display_var = tk.StringVar(value=THEME_REV_MAP.get(curr_theme_key, "Apex Dark (Default)"))
 
-        tk.Label(kv_frame, text="Theme / Dark Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=6, column=0, sticky="w", pady=2)
+        lbl_thm = tk.Label(kv_frame, text="Theme / Dark Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_thm.grid(row=6, column=0, sticky="w", pady=2)
+        ToolTip(lbl_thm, "Select visual color theme palette for Serenity PC.", app=app)
         theme_dropdown = ttk.Combobox(kv_frame, textvariable=theme_display_var, values=list(THEME_MAP.keys()), state="readonly", width=14)
         theme_dropdown.grid(row=6, column=1, padx=5, pady=2)
+        ToolTip(theme_dropdown, "Switch active theme palette.", app=app)
 
         TEXTURE_MAP = {
             "Default Original": "default",
@@ -543,13 +672,18 @@ def open_settings_window(app):
         curr_tex_key = app.config.get("texture_style", "default")
         tex_display_var = tk.StringVar(value=TEXTURE_REV_MAP.get(curr_tex_key, "Default Original"))
 
-        tk.Label(kv_frame, text="Texture Style:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=7, column=0, sticky="w", pady=2)
+        lbl_tex = tk.Label(kv_frame, text="Texture Style:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_tex.grid(row=7, column=0, sticky="w", pady=2)
+        ToolTip(lbl_tex, "Select material texture style for interface elements.", app=app)
         tex_dropdown = ttk.Combobox(kv_frame, textvariable=tex_display_var, values=list(TEXTURE_MAP.keys()), state="readonly", width=14)
         tex_dropdown.grid(row=7, column=1, padx=5, pady=2)
+        ToolTip(tex_dropdown, "Switch active texture finish style.", app=app)
 
         frosted_glass_var = tk.BooleanVar(value=app.config.get("frosted_glass", False))
-        tk.Checkbutton(kv_frame, text="Frosted Glass Texture", variable=frosted_glass_var,
-                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"]).grid(row=8, column=0, columnspan=2, sticky="w", pady=2)
+        cb_frost = tk.Checkbutton(kv_frame, text="Frosted Glass Texture", variable=frosted_glass_var,
+                       bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_frost.grid(row=8, column=0, columnspan=2, sticky="w", pady=2)
+        ToolTip(cb_frost, "Enable real-time frosted glass translucent texturing on UI frames.", app=app)
 
         # STT Audio Input Settings
         from System.stt_manager import STTManager
@@ -568,14 +702,20 @@ def open_settings_window(app):
                     break
 
         stt_dev_var = tk.StringVar(value=curr_dev_label)
-        tk.Label(kv_frame, text="STT Mic Input:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=9, column=0, sticky="w", pady=2)
+        lbl_stt = tk.Label(kv_frame, text="STT Mic Input:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_stt.grid(row=9, column=0, sticky="w", pady=2)
+        ToolTip(lbl_stt, "Select local audio microphone device for Speech-To-Text dictation.", app=app)
         stt_dev_dropdown = ttk.Combobox(kv_frame, textvariable=stt_dev_var, values=dev_names, state="readonly", width=14)
         stt_dev_dropdown.grid(row=9, column=1, padx=5, pady=2)
+        ToolTip(stt_dev_dropdown, "Select microphone input device for STT recording.", app=app)
 
+        lbl_sttl = tk.Label(kv_frame, text="STT Language:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_sttl.grid(row=10, column=0, sticky="w", pady=2)
+        ToolTip(lbl_sttl, "Recognition language code for offline Speech-To-Text.", app=app)
         stt_lang_var = tk.StringVar(value=app.config.get("stt_language", "en-US"))
-        tk.Label(kv_frame, text="STT Language:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).grid(row=10, column=0, sticky="w", pady=2)
         stt_lang_dropdown = ttk.Combobox(kv_frame, textvariable=stt_lang_var, values=["en-US", "en-GB", "es-ES", "fr-FR", "de-DE", "ja-JP", "zh-CN"], state="readonly", width=14)
         stt_lang_dropdown.grid(row=10, column=1, padx=5, pady=2)
+        ToolTip(stt_lang_dropdown, "Select spoken language code for voice dictation.", app=app)
 
         # --- USER PROFILE & HISTORY SEPARATION ---
         user_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
@@ -583,18 +723,23 @@ def open_settings_window(app):
 
         user_header = tk.Frame(user_section, bg=THEME["widget_bg_color"])
         user_header.pack(fill=tk.X, padx=0, pady=0)
-        tk.Label(user_header, text="👤 User Profile & Mind Separation (Users/<Username>/)", bg=THEME["widget_bg_color"], 
-                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(side=tk.LEFT, padx=8, pady=4)
+        lbl_uhdr = tk.Label(user_header, text="👤 User Profile & Mind Separation (Users/<Username>/)", bg=THEME["widget_bg_color"], 
+                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"))
+        lbl_uhdr.pack(side=tk.LEFT, padx=8, pady=4)
+        ToolTip(lbl_uhdr, "Manage user profiles to keep isolated conversation histories and DMN memory states.", app=app)
 
         user_body = tk.Frame(user_section, bg=THEME["bg_color"])
         user_body.pack(fill=tk.X, padx=10, pady=6)
 
-        tk.Label(user_body, text="Active Username:", bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(side=tk.LEFT, padx=(0, 5))
+        lbl_uact = tk.Label(user_body, text="Active Username:", bg=THEME["bg_color"], fg=THEME["fg_color"])
+        lbl_uact.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(lbl_uact, "Select or type a username to switch workspaces or create a new user profile.", app=app)
         
         user_profiles_list = app.list_user_profiles() if hasattr(app, 'list_user_profiles') else ["Default"]
         username_var = tk.StringVar(value=app.get_active_username() if hasattr(app, 'get_active_username') else app.config.get("username", "Default"))
         user_combo = ttk.Combobox(user_body, textvariable=username_var, values=user_profiles_list, width=16)
         user_combo.pack(side=tk.LEFT, padx=5)
+        ToolTip(user_combo, "Select an existing profile or type a new name to create a workspace.", app=app)
 
         def _apply_switch_user():
             target_un = username_var.get().strip()
@@ -604,8 +749,10 @@ def open_settings_window(app):
                 user_combo['values'] = user_profiles_list
                 messagebox.showinfo("User Profile Switched", f"Active user profile set to '{target_un}'.")
 
-        tk.Button(user_body, text="Switch / Create Profile", command=_apply_switch_user,
-                  bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT).pack(side=tk.LEFT, padx=8)
+        btn_switch_u = tk.Button(user_body, text="Switch / Create Profile", command=_apply_switch_user,
+                  bg=THEME["button_bg_color"], fg=THEME["fg_color"], relief=tk.FLAT)
+        btn_switch_u.pack(side=tk.LEFT, padx=8)
+        ToolTip(btn_switch_u, "Switch active profile and load its separate history archive and DMN state.", app=app)
 
         # --- LOADING BAR & STATUS AREA CONFIGURATION ---
         status_bar_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
@@ -613,8 +760,10 @@ def open_settings_window(app):
 
         sb_header = tk.Frame(status_bar_section, bg=THEME["widget_bg_color"])
         sb_header.pack(fill=tk.X, padx=0, pady=0)
-        tk.Label(sb_header, text="⏳ Loading Bar & Status Area Overhaul", bg=THEME["widget_bg_color"], 
-                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(side=tk.LEFT, padx=8, pady=4)
+        lbl_sb_hdr = tk.Label(sb_header, text="⏳ Loading Bar & Status Area Overhaul", bg=THEME["widget_bg_color"], 
+                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"))
+        lbl_sb_hdr.pack(side=tk.LEFT, padx=8, pady=4)
+        ToolTip(lbl_sb_hdr, "Customize loading bar behavior, transition styles, and idle displays.", app=app)
 
         sb_body = tk.Frame(status_bar_section, bg=THEME["bg_color"])
         sb_body.pack(fill=tk.X, padx=10, pady=6)
@@ -622,7 +771,9 @@ def open_settings_window(app):
         opts_frame = tk.Frame(sb_body, bg=THEME["bg_color"])
         opts_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
-        tk.Label(opts_frame, text="Display Options:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold")).pack(anchor="w", pady=(0, 2))
+        lbl_disp_opts = tk.Label(opts_frame, text="Display Options:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold"))
+        lbl_disp_opts.pack(anchor="w", pady=(0, 2))
+        ToolTip(lbl_disp_opts, "Select active loading indicator display mode.", app=app)
 
         STATUS_MODES = [
             ("hybrid", "Hybrid / Smart Feature (State-Aware with Finish t/s)"),
@@ -633,26 +784,37 @@ def open_settings_window(app):
         ]
         status_mode_var = tk.StringVar(value=app.config.get("status_bar_mode", "hybrid"))
         for val, lbl in STATUS_MODES:
-            tk.Radiobutton(opts_frame, text=lbl, variable=status_mode_var, value=val,
-                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", padx=4, pady=1)
+            rb_sb = tk.Radiobutton(opts_frame, text=lbl, variable=status_mode_var, value=val,
+                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
+            rb_sb.pack(anchor="w", padx=4, pady=1)
+            ToolTip(rb_sb, f"Switch status bar display mode to {lbl}.", app=app)
 
         toggles_frame = tk.Frame(sb_body, bg=THEME["bg_color"])
         toggles_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15)
 
-        tk.Label(toggles_frame, text="Animation Style:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w")
+        lbl_anim_s = tk.Label(toggles_frame, text="Animation Style:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_anim_s.pack(anchor="w")
+        ToolTip(lbl_anim_s, "Select animation visual style when Animation mode is active.", app=app)
         anim_style_var = tk.StringVar(value=app.config.get("status_bar_anim_style", "spinner"))
         anim_combo = ttk.Combobox(toggles_frame, textvariable=anim_style_var, values=["spinner", "pulse", "orbit"], state="readonly", width=12)
         anim_combo.pack(anchor="w", pady=(2, 6))
+        ToolTip(anim_combo, "Choose between spinner, pulse, or orbit canvas animation.", app=app)
 
-        tk.Label(toggles_frame, text="Status Area Toggles:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold")).pack(anchor="w", pady=(4, 2))
+        lbl_sb_tog = tk.Label(toggles_frame, text="Status Area Toggles:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold"))
+        lbl_sb_tog.pack(anchor="w", pady=(4, 2))
+        ToolTip(lbl_sb_tog, "Configure status bar idle behavior and fallback metadata.", app=app)
 
         sb_dmn_var = tk.BooleanVar(value=app.config.get("status_bar_dmn_idle", True))
-        tk.Checkbutton(toggles_frame, text="Swaps to DMN timer showing idle time", variable=sb_dmn_var,
-                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=1)
+        cb_dmn_t = tk.Checkbutton(toggles_frame, text="Swaps to DMN timer showing idle time", variable=sb_dmn_var,
+                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
+        cb_dmn_t.pack(anchor="w", pady=1)
+        ToolTip(cb_dmn_t, "Displays DMN idle timer countdown when resting.", app=app)
 
         sb_fallback_var = tk.BooleanVar(value=app.config.get("status_bar_fallback_info", True))
-        tk.Checkbutton(toggles_frame, text="Defaults back to active level & KV quant/ctx info", variable=sb_fallback_var,
-                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"]).pack(anchor="w", pady=1)
+        cb_fb_t = tk.Checkbutton(toggles_frame, text="Defaults back to active level & KV quant/ctx info", variable=sb_fallback_var,
+                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
+        cb_fb_t.pack(anchor="w", pady=1)
+        ToolTip(cb_fb_t, "Shows persona level and hardware KV cache status when idle.", app=app)
 
         # --- SECURITY & VAULT ENCRYPTION PANEL ---
         vault_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
@@ -788,11 +950,15 @@ def open_settings_window(app):
             tk.Button(dis_win, text="Decrypt & Disable", command=_do_disable,
                       bg="#660000", fg="white", font=("Segoe UI", 9, "bold")).pack(pady=12)
 
-        tk.Button(v_btn_row, text="🔑 Set / Change Master Password", command=_open_set_password_modal,
-                  bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=4)
+        btn_set_pwd = tk.Button(v_btn_row, text="🔑 Set / Change Master Password", command=_open_set_password_modal,
+                  bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 8, "bold"))
+        btn_set_pwd.pack(side=tk.LEFT, padx=4)
+        ToolTip(btn_set_pwd, "Set or change the AES-256-GCM Master Password for encrypting conversation histories.", app=app)
 
-        tk.Button(v_btn_row, text="🔓 Disable Vault Lock", command=_open_disable_vault_modal,
-                  bg=THEME["button_bg_color"], fg="#ffaa00", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
+        btn_dis_vault = tk.Button(v_btn_row, text="🔓 Disable Vault Lock", command=_open_disable_vault_modal,
+                  bg=THEME["button_bg_color"], fg="#ffaa00", font=("Segoe UI", 8))
+        btn_dis_vault.pack(side=tk.LEFT, padx=4)
+        ToolTip(btn_dis_vault, "Decrypt all histories back to plaintext and remove master password protection.", app=app)
 
         def _lock_now():
             if hasattr(app, 'vault_manager') and app.vault_manager.is_lock_enabled():
@@ -803,8 +969,10 @@ def open_settings_window(app):
             else:
                 messagebox.showinfo("Vault Inactive", "Enable Master Password first to lock the application.", parent=win)
 
-        tk.Button(v_btn_row, text="🔒 Lock App Now", command=_lock_now,
-                  bg="#441111", fg="#ff8888", font=("Segoe UI", 8, "bold")).pack(side=tk.RIGHT, padx=4)
+        btn_lock_app = tk.Button(v_btn_row, text="🔒 Lock App Now", command=_lock_now,
+                  bg="#441111", fg="#ff8888", font=("Segoe UI", 8, "bold"))
+        btn_lock_app.pack(side=tk.RIGHT, padx=4)
+        ToolTip(btn_lock_app, "Instantly lock Serenity PC and encrypt active history memory.", app=app)
 
         # Inactivity Auto-Lock Control (Slider + Typeable input + Quick presets)
         auto_lock_sec = app.vault_manager.get_auto_lock_seconds() if hasattr(app, 'vault_manager') else 0
@@ -814,16 +982,20 @@ def open_settings_window(app):
         inactivity_frame = tk.Frame(vault_body, bg=THEME["bg_color"])
         inactivity_frame.pack(fill=tk.X, pady=(4, 2))
 
-        tk.Label(inactivity_frame, text="Auto-Lock Inactivity:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 6))
+        lbl_alock = tk.Label(inactivity_frame, text="Auto-Lock Inactivity:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Segoe UI", 9))
+        lbl_alock.pack(side=tk.LEFT, padx=(0, 6))
+        ToolTip(lbl_alock, "Automatically locks vault after a period of user inactivity (0 = disabled).", app=app)
 
         sec_entry = tk.Entry(inactivity_frame, textvariable=auto_lock_var, width=6, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
         sec_entry.pack(side=tk.LEFT, padx=4)
+        ToolTip(sec_entry, "Auto-lock timeout in seconds.", app=app)
         tk.Label(inactivity_frame, text="sec", bg=THEME["bg_color"], fg="#888888").pack(side=tk.LEFT, padx=(0, 8))
 
         slider_lock = tk.Scale(inactivity_frame, from_=0, to=60, orient=tk.HORIZONTAL, resolution=0.5,
                                variable=auto_lock_min_var, bg=THEME["bg_color"], fg=THEME["fg_color"],
                                troughcolor=THEME["widget_bg_color"], highlightthickness=0, length=140)
         slider_lock.pack(side=tk.LEFT, padx=4)
+        ToolTip(slider_lock, "Slide to set auto-lock inactivity timer in minutes.", app=app)
         tk.Label(inactivity_frame, text="min", bg=THEME["bg_color"], fg="#888888").pack(side=tk.LEFT, padx=(0, 8))
 
         def _on_sec_entry_change(*args):
@@ -848,10 +1020,14 @@ def open_settings_window(app):
 
         presets_frame = tk.Frame(vault_body, bg=THEME["bg_color"])
         presets_frame.pack(fill=tk.X, pady=(2, 4))
-        tk.Label(presets_frame, text="Presets:", bg=THEME["bg_color"], fg="#777777", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 4))
+        lbl_pres = tk.Label(presets_frame, text="Presets:", bg=THEME["bg_color"], fg="#777777", font=("Segoe UI", 8))
+        lbl_pres.pack(side=tk.LEFT, padx=(0, 4))
+        ToolTip(lbl_pres, "Quick auto-lock timer duration presets.", app=app)
         for p_sec, p_lbl in [(0, "Off"), (15, "15s"), (30, "30s"), (45, "45s"), (300, "5m"), (900, "15m"), (1800, "30m")]:
-            tk.Button(presets_frame, text=p_lbl, command=lambda s=p_sec: _set_preset(s),
-                      bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 7), relief=tk.FLAT, padx=3, pady=0).pack(side=tk.LEFT, padx=2)
+            btn_p = tk.Button(presets_frame, text=p_lbl, command=lambda s=p_sec: _set_preset(s),
+                      bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 7), relief=tk.FLAT, padx=3, pady=0)
+            btn_p.pack(side=tk.LEFT, padx=2)
+            ToolTip(btn_p, f"Set auto-lock inactivity timer to {p_lbl}.", app=app)
 
         tk.Label(main, text="Text/Inline Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(anchor="w", padx=10, pady=(15, 5))
         tier_grid = tk.Frame(main, bg=THEME["bg_color"])
@@ -870,7 +1046,7 @@ def open_settings_window(app):
             r, c = divmod(i, 2)
             _create_tier_block(v_grid, vt, r, c, True)
 
-        def _save():
+        def _apply_settings(close_window=False):
             app.config["media_rendering"] = media_var.get()
             app.state["deep_cook_behavior"] = v_behavior.get()
             if app.state["deep_cook_behavior"] == "oneshot":
@@ -924,6 +1100,7 @@ def open_settings_window(app):
             app.config["inline_markdown"] = inline_md_var.get()
             app.config["budget_recovery_mode"] = budget_recovery_var.get()
             app.config["monitor_graph_mode"] = monitor_graph_var.get()
+            app.config["show_tooltips"] = show_tooltips_var.get()
             app.state["streaming_mode"] = stream_var.get()
             app.config["max_token_ratio"] = ratio_var.get()
             app.config["image_handling"] = image_handling_var.get()
@@ -1003,23 +1180,46 @@ def open_settings_window(app):
             app.save_config()
             if draft_toggled and hasattr(app, "swap_tier") and hasattr(app, "current_model_tier"):
                 app.swap_tier(app.current_model_tier)
-            messagebox.showinfo("Success", "Settings saved!")
-            win.destroy()
+            if close_window:
+                messagebox.showinfo("Success", "Settings saved!", parent=win)
+                win.destroy()
+            else:
+                messagebox.showinfo("Success", "Settings applied successfully!", parent=win)
+                try: win.lift()
+                except Exception: pass
 
-        tk.Button(btn_frame, text="Save & Apply", command=_save, bg=THEME["button_active_color"], fg=THEME["fg_color"]).pack(side=tk.RIGHT, padx=5)
-        tk.Button(btn_frame, text="Clear History", command=app.clear_current_history, bg="#660000", fg="white").pack(side=tk.RIGHT, padx=5)
+        save_close_btn = tk.Button(btn_frame, text="Save & Close", command=lambda: _apply_settings(True),
+                                   bg=THEME["button_active_color"], fg=THEME["fg_color"], font=("Segoe UI", 9, "bold"), relief=tk.FLAT)
+        save_close_btn.pack(side=tk.RIGHT, padx=4)
+        ToolTip(save_close_btn, "Save all settings to configuration file and close settings window.", app=app)
+
+        apply_btn = tk.Button(btn_frame, text="Apply", command=lambda: _apply_settings(False),
+                              bg=THEME.get("button_bg_color", "#202020"), fg=THEME.get("accent_highlight", "#00ffcc"), font=("Segoe UI", 9, "bold"), relief=tk.FLAT)
+        apply_btn.pack(side=tk.RIGHT, padx=4)
+        ToolTip(apply_btn, "Apply current settings immediately without closing the settings window.", app=app)
+
+        btn_clr_h = tk.Button(btn_frame, text="Clear History", command=app.clear_current_history, bg="#660000", fg="white", font=("Segoe UI", 9), relief=tk.FLAT)
+        btn_clr_h.pack(side=tk.RIGHT, padx=4)
+        ToolTip(btn_clr_h, "Permanently delete active conversation history and reset memory.", app=app)
         
         def _reset_defaults():
-            if messagebox.askyesno("Reset", "Restore system defaults for all layers and samplers?"):
+            if messagebox.askyesno("Reset", "Restore system defaults for all layers and samplers?", parent=win):
                 recs = run_auto_detect(app, win)
                 for t in recs:
                     if t in ents: 
                         ents[t].delete(0, tk.END)
                         ents[t].insert(0, str(recs[t]))
-                messagebox.showinfo("Reset", "System recommendations applied to visible fields. Click 'Save' to persist.")
+                messagebox.showinfo("Reset", "System recommendations applied to visible fields. Click 'Apply' or 'Save & Close' to persist.", parent=win)
+                try: win.lift()
+                except Exception: pass
         
-        tk.Button(btn_frame, text="Auto-Detect", command=_reset_defaults).pack(side=tk.RIGHT, padx=5)
-        tk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=5)
+        btn_auto_d = tk.Button(btn_frame, text="Auto-Detect", command=_reset_defaults, bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 9), relief=tk.FLAT)
+        btn_auto_d.pack(side=tk.RIGHT, padx=4)
+        ToolTip(btn_auto_d, "Benchmark system hardware and auto-calculate GPU layer offloads across tiers.", app=app)
+
+        btn_cancel = tk.Button(btn_frame, text="Cancel", command=win.destroy, bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 9), relief=tk.FLAT)
+        btn_cancel.pack(side=tk.RIGHT, padx=4)
+        ToolTip(btn_cancel, "Discard unapplied changes and close settings window.", app=app)
 
     except Exception as e:
         import traceback

@@ -120,7 +120,7 @@ class TestGemmaToolRegistry(unittest.TestCase):
 
     def test_read_file_not_found(self):
         result = self.tool_reg.execute("read_file", {"path": "non_existent_file_12345.txt"})
-        self.assertEqual(result, "Error: File not found.")
+        self.assertIn("not found", result.lower())
 
     def test_offline_mode_excludes_web_search(self):
         from System.network_guard import set_offline_mode

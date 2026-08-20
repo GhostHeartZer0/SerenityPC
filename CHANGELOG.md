@@ -19,6 +19,69 @@
 - Verify Info Hovers & Tutorial
 
 ## Version 1.6.7
+- **Tutorial & Tooltip Enhancements**:
+  - Updated Tutorial Step 2 with focused spotlight bounding box wrapping the Top Action Bar (`top_bar_frame`, `tab_bar_frame`, controls, and telemetry badges).
+  - Lightened tutorial overlay background darkening (`-alpha 0.72`) for greater clarity and visibility of the underlying application.
+  - Replaced Tutorial Step 8 with a complete, structured Settings walkthrough covering hardware allocation, auto-detect, 32-slot templating, KV cache quants, themes, material textures, and AES-256 Vault encryption.
+  - Set default `ToolTip` linger delay to 1.5s (`delay_ms = 1500`) across the application.
+  - Expanded hover tooltips across words, titles, labels, entries, and controls throughout `main.py` and `System/settings_ui.py`.
+  - Fixed undefined variable `stt_lang_var` in `System/settings_ui.py`.
+- **Loading Bar & Status Transition Overhaul**:
+  - Fixed premature status bar termination in `main.py` (`_update_ai_message` / `_replace_ai_message`) by updating phase to `generating` instead of calling `think.stop()`, allowing loading progress, TTFT/speed gauges, animations, and Serenity Prayer to remain active and smoothly transition throughout stream generation until final completion.
+  - Resolved Serenity Prayer animation freeze and blank screen bug in `System/serenity_utils.py` by repairing the phase cycle state machine and implementing smooth contrast color interpolation.
+  - Replaced hardcoded static `"Waking up the experts... (SATA speeds, hang tight)"` string in `_load_model()` with dynamic model loading and prefill phases.
+- **Settings Window Enhancements & Dialog Hierarchy**:
+  - Added dedicated `[Apply]` button to `System/settings_ui.py` allowing instant runtime parameter application without closing the settings window.
+  - Attached `win.transient(app.root)` and `t_win.transient(win)` with `parent=win` modal dialogues, preventing the Settings window from falling behind the main application when modifying or applying templates.
+- **User Profile Discovery Filtering**:
+  - Updated `list_user_profiles()` in `main.py` to exclude internal utility directories (`backups`, `backups_repair`, and `jsonz to txt`).
+- **BF16 KV Cache Removal**:
+  - Removed unsupported/crashing `bf16` KV cache type from `System/settings_ui.py`, `main.py`, and `System/tests/benchmarks/debate/Debate.py`.
+- **Tutorial Cutoff Prevention & Persistence Fix**:
+  - Restructured `TutorialOverlay` widget packing in `System/serenity_utils.py` with bottom-pinned action bar (`< Back`, `Skip`, `Next`) and hint banner to prevent vertical layout truncation.
+  - Added live window dimension synchronization, bounds clamping, and `<Configure>` resize listener to keep the tutorial card and spotlight highlight aligned inside the window.
+  - Persisted `tutorial_completed` flag in `save_config()` and initialized default in `load_config()` in `main.py`, preventing the walkthrough from re-appearing on subsequent startups.
+- **STT Trigger Relocation & Label Cleanup**:
+  - Moved STT dictation trigger button (`self.mic_button`) to the persona control bar immediately to the right of the `+` attachment button in `main.py`.
+  - Streamlined button label to clean microphone emoji `🎙️` (recording `🔴` / dictating `⏳`) removing redundant text word.
+- **Tool Calling Graceful Fallbacks & Mass-Dump Fix**:
+  - Implemented resilient fallback observations across `web_search`, `read_file`, `get_system_stats`, `control_rgb`, and `generate_image` in `System/tool_registry.py`.
+  - Added `streaming_replace` queue dispatch in `_run_tool_loop` in `main.py`, cleanly scrubbing raw tool execution syntax before live-streaming synthesized answers.
+  - Enhanced `_finalize_message` in `main.py` to apply markdown in-place over already-streamed content, eliminating post-tool response mass-dumping and flickering.
+- **DMN State Idle Timer Accuracy**:
+  - Added state-aware `dmn_active` and `dmn_entry_time` timestamp tracking in `set_avatar_state()` in `main.py`.
+  - Updated `DynamicStatusWidget._update_idle_display()` in `System/serenity_utils.py` to display exact elapsed time in DMN state (`[DMN Active] Time in DMN: mm:ss` / `[DMN Simmering]`) when in DMN mode, and countdown (`[Idle] Next DMN in: mm:ss`) during normal idle.
+- **Tutorial Interactive Section Spotlighting & Adaptive Layout**:
+  - Upgraded `TutorialOverlay` in `System/serenity_utils.py` with dynamic target bounding box resolution across all 9 interface areas (`Avatar & Status Area`, `Persona Matrix`, `Console & Speech`, `Reasoning Logs`, `History & Vault`, `Deep Cook & Debate`, `Settings & Tuning`).
+  - Added multi-layered glowing neon spotlight frames (`#00ffcc` / `#007acc`) drawn live around active target UI components with contextual section banners (`📍 SECTION IN FOCUS: ...`).
+  - Implemented adaptive smart dialog card positioning (top, bottom, left, or center) so highlighted UI sections remain fully unobstructed and visible during walkthrough.
+- **Wringer Benchmark Incremental Checkpointing & Auto-Resumption**:
+  - Implemented atomic per-prompt and per-level persistent caching in `System/tests/benchmarks/wringer/Wringer.py` saving directly to `{model_name}_checkpoint.json`.
+  - Added incremental `(IN PROGRESS - AUTO-CHECKPOINTED)` markdown report export after each level.
+  - Enabled auto-resumption skipping already evaluated levels and reusing cached prompt responses on restart.
+- **Bugfixes & Startup Initialization Safety**:
+  - Imported `shutil` in `main.py` resolving `NameError: name 'shutil' is not defined` during legacy flat history migration.
+  - Reordered `ChatbotApp.__init__` container definitions so `self.config` and dict configs are initialized before invoking `_load_dmn_backbone()`.
+  - Added defensive `hasattr` validation to `ChatbotApp.get_active_username()` to prevent premature attribute lookup crashes during early initialization.
+  - Added `self._load_dmn_backbone()` refresh inside `load_config()` to sync active user mind state on startup and config reloads.
+- **Linger-Hover Help Boxes (ToolTips) & UI Descriptions**:
+  - Implemented `ToolTip` class in `System/serenity_utils.py` featuring configurable delay timing (`delay_ms=500`), boundary-safe screen placement, theme-aligned styling (`widget_bg_color`, `electric_blue` border), and automatic text wrapping.
+  - Added global hover tooltip toggle checkbox (`Enable Hover Tooltips / Help`) to `System/settings_ui.py` persisting to `System/config.json` (`show_tooltips`).
+  - Attached contextual tooltips across key UI components in `main.py` and `System/settings_ui.py` including Model Settings, Begin / Model Swap, Video Multimodal, Pulse Watch, Active Chat / History tabs, User Input, Send, Offline STT Dictation, Deep Cook, Halt, Ghost Mode, History Usage, Persona Slider, Attachment Menu, and hardware options.
+- **Translucent Tutorial Overlay & 9-Area Walkthrough**:
+  - Created `TutorialOverlay` in `System/serenity_utils.py` with multi-screen glassmorphic interface (`-alpha 0.94`), progress tracking bar, and `Step X of 9` badge indicator.
+  - Designed distinct walkthrough modules covering all major subsystems:
+    1. *Welcome & System Overview*: Local inference, zero cloud telemetry, and isolated memory.
+    2. *Avatar & Status Area*: Emotion reflections, generation phases, and DMN idle timer.
+    3. *Persona Hierarchy*: Slider navigation across Levels 1-6 and Cecilia secret unlock.
+    4. *Input Console & Dictation*: Text prompt, offline STT mic, media attachments, Ghost Mode, and History toggles.
+    5. *Reasoning & Thought Channels*: Real-time stream demuxing, collapsible dropdowns, and LaTeX markdown rendering.
+    6. *History & Cryptographic Vault*: Multi-user archives, deep search, and AES-256-GCM encryption.
+    7. *Deep Cook & Debate Arena*: Multi-round recursive cycles and agent debate pacing.
+    8. *Settings & Hardware Tuning*: Layer allocation, Quantized KV caches, and theme customization.
+    9. *Quick Start*: Session completion, tooltips, and ready prompt.
+  - Added skip and back/next navigation controls with keyboard bindings (`Left`, `Right`, `Enter`, `Escape`).
+  - Implemented first-run auto-launch watchdog (`tutorial_completed: false`) on initial startup and added persistent manual launch button (`[🚀 Tutorial Walkthrough]`) to the top action bar in `System/settings_ui.py`.
 
 ## Version 1.6.6
 - **Loading Bar & Status Area Overhaul**:

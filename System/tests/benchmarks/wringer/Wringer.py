@@ -331,168 +331,276 @@ class WringerFramework:
         words = len(text.split())
         return max(1, int(max(words * 1.3, len(text) / 3.8)))
 
-    def generate_responses(self, model_path: str, prompts: List[str]) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _get_checkpoint_path(model_name: str) -> str:
+        report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
+        os.makedirs(report_dir, exist_ok=True)
+        return os.path.join(report_dir, f"{model_name}_checkpoint.json")
+
+    def _load_checkpoint(self, model_name: str) -> Dict[str, Any]:
+        cp_path = self._get_checkpoint_path(model_name)
+        if os.path.exists(cp_path):
+            try:
+                with open(cp_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and data.get("model_name") == model_name:
+                    return data
+            except Exception as e:
+                print(f"[-] Checkpoint read error ({cp_path}): {e}")
+        return {
+            "model_name": model_name,
+            "results": {},
+            "partial_prompts": {},
+            "partial_scores": {},
+            "elapsed_time": 0.0
+        }
+
+    def _save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        model_name = checkpoint.get("model_name", "unknown")
+        cp_path = self._get_checkpoint_path(model_name)
+        tmp_path = cp_path + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(checkpoint, f, indent=2)
+            if os.path.exists(cp_path):
+                os.replace(tmp_path, cp_path)
+            else:
+                os.rename(tmp_path, cp_path)
+        except Exception as e:
+            print(f"[-] Failed to save checkpoint: {e}")
+
+    def _export_markdown_report(self, model_name: str, model_results: Dict[str, Any], total_duration: float, is_partial: bool = False) -> str:
+        report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
+        os.makedirs(report_dir, exist_ok=True)
+        report_path = os.path.join(report_dir, f"{model_name}_report.md")
+        try:
+            status_tag = " (IN PROGRESS - AUTO-CHECKPOINTED)" if is_partial else ""
+            with open(report_path, "w", encoding="utf-8") as rf:
+                rf.write(f"# Benchmark Report: {model_name}{status_tag}\n\n")
+                rf.write(f"- **Total Duration**: {round(total_duration, 2)}s\n")
+                rf.write(f"- **Status**: {'In Progress' if is_partial else 'Completed'}\n")
+                rf.write(f"- **Speed Weighting Active**: {'Yes (75% Quality, 25% Speed)' if self.weight_speed else 'No (Quality and Speed strictly separated)'}\n\n")
+                
+                for lvl, data in model_results.items():
+                    rf.write(f"## {lvl}\n")
+                    rf.write(f"- **Quality Score**: {data['average_score']}/10 ({data['percentage']})\n")
+                    rf.write(f"- **Composite Score**: {data['composite_score']}/10\n")
+                    rf.write(f"- **Speed**: Prefill: {data['prefill_tps']} t/s | Decode: {data['decode_tps']} t/s | Overall: {data['overall_tps']} t/s\n")
+                    if data.get("anomaly_count", 0) > 0:
+                        rf.write(f"- **Speed Outliers / Anomaly Count**: {data['anomaly_count']} (Outliers: {data.get('anomalies', [])}, Clean Mean: {data.get('clean_decode_tps', 0.0)} t/s)\n")
+                    rf.write("\n")
+                    
+                    if "details" in data:
+                        for d in data["details"]:
+                            rf.write(f"### Prompt:\n```text\n{d['prompt']}\n```\n\n")
+                            rf.write(f"**Score:** {d['score']}/10 | **Speed:** {d['decode_tps']} t/s decode ({d['overall_tps']} t/s overall)\n\n")
+                            if d.get("thought"):
+                                rf.write(f"<details>\n<summary>Reasoning</summary>\n\n```text\n{d['thought']}\n```\n</details>\n\n")
+                            rf.write(f"**Response:**\n```text\n{d['response']}\n```\n\n")
+                            rf.write("---\n\n")
+            if not is_partial:
+                print(f"[+] Detailed report saved to: {report_path}")
+        except Exception as e:
+            print(f"[-] Failed to save markdown report: {e}")
+        return report_path
+
+    def generate_responses(self, model_path: str, prompts: List[str], lvl: str = "", checkpoint: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Loads a model with llama_cpp, runs inference with token streaming to capture prefill, decode, and overall t/s."""
         import llama_cpp
         import gc
         
         model_name = os.path.basename(model_path)
-        print(f"\n[*] Loading model for inference: {model_name}")
-        try:
-            dynamic_layers = self.calculate_dynamic_gpu_layers(model_path, 2048)
-            print(f"    -> Dynamic Auto-Offload: {dynamic_layers} layers")
-            
-            is_diffusion = "diffusion" in model_name.lower()
-            if is_diffusion:
-                import sys
-                wringer_dir = os.path.dirname(os.path.abspath(__file__))
-                benchmarks_dir = os.path.dirname(wringer_dir)
-                tests_dir = os.path.dirname(benchmarks_dir)
-                system_dir = os.path.dirname(tests_dir)
-                project_root = os.path.dirname(system_dir)
-                if project_root not in sys.path:
-                    sys.path.insert(0, project_root)
-                    
-                from System.diffusion_wrapper import DiffusionCLIWrapper
-                llm = DiffusionCLIWrapper(
-                    app_instance=None,
-                    model_path=model_path,
-                    n_gpu_layers=dynamic_layers,
-                    n_ctx=2048
-                )
-            else:
-                llm = llama_cpp.Llama(
-                    model_path=model_path,
-                    n_gpu_layers=dynamic_layers, 
-                    n_ctx=2048,
-                    type_k=llama_cpp.GGML_TYPE_Q4_0,
-                    type_v=llama_cpp.GGML_TYPE_Q4_0,
-                    flash_attn=True,
-                    verbose=False
-                )
-        except Exception as e:
-            print(f"[-] Failed to load model {model_name}: {e}")
-            err_res = []
-            for _ in prompts:
-                err_res.append({
-                    "content": "Error loading model.",
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "prefill_time": 0.0,
-                    "decode_time": 0.0,
-                    "total_time": 0.0,
-                    "prefill_tps": 0.0,
-                    "decode_tps": 0.0,
-                    "overall_tps": 0.0
-                })
-            return err_res
-            
-        is_nemotron = "nemotron" in model_name.lower()
-        is_gemma = "gemma" in model_name.lower()
-        is_qwen = "qwen" in model_name.lower()
-        is_reasoning = any(kw in model_name.lower() for kw in ["qwq", "thinking", "r1", "deepseek"])
+        partial_prompts = checkpoint.get("partial_prompts", {}).get(lvl, {}) if checkpoint else {}
         
-        temp = 0.7 if (is_qwen or is_nemotron) else 1.0
         results = []
+        llm = None
         
-        for i, prompt in enumerate(prompts):
-            print(f"    -> Generating response {i+1}/{len(prompts)}...", end="\r")
-            try:
-                sys_content = "You are a helpful and precise reasoning assistant. Provide clear and concise answers."
-                if is_nemotron:
-                    sys_content = "You are a helpful and precise reasoning assistant. Provide clear, accurate, and direct answers without meta-commentary."
-                elif is_gemma or is_reasoning:
-                    sys_content = "<|think|>\n" + sys_content
-                    
-                messages = [
-                    {"role": "system", "content": sys_content},
-                    {"role": "user", "content": prompt}
-                ]
+        try:
+            for i, prompt in enumerate(prompts):
+                key = str(i)
+                if key in partial_prompts:
+                    print(f"    -> Using cached response {i+1}/{len(prompts)} for {lvl}...", end="\r")
+                    results.append(partial_prompts[key])
+                    continue
                 
-                # Estimate prompt token count
-                prompt_combined = f"{sys_content}\n{prompt}"
-                prompt_tokens = self._estimate_tokens(prompt_combined, llm=llm)
-                
-                t_start = time.perf_counter()
-                t_first_token = None
-                output_tokens = 0
-                full_text = ""
-                
-                # Stream to separate prefill (TTFT) and decode speeds
-                gen = llm.create_chat_completion(
-                    messages=messages, 
-                    max_tokens=4096,
-                    temperature=temp,
-                    top_p=0.95,
-                    top_k=64,
-                    stream=True
-                )
-                
-                for chunk in gen:
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    content_chunk = delta.get("content", "")
-                    if content_chunk:
-                        if t_first_token is None:
-                            t_first_token = time.perf_counter()
-                        full_text += content_chunk
-                        output_tokens += 1
+                # Lazy model load on first uncached prompt
+                if llm is None:
+                    print(f"\n[*] Loading model for inference: {model_name}")
+                    try:
+                        dynamic_layers = self.calculate_dynamic_gpu_layers(model_path, 2048)
+                        print(f"    -> Dynamic Auto-Offload: {dynamic_layers} layers")
                         
-                t_end = time.perf_counter()
-                
-                # If non-streaming or empty chunks yielded single block
-                if t_first_token is None:
-                    t_first_token = t_end
-                if output_tokens == 0 and full_text:
-                    output_tokens = self._estimate_tokens(full_text, llm=llm)
+                        is_diffusion = "diffusion" in model_name.lower()
+                        if is_diffusion:
+                            import sys
+                            wringer_dir = os.path.dirname(os.path.abspath(__file__))
+                            benchmarks_dir = os.path.dirname(wringer_dir)
+                            tests_dir = os.path.dirname(benchmarks_dir)
+                            system_dir = os.path.dirname(tests_dir)
+                            project_root = os.path.dirname(system_dir)
+                            if project_root not in sys.path:
+                                sys.path.insert(0, project_root)
+                                
+                            from System.diffusion_wrapper import DiffusionCLIWrapper
+                            llm = DiffusionCLIWrapper(
+                                app_instance=None,
+                                model_path=model_path,
+                                n_gpu_layers=dynamic_layers,
+                                n_ctx=2048
+                            )
+                        else:
+                            llm = llama_cpp.Llama(
+                                model_path=model_path,
+                                n_gpu_layers=dynamic_layers, 
+                                n_ctx=2048,
+                                type_k=llama_cpp.GGML_TYPE_Q4_0,
+                                type_v=llama_cpp.GGML_TYPE_Q4_0,
+                                flash_attn=True,
+                                verbose=False
+                            )
+                    except Exception as e:
+                        print(f"[-] Failed to load model {model_name}: {e}")
+                        err_res = []
+                        for _ in range(i, len(prompts)):
+                            err_res.append({
+                                "content": "Error loading model.",
+                                "prompt_tokens": 0,
+                                "completion_tokens": 0,
+                                "prefill_time": 0.0,
+                                "decode_time": 0.0,
+                                "total_time": 0.0,
+                                "prefill_tps": 0.0,
+                                "decode_tps": 0.0,
+                                "overall_tps": 0.0
+                            })
+                        results.extend(err_res)
+                        break
+                        
+                    is_nemotron = "nemotron" in model_name.lower()
+                    is_gemma = "gemma" in model_name.lower()
+                    is_qwen = "qwen" in model_name.lower()
+                    is_reasoning = any(kw in model_name.lower() for kw in ["qwq", "thinking", "r1", "deepseek"])
+                    temp = 0.7 if (is_qwen or is_nemotron) else 1.0
+
+                print(f"    -> Generating response {i+1}/{len(prompts)}...", end="\r")
+                try:
+                    sys_content = "You are a helpful and precise reasoning assistant. Provide clear and concise answers."
+                    if is_nemotron:
+                        sys_content = "You are a helpful and precise reasoning assistant. Provide clear, accurate, and direct answers without meta-commentary."
+                    elif is_gemma or is_reasoning:
+                        sys_content = "<|think|>\n" + sys_content
+                        
+                    messages = [
+                        {"role": "system", "content": sys_content},
+                        {"role": "user", "content": prompt}
+                    ]
                     
-                prefill_time = max(0.0001, t_first_token - t_start)
-                decode_time = max(0.0001, t_end - t_first_token)
-                total_time = max(0.0001, t_end - t_start)
-                
-                # If decode tokens > 0 but decode_time near 0, fall back gracefully
-                decode_tokens = max(1, output_tokens)
-                prefill_tps = prompt_tokens / prefill_time
-                decode_tps = decode_tokens / decode_time if (t_end > t_first_token) else (output_tokens / total_time)
-                overall_tps = (prompt_tokens + decode_tokens) / total_time
-                
-                results.append({
-                    "content": full_text.strip(),
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": decode_tokens,
-                    "prefill_time": round(prefill_time, 4),
-                    "decode_time": round(decode_time, 4),
-                    "total_time": round(total_time, 4),
-                    "prefill_tps": round(prefill_tps, 2),
-                    "decode_tps": round(decode_tps, 2),
-                    "overall_tps": round(overall_tps, 2)
-                })
-            except Exception as e:
-                results.append({
-                    "content": f"Error during inference: {e}",
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "prefill_time": 0.0,
-                    "decode_time": 0.0,
-                    "total_time": 0.0,
-                    "prefill_tps": 0.0,
-                    "decode_tps": 0.0,
-                    "overall_tps": 0.0
-                })
+                    # Estimate prompt token count
+                    prompt_combined = f"{sys_content}\n{prompt}"
+                    prompt_tokens = self._estimate_tokens(prompt_combined, llm=llm)
+                    
+                    t_start = time.perf_counter()
+                    t_first_token = None
+                    output_tokens = 0
+                    full_text = ""
+                    
+                    # Stream to separate prefill (TTFT) and decode speeds
+                    gen = llm.create_chat_completion(
+                        messages=messages, 
+                        max_tokens=4096,
+                        temperature=temp,
+                        top_p=0.95,
+                        top_k=64,
+                        stream=True
+                    )
+                    
+                    for chunk in gen:
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content_chunk = delta.get("content", "")
+                        if content_chunk:
+                            if t_first_token is None:
+                                t_first_token = time.perf_counter()
+                            full_text += content_chunk
+                            output_tokens += 1
+                            
+                    t_end = time.perf_counter()
+                    
+                    # If non-streaming or empty chunks yielded single block
+                    if t_first_token is None:
+                        t_first_token = t_end
+                    if output_tokens == 0 and full_text:
+                        output_tokens = self._estimate_tokens(full_text, llm=llm)
+                        
+                    prefill_time = max(0.0001, t_first_token - t_start)
+                    decode_time = max(0.0001, t_end - t_first_token)
+                    total_time = max(0.0001, t_end - t_start)
+                    
+                    # If decode tokens > 0 but decode_time near 0, fall back gracefully
+                    decode_tokens = max(1, output_tokens)
+                    prefill_tps = prompt_tokens / prefill_time
+                    decode_tps = decode_tokens / decode_time if (t_end > t_first_token) else (output_tokens / total_time)
+                    overall_tps = (prompt_tokens + decode_tokens) / total_time
+                    
+                    item = {
+                        "content": full_text.strip(),
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": decode_tokens,
+                        "prefill_time": round(prefill_time, 4),
+                        "decode_time": round(decode_time, 4),
+                        "total_time": round(total_time, 4),
+                        "prefill_tps": round(prefill_tps, 2),
+                        "decode_tps": round(decode_tps, 2),
+                        "overall_tps": round(overall_tps, 2)
+                    }
+                    results.append(item)
+                    if checkpoint is not None:
+                        if "partial_prompts" not in checkpoint:
+                            checkpoint["partial_prompts"] = {}
+                        if lvl not in checkpoint["partial_prompts"]:
+                            checkpoint["partial_prompts"][lvl] = {}
+                        checkpoint["partial_prompts"][lvl][key] = item
+                        self._save_checkpoint(checkpoint)
+                except Exception as e:
+                    err_item = {
+                        "content": f"Error during inference: {e}",
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "prefill_time": 0.0,
+                        "decode_time": 0.0,
+                        "total_time": 0.0,
+                        "prefill_tps": 0.0,
+                        "decode_tps": 0.0,
+                        "overall_tps": 0.0
+                    }
+                    results.append(err_item)
+                    if checkpoint is not None:
+                        if "partial_prompts" not in checkpoint:
+                            checkpoint["partial_prompts"] = {}
+                        if lvl not in checkpoint["partial_prompts"]:
+                            checkpoint["partial_prompts"][lvl] = {}
+                        checkpoint["partial_prompts"][lvl][key] = err_item
+                        self._save_checkpoint(checkpoint)
+        finally:
+            if llm is not None:
+                del llm
+                gc.collect()
                 
         print(f"\n[+] Generation complete for {len(prompts)} prompts.")
-        
-        del llm
-        gc.collect()
-        
         return results
 
-    def grade_responses(self, qa_pairs: List[Dict[str, str]]) -> List[float]:
+    def grade_responses(self, qa_pairs: List[Dict[str, str]], lvl: str = "", checkpoint: Dict[str, Any] = None) -> List[float]:
         """Grades responses manually (RLHF) or via a judge LLM."""
         scores = []
+        partial_scores = checkpoint.get("partial_scores", {}).get(lvl, {}) if checkpoint else {}
         
         if self.manual_grading:
             print("\n=== RLHF Manual Grading Mode ===")
-            for pair in qa_pairs:
+            for i, pair in enumerate(qa_pairs):
+                key = str(i)
+                if key in partial_scores:
+                    print(f"    -> Using cached manual score {i+1}/{len(qa_pairs)} for {lvl} ({partial_scores[key]}/10)")
+                    scores.append(partial_scores[key])
+                    continue
                 print(f"\n[PROMPT]: {pair['prompt']}")
                 print(f"[RESPONSE]: {pair['response']}")
                 while True:
@@ -500,6 +608,13 @@ class WringerFramework:
                         score = float(input("Score (1-10): "))
                         if 1.0 <= score <= 10.0:
                             scores.append(score)
+                            if checkpoint is not None:
+                                if "partial_scores" not in checkpoint:
+                                    checkpoint["partial_scores"] = {}
+                                if lvl not in checkpoint["partial_scores"]:
+                                    checkpoint["partial_scores"][lvl] = {}
+                                checkpoint["partial_scores"][lvl][key] = score
+                                self._save_checkpoint(checkpoint)
                             break
                         else:
                             print("Score must be between 1 and 10.")
@@ -515,76 +630,96 @@ class WringerFramework:
         import gc
         import re
         
-        print(f"\n[*] Loading Judge Model: {os.path.basename(self.judge_model_path)}")
+        judge_llm = None
         try:
-            dynamic_layers = self.calculate_dynamic_gpu_layers(self.judge_model_path, 4096)
-            print(f"    -> Dynamic Auto-Offload: {dynamic_layers} layers")
-            judge_llm = llama_cpp.Llama(
-                model_path=self.judge_model_path,
-                n_gpu_layers=dynamic_layers,
-                n_ctx=4096,
-                type_k=llama_cpp.GGML_TYPE_Q4_0,
-                type_v=llama_cpp.GGML_TYPE_Q4_0,
-                flash_attn=True,
-                verbose=False
-            )
-        except Exception as e:
-            print(f"[-] Failed to load judge model: {e}")
-            return [5.0] * len(qa_pairs)
-            
-        for i, pair in enumerate(qa_pairs):
-            print(f"    -> Grading response {i+1}/{len(qa_pairs)}...", end="\r")
-            
-            if "Error during inference:" in pair['response'] or "Error loading model." in pair['response']:
-                scores.append(1.0)
-                continue
+            for i, pair in enumerate(qa_pairs):
+                key = str(i)
+                if key in partial_scores:
+                    print(f"    -> Using cached grade {i+1}/{len(qa_pairs)} for {lvl}...", end="\r")
+                    scores.append(partial_scores[key])
+                    continue
                 
-            try:
-                expected = self.answer_key.get(pair['prompt'], "")
-                expected_str = f"\nExpected/Reference Answer (Use this to anchor accuracy): {expected}" if expected else ""
-                judge_messages = [
-                    {"role": "system", "content": "<|think|>\nYou are an impartial AI judge. Evaluate the answer to the prompt. Provide a score from 1 to 10 based on accuracy, relevance, and helpfulness. Output ONLY the numerical score. Note: Assign a 1 for generation failure/gibberish, and a 2 for a complete logic/reasoning failure."},
-                    {"role": "user", "content": f"Prompt: {pair['prompt']}{expected_str}\nAnswer: {pair['response']}\n\nScore (1-10):"}
-                ]
-                output = judge_llm.create_chat_completion(
-                    messages=judge_messages, 
-                    max_tokens=1024,
-                    temperature=0.1,
-                    top_p=0.95,
-                    top_k=64
-                )
-                raw_score = output["choices"][0]["message"]["content"].strip()
+                if judge_llm is None:
+                    print(f"\n[*] Loading Judge Model: {os.path.basename(self.judge_model_path)}")
+                    try:
+                        dynamic_layers = self.calculate_dynamic_gpu_layers(self.judge_model_path, 4096)
+                        print(f"    -> Dynamic Auto-Offload: {dynamic_layers} layers")
+                        judge_llm = llama_cpp.Llama(
+                            model_path=self.judge_model_path,
+                            n_gpu_layers=dynamic_layers,
+                            n_ctx=4096,
+                            type_k=llama_cpp.GGML_TYPE_Q4_0,
+                            type_v=llama_cpp.GGML_TYPE_Q4_0,
+                            flash_attn=True,
+                            verbose=False
+                        )
+                    except Exception as e:
+                        print(f"[-] Failed to load judge model: {e}")
+                        scores.extend([5.0] * (len(qa_pairs) - i))
+                        break
                 
-                explicit_matches = re.findall(r"(?:score\s*is|score:?)\s*\*?\*?\s*([0-9]*\.?[0-9]+)", raw_score, re.IGNORECASE)
-                out_of_10_matches = re.findall(r"([0-9]*\.?[0-9]+)\s*(?:/|out of)\s*10", raw_score, re.IGNORECASE)
+                print(f"    -> Grading response {i+1}/{len(qa_pairs)}...", end="\r")
                 
-                score_str = None
-                
-                # We prioritize explicit matches or out_of_10 matches, but we MUST take the LAST one 
-                # in case the model repeats the prompt instructions ("Assign a 1 for...") early in its reasoning block.
-                if out_of_10_matches:
-                    score_str = out_of_10_matches[-1]
-                elif explicit_matches:
-                    score_str = explicit_matches[-1]
-                else:
-                    matches = re.findall(r"([0-9]*\.?[0-9]+)", raw_score)
-                    valid_scores = [float(m) for m in matches if 1.0 <= float(m) <= 10.0]
-                    if valid_scores:
-                        score_str = str(valid_scores[-1])
+                if "Error during inference:" in pair['response'] or "Error loading model." in pair['response']:
+                    scores.append(1.0)
+                    if checkpoint is not None:
+                        if "partial_scores" not in checkpoint: checkpoint["partial_scores"] = {}
+                        if lvl not in checkpoint["partial_scores"]: checkpoint["partial_scores"][lvl] = {}
+                        checkpoint["partial_scores"][lvl][key] = 1.0
+                        self._save_checkpoint(checkpoint)
+                    continue
+                    
+                try:
+                    expected = self.answer_key.get(pair['prompt'], "")
+                    expected_str = f"\nExpected/Reference Answer (Use this to anchor accuracy): {expected}" if expected else ""
+                    judge_messages = [
+                        {"role": "system", "content": "<|think|>\nYou are an impartial AI judge. Evaluate the answer to the prompt. Provide a score from 1 to 10 based on accuracy, relevance, and helpfulness. Output ONLY the numerical score. Note: Assign a 1 for generation failure/gibberish, and a 2 for a complete logic/reasoning failure."},
+                        {"role": "user", "content": f"Prompt: {pair['prompt']}{expected_str}\nAnswer: {pair['response']}\n\nScore (1-10):"}
+                    ]
+                    output = judge_llm.create_chat_completion(
+                        messages=judge_messages, 
+                        max_tokens=1024,
+                        temperature=0.1,
+                        top_p=0.95,
+                        top_k=64
+                    )
+                    raw_score = output["choices"][0]["message"]["content"].strip()
+                    
+                    explicit_matches = re.findall(r"(?:score\s*is|score:?)\s*\*?\*?\s*([0-9]*\.?[0-9]+)", raw_score, re.IGNORECASE)
+                    out_of_10_matches = re.findall(r"([0-9]*\.?[0-9]+)\s*(?:/|out of)\s*10", raw_score, re.IGNORECASE)
+                    
+                    score_str = None
+                    if out_of_10_matches:
+                        score_str = out_of_10_matches[-1]
+                    elif explicit_matches:
+                        score_str = explicit_matches[-1]
+                    else:
+                        matches = re.findall(r"([0-9]*\.?[0-9]+)", raw_score)
+                        valid_scores = [float(m) for m in matches if 1.0 <= float(m) <= 10.0]
+                        if valid_scores:
+                            score_str = str(valid_scores[-1])
 
-                if score_str is not None:
-                    score = min(10.0, max(1.0, float(score_str)))
+                    if score_str is not None:
+                        score = min(10.0, max(1.0, float(score_str)))
+                        scores.append(score)
+                    else:
+                        score = 5.0
+                        scores.append(score)
+                except Exception as e:
+                    score = 5.0
                     scores.append(score)
-                else:
-                    scores.append(5.0)
-            except Exception as e:
-                scores.append(5.0)
+                    
+                if checkpoint is not None:
+                    if "partial_scores" not in checkpoint: checkpoint["partial_scores"] = {}
+                    if lvl not in checkpoint["partial_scores"]: checkpoint["partial_scores"][lvl] = {}
+                    checkpoint["partial_scores"][lvl][key] = score
+                    self._save_checkpoint(checkpoint)
+        finally:
+            if judge_llm is not None:
+                del judge_llm
+                gc.collect()
                 
         print(f"\n[+] Grading complete for {len(qa_pairs)} responses.")
-        
-        del judge_llm
-        gc.collect()
-        
         return scores
 
     @staticmethod
@@ -662,20 +797,35 @@ class WringerFramework:
         }
 
     def run_evaluation(self, model_path: str, selected_levels: List[str] = None) -> Dict[str, Any]:
-        """Runs the Wringer benchmark for a single designated model."""
-        levels_to_run = selected_levels if selected_levels else list(self.test_bank.keys())
-        model_results = {}
+        """Runs the Wringer benchmark for a single designated model with incremental checkpointing."""
+        all_levels = list(self.test_bank.keys())
+        levels_to_run = selected_levels if selected_levels else all_levels
         model_name = os.path.basename(model_path)
         
+        checkpoint = self._load_checkpoint(model_name)
+        model_results = checkpoint.get("results", {})
+        
+        # Report any existing progress found
+        completed_levels = [lvl for lvl in levels_to_run if lvl in model_results]
+        if completed_levels:
+            print(f"[+] Found existing checkpoint for {model_name} with completed levels: {completed_levels}")
+            if not selected_levels:
+                print(f"[+] Auto-resuming remaining unfinished levels...")
+        
         print(f"\n[+] Running Wringer Evaluation on: {model_name}")
-        start_time = time.time()
+        start_time = time.time() - float(checkpoint.get("elapsed_time", 0.0))
 
         for lvl in levels_to_run:
+            # Skip fully evaluated levels unless specifically requested in selected_levels
+            if lvl in model_results and not selected_levels:
+                print(f"--- Skipping already evaluated level from checkpoint: {lvl} ({model_results[lvl].get('average_score', 'N/A')}/10) ---")
+                continue
+                
             prompts = self.test_bank.get(lvl, [])
             if not prompts: continue
             
             print(f"\n--- Processing Level: {lvl} ---")
-            gen_data = self.generate_responses(model_path, prompts)
+            gen_data = self.generate_responses(model_path, prompts, lvl=lvl, checkpoint=checkpoint)
             
             # Grade clean answers when thoughts are present
             qa_pairs = []
@@ -687,7 +837,7 @@ class WringerFramework:
                 qa_pairs.append({"prompt": p, "response": clean_ans})
                 parsed_pairs.append((p, clean_ans, thought, g))
 
-            scores = self.grade_responses(qa_pairs)
+            scores = self.grade_responses(qa_pairs, lvl=lvl, checkpoint=checkpoint)
             
             if scores:
                 lvl_avg_score = sum(scores) / len(scores)
@@ -709,7 +859,6 @@ class WringerFramework:
                 speed_anomaly_data = self.detect_anomalies_and_stats(decode_speeds)
                 
                 # Composite score calculation (Quality + Speed weighting if enabled)
-                # Baseline reference: 50 t/s decode = 100% speed rating; speed factor = min(1.0, decode_tps / 50.0)
                 speed_factor = min(10.0, (lvl_decode_tps / 5.0)) # 50 t/s = 10.0
                 if self.weight_speed:
                     # 75% accuracy quality + 25% throughput
@@ -745,40 +894,18 @@ class WringerFramework:
                     "clean_decode_tps": speed_anomaly_data["clean_mean"],
                     "details": details
                 }
+                
+                # Save level progress immediately to checkpoint and partial report
+                checkpoint["results"] = model_results
+                checkpoint["elapsed_time"] = time.time() - start_time
+                self._save_checkpoint(checkpoint)
+                self._export_markdown_report(model_name, model_results, checkpoint["elapsed_time"], is_partial=True)
+                print(f"[✓] Checkpoint saved for {lvl}. Progress secured on disk.")
         
         total_duration = time.time() - start_time
         
-        # Export detailed markdown with dropdown for reasoning & speed telemetry
-        report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
-        os.makedirs(report_dir, exist_ok=True)
-        report_path = os.path.join(report_dir, f"{model_name}_report.md")
-        
-        try:
-            with open(report_path, "w", encoding="utf-8") as rf:
-                rf.write(f"# Benchmark Report: {model_name}\n\n")
-                rf.write(f"- **Total Duration**: {round(total_duration, 2)}s\n")
-                rf.write(f"- **Speed Weighting Active**: {'Yes (75% Quality, 25% Speed)' if self.weight_speed else 'No (Quality and Speed strictly separated)'}\n\n")
-                
-                for lvl, data in model_results.items():
-                    rf.write(f"## {lvl}\n")
-                    rf.write(f"- **Quality Score**: {data['average_score']}/10 ({data['percentage']})\n")
-                    rf.write(f"- **Composite Score**: {data['composite_score']}/10\n")
-                    rf.write(f"- **Speed**: Prefill: {data['prefill_tps']} t/s | Decode: {data['decode_tps']} t/s | Overall: {data['overall_tps']} t/s\n")
-                    if data["anomaly_count"] > 0:
-                        rf.write(f"- **Speed Outliers / Anomaly Count**: {data['anomaly_count']} (Outliers: {data['anomalies']}, Clean Mean: {data['clean_decode_tps']} t/s)\n")
-                    rf.write("\n")
-                    
-                    if "details" in data:
-                        for d in data["details"]:
-                            rf.write(f"### Prompt:\n```text\n{d['prompt']}\n```\n\n")
-                            rf.write(f"**Score:** {d['score']}/10 | **Speed:** {d['decode_tps']} t/s decode ({d['overall_tps']} t/s overall)\n\n")
-                            if d.get("thought"):
-                                rf.write(f"<details>\n<summary>Reasoning</summary>\n\n```text\n{d['thought']}\n```\n</details>\n\n")
-                            rf.write(f"**Response:**\n```text\n{d['response']}\n```\n\n")
-                            rf.write("---\n\n")
-            print(f"[+] Detailed report saved to: {report_path}")
-        except Exception as e:
-            print(f"[-] Failed to save markdown report: {e}")
+        # Export final comprehensive markdown report
+        self._export_markdown_report(model_name, model_results, total_duration, is_partial=False)
 
         # Compare and update high scores (quality + separate speed highscores)
         self.compare_high_scores(model_name, model_results)
@@ -798,6 +925,14 @@ class WringerFramework:
                 f"{model_name}_breakdown_chart.png",
                 auto_open=self.auto_open_charts
             )
+
+        # All requested levels finished successfully: clean up checkpoint file
+        cp_path = self._get_checkpoint_path(model_name)
+        if os.path.exists(cp_path):
+            try:
+                os.remove(cp_path)
+            except Exception:
+                pass
 
         return {
             "model": model_name,

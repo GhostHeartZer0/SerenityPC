@@ -8,6 +8,7 @@ import sys
 import os
 import json
 import zlib
+import time
 import tempfile
 import unittest
 
@@ -79,6 +80,38 @@ class TestUserProfilesAndStatusBar(unittest.TestCase):
         self.assertIn("Bob", profiles)
         self.assertIn("Default", profiles)
 
+    def test_legacy_migration_and_safe_username(self):
+        from main import ChatbotApp
+        
+        # Test safe get_active_username when config attribute is absent or None
+        class BareApp:
+            get_active_username = ChatbotApp.get_active_username
+            get_user_dir = ChatbotApp.get_user_dir
+            _load_dmn_backbone = ChatbotApp._load_dmn_backbone
+            _migrate_legacy_user_files = ChatbotApp._migrate_legacy_user_files
+        
+        bare = BareApp()
+        self.assertEqual(bare.get_active_username(), "Default")
+        bare.config = None
+        self.assertEqual(bare.get_active_username(), "Default")
+        
+        # Test migration using shutil without NameError
+        hist_dir = os.path.join(self.root_dir, "History")
+        users_dir = os.path.join(self.root_dir, "Users")
+        os.makedirs(hist_dir, exist_ok=True)
+        os.makedirs(users_dir, exist_ok=True)
+        bare.dirs = {"History": hist_dir, "Users": users_dir, "System": self.root_dir}
+        bare.state = {}
+        
+        legacy_file = os.path.join(hist_dir, "sample.history.jsonz")
+        with open(legacy_file, "wb") as f:
+            f.write(b"dummy history data")
+            
+        bare._migrate_legacy_user_files()
+        migrated_file = os.path.join(hist_dir, "Default", "sample.history.jsonz")
+        self.assertTrue(os.path.exists(migrated_file))
+        self.assertFalse(os.path.exists(legacy_file))
+
     def test_dynamic_status_widget_phases_and_telemetry(self):
         import tkinter as tk
         from System.serenity_utils import DynamicStatusWidget
@@ -121,6 +154,61 @@ class TestUserProfilesAndStatusBar(unittest.TestCase):
         widget.stop()
         self.assertEqual(widget._current_phase, "complete")
 
+        # DMN Idle: When not in DMN state (countdown mode)
+        app.state["dmn_active"] = False
+        widget._update_idle_display()
+        self.assertIn("Next DMN in", widget.label.cget("text"))
+
+        # DMN Idle: When in DMN state (time in DMN state mode)
+        app.state["dmn_active"] = True
+        app.state["dmn_entry_time"] = time.time() - 45 # 45 seconds in DMN
+        widget._update_idle_display()
+        self.assertIn("Time in DMN", widget.label.cget("text"))
+        self.assertIn("00:45", widget.label.cget("text"))
+
+        root.destroy()
+
+    def test_prayer_animation_cycling_and_profile_exclusions(self):
+        import tkinter as tk
+        from System.serenity_utils import DynamicStatusWidget
+        from main import ChatbotApp
+
+        # 1. Test profile exclusions
+        class DummyApp:
+            def __init__(self, d):
+                self.dirs = {"Users": os.path.join(d, "Users"), "History": os.path.join(d, "History")}
+                for p in self.dirs.values(): os.makedirs(p, exist_ok=True)
+                os.makedirs(os.path.join(self.dirs["Users"], "backups_repair"), exist_ok=True)
+                os.makedirs(os.path.join(self.dirs["History"], "jsonz to txt"), exist_ok=True)
+                os.makedirs(os.path.join(self.dirs["History"], "backups"), exist_ok=True)
+                os.makedirs(os.path.join(self.dirs["Users"], "NormalUser"), exist_ok=True)
+            def get_active_username(self): return "NormalUser"
+            list_user_profiles = ChatbotApp.list_user_profiles
+
+        d_app = DummyApp(self.root_dir)
+        profiles = d_app.list_user_profiles()
+        self.assertIn("NormalUser", profiles)
+        self.assertNotIn("backups_repair", profiles)
+        self.assertNotIn("jsonz to txt", profiles)
+        self.assertNotIn("backups", profiles)
+
+        # 2. Test Prayer animation cycling
+        root = tk.Tk()
+        root.withdraw()
+        app = type("MockApp", (), {"config": {"status_bar_mode": "prayer", "status_bar_dmn_idle": True, "status_bar_fallback_info": True}})()
+        widget = DynamicStatusWidget(root, app=app)
+        widget.start()
+        self.assertEqual(widget._current_phase, "idle")
+        self.assertTrue(widget._is_active)
+
+        # Step prayer animation through full cycle
+        for _ in range(80):
+            widget._start_prayer_animation()
+        # Verify prayer text is populated and alpha cycled
+        self.assertTrue(len(widget.prayer_label.cget("text")) > 0)
+        self.assertTrue(widget._prayer_direction in [-1, 0, 1, 2])
+
+        widget.stop()
         root.destroy()
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox, filedialog, ttk
 import tkinter.font as tkFont
-import threading, traceback, sys, os, json, zlib, time, queue, subprocess, re, atexit, webbrowser, io, faulthandler, struct, random
+import threading, traceback, sys, os, shutil, json, zlib, time, queue, subprocess, re, atexit, webbrowser, io, faulthandler, struct, random
 try:
     import numpy as np
 except ImportError:
@@ -48,7 +48,7 @@ from serenity_resources import (THEME, THEMES, TEXTURE_STYLES, apply_theme_to_gl
 from System.serenity_utils import (WidgetLogger, FileAndWidgetLogger, LoadingScreen, 
                             log_uncaught_exception, HardwareProfile, MediaProcessor, SystemMonitor,
                             enable_fault_debugging, ThreadSafeDict, ThreadSafeList, ThinkingDisplay,
-                            patch_gguf_architecture, patch_llama_deallocator)
+                            patch_gguf_architecture, patch_llama_deallocator, ToolTip, TutorialOverlay)
 #from System.ui_watchdog import UIWatchdog #commented out for now to save threads
 from System.kv_manager import KVManager, TurboVecIndex
 from System.tool_registry import GemmaToolRegistry
@@ -403,15 +403,6 @@ class ChatbotApp:
         self.current_model_tier = None
         self.active_persona_level = 3
         
-        # Load DMN Backbone
-        self._load_dmn_backbone()
-        self.max_persona_level = 7  # Persisted range for the slider
-        self.messages = []
-        self.gpu_handle = None
-        self.text_buffer = ""
-        self.last_update_time = 0.0
-        self.chunk_counter = 0 
-        
         # Data Containers
         self.avatar_states = {}     
         self.avatar_pil_images = {} 
@@ -456,6 +447,15 @@ class ChatbotApp:
         
         self.top_k_config = {tier: 64 for tier in tier_list}
         self.top_k_config["vision_multimodal"] = 64 # Gemma-4 Best Practice
+
+        # Load DMN Backbone
+        self._load_dmn_backbone()
+        self.max_persona_level = 7  # Persisted range for the slider
+        self.messages = []
+        self.gpu_handle = None
+        self.text_buffer = ""
+        self.last_update_time = 0.0
+        self.chunk_counter = 0
         
         self.pending_task = None
         
@@ -550,6 +550,8 @@ class ChatbotApp:
 
     # ================= USER PROFILES & DIRECTORIES =================
     def get_active_username(self) -> str:
+        if not hasattr(self, "config") or self.config is None:
+            return "Default"
         un = str(self.config.get("username", "Default")).strip()
         return un if un else "Default"
 
@@ -567,16 +569,17 @@ class ChatbotApp:
 
     def list_user_profiles(self) -> List[str]:
         users = set(["Default"])
+        excluded = {"backups", "backups_repair", "jsonz to txt"}
         if os.path.exists(self.dirs["Users"]):
             for item in os.listdir(self.dirs["Users"]):
-                if os.path.isdir(os.path.join(self.dirs["Users"], item)) and item != "backups":
+                if os.path.isdir(os.path.join(self.dirs["Users"], item)) and item not in excluded:
                     users.add(item)
         if os.path.exists(self.dirs["History"]):
             for item in os.listdir(self.dirs["History"]):
-                if os.path.isdir(os.path.join(self.dirs["History"], item)) and item != "backups":
+                if os.path.isdir(os.path.join(self.dirs["History"], item)) and item not in excluded:
                     users.add(item)
         curr = self.get_active_username()
-        if curr: users.add(curr)
+        if curr and curr not in excluded: users.add(curr)
         return sorted(list(users))
 
     def switch_user(self, new_username: str):
@@ -658,6 +661,18 @@ class ChatbotApp:
         self._start_inactivity_watchdog()
         if hasattr(self, 'vault_manager') and self.vault_manager.is_locked():
             self.root.after(200, self.show_vault_unlock_modal)
+        elif not self.config.get("tutorial_completed", False):
+            self.root.after(800, self.start_tutorial_walkthrough)
+
+    def start_tutorial_walkthrough(self):
+        """Launches the interactive translucent tutorial walkthrough."""
+        if hasattr(self, '_tutorial_overlay') and self._tutorial_overlay and getattr(self._tutorial_overlay, 'win', None):
+            try:
+                self._tutorial_overlay.win.lift()
+                return
+            except Exception:
+                pass
+        self._tutorial_overlay = TutorialOverlay(self)
 
     def _on_user_activity(self, event=None):
         """Resets the inactivity timer on user interaction."""
@@ -889,50 +904,61 @@ class ChatbotApp:
 
         # --- TOP BUTTONS ---
         top = tk.Frame(left, bg=THEME["bg_color"])
+        self.top_bar_frame = top
         top.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
         
         btn_set = self._add_btn(top, "Settings", self.open_settings_window)
         self.load_model_button = btn_set
+        ToolTip(btn_set, "Open Model Settings & Hardware Configuration.", app=self)
         
         btn_act = self._add_btn(top, "Begin!", self.model_swap)
         self.action_button = btn_act
+        ToolTip(btn_act, "Load selected model tier or swap active model.", app=self)
         
         # Multimodal Prep Buttons
         btn_vid = self._add_btn(top, "[🎥] Video", self.initiate_video_multimodal)
         self.btn_video = btn_vid
+        ToolTip(btn_vid, "Initiate video multimodal frame analysis.", app=self)
         
         # Replace the old Watch button
         btn_wat = self._add_btn(top, "[🧠] Pulse", self.toggle_auto_watch)
         self.btn_watch = btn_wat
+        ToolTip(btn_wat, "Toggle background Pulse & idle observation.", app=self)
         
         btn_clr = self._add_btn(top, "Clear", self._reset_multimodal_ui)
         self.btn_clear_queue = btn_clr
+        ToolTip(btn_clr, "Clear active attachments and media queue.", app=self)
 
         chat_frame = tk.Frame(left, bg=THEME["trim_color"])
         chat_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
         # --- TAB CONTROLS ---
         tab_frame = tk.Frame(chat_frame, bg=THEME["trim_color"])
+        self.tab_bar_frame = tab_frame
         tab_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
 
         btn_tab_act = tk.Button(tab_frame, text="Active Chat", command=self.show_active_chat, 
                                 bg=THEME["button_active_color"], fg=THEME["fg_color"], relief=tk.FLAT)
         self.btn_active = btn_tab_act
         btn_tab_act.pack(side=tk.LEFT, padx=2)
+        ToolTip(btn_tab_act, "Switch to live conversation stream.", app=self)
 
         btn_tab_hist = tk.Button(tab_frame, text="History Archive", command=self.show_history, 
                                  bg=THEME["button_bg_color"], fg="#aaaaaa", relief=tk.FLAT)
         self.btn_history = btn_tab_hist
         btn_tab_hist.pack(side=tk.LEFT, padx=2)
+        ToolTip(btn_tab_hist, "Search and review archived conversation histories.", app=self)
 
         lbl_status = tk.Label(tab_frame, text="System: Ready", bg=THEME["trim_color"], 
                                           fg="#888888", font=("Open Sans", 10, "italic"))
         self.system_status_label = lbl_status
         lbl_status.pack(side=tk.RIGHT, padx=10)
+        ToolTip(lbl_status, "System engine status and telemetry indicator.", app=self)
 
         lbl_hw = tk.Label(tab_frame, text="", bg=THEME["trim_color"], font=("Open Sans", 10, "bold"))
         self.hw_mode_label = lbl_hw
         lbl_hw.pack(side=tk.RIGHT, padx=5)
+        ToolTip(lbl_hw, "Hardware architecture optimization mode (Apex i7 / Legacy i5) and offline guard status.", app=self)
         self._update_hw_indicator()
 
         # Thinking Display
@@ -951,6 +977,7 @@ class ChatbotApp:
         # 2. User-Provided Timeline Progress (Apex Dark Theme)
         self.timeline_frame = tk.Frame(chat_frame, bg="#1e1e1e")
         self.progress_label = tk.Label(self.timeline_frame, text="TIMELINE: 0%", bg="#1e1e1e", fg="#00ffcc", font=("Consolas", 9))
+        ToolTip(self.progress_label, "Real-time timeline token generation progress.", app=self)
         self.progress_label.pack(side="top", anchor="w")
         
         self.style = ttk.Style()
@@ -1020,6 +1047,7 @@ class ChatbotApp:
         txt_past.tag_config("md_strike", font=self.fonts["md_strike"], foreground="#7f848e")
 
         input_frame = tk.Frame(left, bg=THEME["trim_color"])
+        self.input_control_frame = input_frame
         input_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
         
         # Attachment Bar (New)
@@ -1031,9 +1059,11 @@ class ChatbotApp:
         self.user_input = txt_user
         txt_user.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         txt_user.bind("<KeyPress>", self._handle_input_key)
+        ToolTip(txt_user, "Enter prompt. Press Enter to send, Shift+Enter for newline.", app=self)
 
         # --- PERSONA CONTROLS (Single Slider Fix) ---
         p_frame = tk.Frame(left, bg=THEME["bg_color"])
+        self.persona_control_frame = p_frame
         p_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=5)
         self._setup_persona_controls(p_frame)
         
@@ -1047,6 +1077,7 @@ class ChatbotApp:
                                           anchor="center", wraplength=500)
         self.persona_desc_label = lbl_desc
         lbl_desc.pack(fill=tk.BOTH, expand=True)
+        ToolTip(lbl_desc, "Cognitive and stylistic description of the selected persona tier.", app=self)
 
         def _on_left_resize(event):
             # Dynamic wraplength: 90% of the left frame width
@@ -1058,27 +1089,31 @@ class ChatbotApp:
 
         # --- FOOTER BUTTONS ---
         ctrl_frame = tk.Frame(left, bg=THEME["bg_color"])
+        self.footer_control_frame = ctrl_frame
         ctrl_frame.grid(row=5, column=0, sticky="ew", padx=10, pady=5)
         
         self.rgb_button = self._add_btn(ctrl_frame, "[🌈] RGB", self.open_rgb_panel, side=tk.LEFT, width=12)
+        ToolTip(self.rgb_button, "Open RGB ambient lighting controls.", app=self)
         if not self.config.get("show_rgb_button", True) or not self._is_rgb_supported():
             self.rgb_button.pack_forget()
         
         btn_send = self._add_btn(ctrl_frame, "Send", self.send_message, side=tk.RIGHT)
         self.send_button = btn_send
-        
-        btn_mic = self._add_btn(ctrl_frame, "🎙️ Mic", self.toggle_voice_recording, side=tk.RIGHT, font=self.fonts["main"])
-        self.mic_button = btn_mic
+        ToolTip(btn_send, "Send prompt to active model.", app=self)
         
         btn_deep = self._add_btn(ctrl_frame, "Deep Cook", self.toggle_deep_cook_mode, side=tk.RIGHT)
         self.deep_thought_button = btn_deep
+        ToolTip(btn_deep, "Toggle Deep Cook multi-cycle recursive synthesis.", app=self)
         
         btn_halt = self._add_btn(ctrl_frame, "Halt", self.halt_process, side=tk.RIGHT)
         self.hurry_button = btn_halt
+        ToolTip(btn_halt, "Halt active token generation.", app=self)
 
         # Ghost Mode and History Usage UI Toggles
         self.ghost_button = self._add_btn(ctrl_frame, self._get_ghost_mode_label(), self.toggle_ghost_mode, side=tk.RIGHT, font=self.fonts["main"], fg=self._get_ghost_mode_color())
+        ToolTip(self.ghost_button, "Toggle Ghost Mode (disables chat history logging to disk).", app=self)
         self.history_usage_button = self._add_btn(ctrl_frame, self._get_history_usage_label(), self.toggle_history_usage, side=tk.RIGHT, font=self.fonts["main"], fg=self._get_history_usage_color())
+        ToolTip(self.history_usage_button, "Toggle TurboVec long-term history recall.", app=self)
 
         # Right Panel (Avatar & Stats)
         canvas_r = tk.Canvas(self.paned, bg=THEME["bg_color"], highlightthickness=0)
@@ -1125,6 +1160,7 @@ class ChatbotApp:
         self.persona_label = lbl_p
         lbl_p.pack(side=tk.LEFT)
         lbl_p.bind("<Button-1>", self._on_persona_label_click)
+        ToolTip(lbl_p, "Adjust persona depth (click 6 times for Secret Level 7).", app=self)
 
         # Extended to Level 6 dynamically
         scale_d = tk.Scale(p_frame, from_=1, to=self.max_persona_level, orient=tk.HORIZONTAL, length=200, 
@@ -1133,6 +1169,7 @@ class ChatbotApp:
         self.depth_slider = scale_d
         scale_d.set(3)
         scale_d.pack(side=tk.LEFT, padx=10)
+        ToolTip(scale_d, "Slide between Persona Levels 1 to 6/7.", app=self)
 
         # SECRET TRIGGER: Invisible gap right next to the slider
         lbl_sec = tk.Label(p_frame, text="      ", bg=THEME["bg_color"], cursor="arrow", width=4)
@@ -1145,12 +1182,22 @@ class ChatbotApp:
                                              fg=THEME["fg_color"], relief=tk.FLAT)
         self.persona_name_button = btn_name
         btn_name.pack(side=tk.LEFT, padx=5)
+        ToolTip(btn_name, "Active persona level name and tier.", app=self)
 
         # Plus button for attachments
         btn_add = tk.Button(p_frame, text="+", command=self._show_attachment_menu,
                             font=self.fonts["bold"], bg=THEME["button_bg_color"], 
                             fg=THEME["fg_color"], relief=tk.FLAT, padx=5)
         btn_add.pack(side=tk.LEFT)
+        ToolTip(btn_add, "Attach images, documents, or video slices.", app=self)
+
+        # STT Voice input trigger (to the right of plus sign)
+        btn_mic = tk.Button(p_frame, text="🎙️", command=self.toggle_voice_recording,
+                            font=self.fonts["main"], bg=THEME["button_bg_color"],
+                            fg=THEME["fg_color"], relief=tk.FLAT, padx=5)
+        self.mic_button = btn_mic
+        btn_mic.pack(side=tk.LEFT, padx=(4, 0))
+        ToolTip(btn_mic, "Dictate voice input offline using local speech recognition.", app=self)
         
         # Attachments Popup Menu
         self.attachment_menu = tk.Menu(self.root, tearoff=0, bg=THEME["bg_color"], fg=THEME["fg_color"])
@@ -1163,6 +1210,7 @@ class ChatbotApp:
                                  relief=tk.FLAT, padx=10)
         self.lore_btn = btn_lore
         btn_lore.pack(side=tk.LEFT, padx=15)
+        ToolTip(btn_lore, "Open Prime Chronicles and subconscious dream journals.", app=self)
 
     def _show_attachment_menu(self, event=None):
         if hasattr(self, "attachment_menu"):
@@ -3100,7 +3148,6 @@ class ChatbotApp:
                 "f32": getattr(lcpp, "GGML_TYPE_F32", 0),
                 "f16": getattr(lcpp, "GGML_TYPE_F16", 1),
                 "fp16": getattr(lcpp, "GGML_TYPE_F16", 1),
-                "bf16": getattr(lcpp, "GGML_TYPE_BF16", 16),
                 "q8_0": getattr(lcpp, "GGML_TYPE_Q8_0", 8),
                 "q5_1": getattr(lcpp, "GGML_TYPE_Q5_1", 7),
                 "q5_0": getattr(lcpp, "GGML_TYPE_Q5_0", 6),
@@ -3110,7 +3157,7 @@ class ChatbotApp:
             }
             
             # Retrieve independent K/V Cache selections from config
-            UNIVERSAL_KV = {"fp16", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"}
+            UNIVERSAL_KV = {"fp16", "f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"}
             k_fmt = self.config.get("k_cache_type", params.pop("cache_type_k", "q8_0")).lower()
             v_fmt = self.config.get("v_cache_type", params.pop("cache_type_v", "q8_0")).lower()
             if k_fmt not in UNIVERSAL_KV:
@@ -3144,7 +3191,8 @@ class ChatbotApp:
             HardwareProfile.set_priority("above_normal") # ABOVE_NORMAL as per mission
 
             # --- Wit-Layer: Init ---
-            self.process_queue.put({"status": "thinking_status", "content": "Waking up the experts... (SATA speeds, hang tight)"})
+            self.process_queue.put({"status": "status_phase", "phase": "loading", "details": f"Initializing {target_tier.upper()} engine..."})
+            self.process_queue.put({"status": "thinking_status", "content": f"Loading {target_tier.upper()} engine..."})
 
             # --- CORRECTION: Dynamic Formatting and Parameters for Gemma-4 Hardening ---
             is_gemma_family = "gemma" in self.model_path.lower()
@@ -4313,7 +4361,7 @@ class ChatbotApp:
 
         if not self.state.get("response_started", False):
             think = self.thinking_display
-            if think and think.winfo_exists(): think.stop()
+            if think and think.winfo_exists(): think.set_phase("generating")
             self.state["response_start_idx"] = hist.index(tk.END + "-1c")
             self._append_to_chat(f"\n\n{self._get_persona_label()}: ", "ai_lead")
             self.state["response_started"] = True
@@ -4350,7 +4398,7 @@ class ChatbotApp:
 
         if not self.state.get("response_started", False):
             think = self.thinking_display
-            if think and think.winfo_exists(): think.stop()
+            if think and think.winfo_exists(): think.set_phase("generating")
             self.state["response_start_idx"] = hist.index(tk.END + "-1c")
             self._append_to_chat(f"\n\n{self._get_persona_label()}: ", "ai_lead")
             self.state["response_started"] = True
@@ -4679,17 +4727,18 @@ class ChatbotApp:
         if not call_name:
             return full_resp
 
-        # Inform UI
-        self.process_queue.put({"status": "thinking_status", "content": f"Executing tool: {call_name}"})
+        # Inform UI & clean tool invocation syntax from chat output
+        self.process_queue.put({"status": "streaming_replace", "content": ""})
+        self.process_queue.put({"status": "thinking_status", "content": f"Executing tool: {call_name}..."})
         self.process_queue.put({"status": "tool_log_update", "content": f"\n[{time.strftime('%H:%M:%S')}] Executing: {call_name}\nArgs: {args}"})
         
         try:
-            # 1. ATTEMPT EXECUTION
+            # 1. ATTEMPT EXECUTION WITH GRACEFUL FALLBACK
             try:
                 observation = self.tool_registry.execute(call_name, args)
             except Exception as e:
-                observation = f"Error: Tool execution failed. System Exception: {str(e)}"
-                self.process_queue.put({"status": "log_update", "content": f"\n[TOOL FAILURE] {call_name}: {str(e)}\n"})
+                observation = f"Notice: Tool '{call_name}' execution encountered an issue ({str(e)}). Proceeding with baseline knowledge."
+                self.process_queue.put({"status": "log_update", "content": f"\n[TOOL FALLBACK] {call_name}: {str(e)}\n"})
 
             self.process_queue.put({"status": "tool_log_update", "content": f"Result: \n{str(observation)[:200]}..."})
             
@@ -4698,7 +4747,7 @@ class ChatbotApp:
             clean_resp = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', clean_resp, flags=re.IGNORECASE)
             clean_resp = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', clean_resp, flags=re.IGNORECASE)
             
-            forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search / tool results below, provide a direct, helpful answer to the user's original query."
+            forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search / tool results below (or using your existing knowledge if results are unavailable), provide a direct, helpful answer to the user's original query."
             if isinstance(prompt_str, list):
                 new_prompt = list(prompt_str) + [
                     {"role": "assistant", "content": f"Executed tool `{call_name}` with args: {json.dumps(args)}"},
@@ -4719,7 +4768,8 @@ class ChatbotApp:
             return self._run_tool_loop(new_text, new_prompt, params, depth=depth+1)
             
         except Exception as e:
-            return f"{full_resp}\n\nI apologize, but I encountered a system-level error during the synthesis phase: {str(e)}. Please try rephrasing your request."
+            fallback_msg = f"I retrieved tool context for `{call_name}`, but encountered a formatting issue ({str(e)}). Here is the tool output:\n\n{observation if 'observation' in locals() else str(e)}"
+            return fallback_msg
       
     def _detect_repetition(self, text, mode=None):
         """
@@ -5738,25 +5788,9 @@ class ChatbotApp:
         hist = self.chat_history
         start_idx = self.state.get("response_start_idx")
         
-        # 4. Atomic Reset for Rendering
-        # If we were streaming, we need to clear the raw buffer before inserting formatted markdown
-        # MISSION: Preserve Deep Cook dropdowns by avoiding nuke if they exist.
+        # 4. Atomic Reset for Rendering / In-Place Markdown Application
+        # Preserve already-streamed responses to prevent mass-dump flickering
         if self.state.get("response_started") and start_idx:
-            if not self.state.get("deep_cook"):
-                hist.config(state='normal')
-                try:
-                    hist.delete(start_idx, tk.END)
-                except: pass
-                
-                # Re-insert the Lead (e.g. "Cecilia: ")
-                hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
-                hist.config(state='disabled')
-            else:
-                # Deep Cook: Ensure synthesis text starts clean but don't wipe reasoning
-                hist.config(state='normal')
-                hist.insert(tk.END, "\n", ("ai",))
-                hist.config(state='disabled')
-            
             if error:
                 self._append_to_chat(f"\n\n[System Error]: {final_answer}\n\n", "system")
                 self.set_avatar_state("apologetic")
@@ -5765,6 +5799,35 @@ class ChatbotApp:
                         f.write(f"\n[{time.strftime('%H:%M:%S')}] [System Error]: {final_answer}\n")
                 except: pass
                 return
+
+            if think_log and not self.state.get("deep_cook"):
+                # Atomic reset to prepend the expandable thought process block
+                hist.config(state='normal')
+                try:
+                    hist.delete(start_idx, tk.END)
+                except: pass
+                hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
+                hist.config(state='disabled')
+            elif not self.state.get("deep_cook"):
+                hist.config(state='normal')
+                curr_text = hist.get(start_idx, tk.END).strip()
+                lead = f"{self._get_persona_label()}:"
+                # If the content already streamed cleanly, preserve it to prevent mass dump
+                if lead in curr_text and (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                    pass # Stream already complete in-place
+                else:
+                    try:
+                        hist.delete(start_idx, tk.END)
+                    except: pass
+                    hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
+                    if final_answer:
+                        hist.insert(tk.END, final_answer, ("ai",))
+                hist.config(state='disabled')
+            else:
+                # Deep Cook: Ensure synthesis text starts clean but don't wipe reasoning
+                hist.config(state='normal')
+                hist.insert(tk.END, "\n", ("ai",))
+                hist.config(state='disabled')
 
         # 5. UI Rendering (Atomic & Pre-Processed)
         hist.config(state='normal')
@@ -5802,15 +5865,16 @@ class ChatbotApp:
             
             hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
 
-        # 6. Insert Final Answer
-        print(f"[SYSTEM] Delivery: {len(final_answer)} chars (Started: {self.state.get('response_started')}).")
-        if not self.state.get("response_started", False):
-            # In Deep Cook or fast synthesis, the lead might not be in chat yet
-            # MISSION: For Deep Cook, the lead was already added by ui_start, so we only add if missing
-            self._display_ai_message(final_answer, is_streaming=False)
-        else:
+            # Insert Final Answer after thoughts
+            render_start = hist.index(tk.END + "-1c")
             if final_answer:
                 self._append_to_chat(final_answer, "ai")
+        elif not self.state.get("response_started", False):
+            # In unstarted streams, output message directly
+            self._display_ai_message(final_answer, is_streaming=False)
+            render_start = start_idx if start_idx else "1.0"
+        else:
+            render_start = start_idx if start_idx else "1.0"
         
         render_end = hist.index(tk.END + "-1c")
         if render_mode > 0:
@@ -6351,6 +6415,15 @@ class ChatbotApp:
                 except Exception as e:
                     print(f"Avatar load error: {e}")
 
+        # Track DMN State entry/exit
+        if str(state).startswith("dmn"):
+            self.state["dmn_active"] = True
+            if not self.state.get("dmn_entry_time"):
+                self.state["dmn_entry_time"] = time.time()
+        else:
+            self.state["dmn_active"] = False
+            self.state["dmn_entry_time"] = None
+
         if state == "listening": 
             if getattr(self, "idle_timer_id", None) is not None:
                 self.root.after_cancel(self.idle_timer_id)
@@ -6490,6 +6563,8 @@ class ChatbotApp:
 
         if "offline_mode" not in self.config:
             self.config["offline_mode"] = False
+        if "tutorial_completed" not in self.config:
+            self.config["tutorial_completed"] = False
         if "repeat_detection_mode" not in self.config:
             self.config["repeat_detection_mode"] = "lazy"
         if "theme" not in self.config:
@@ -6534,6 +6609,9 @@ class ChatbotApp:
             # Store recommendations for later use without mutating the config now.
             self._auto_detected_layers = self.run_auto_detect()
             # Keep -1 placeholders in gpu_layer_config; they will be replaced on save.
+        
+        if hasattr(self, "_load_dmn_backbone"):
+            self._load_dmn_backbone()
         
         return self.config
 
@@ -6636,7 +6714,8 @@ class ChatbotApp:
         except: pass
 
     def save_config(self):
-        data = {
+        data = dict(self.config)
+        data.update({
             'username': self.get_active_username(),
             'main_window': self.root.winfo_geometry(), 'model_paths': self.model_paths,
             'gpu_layer_config': self.gpu_layer_config, 'context_size_config': self.context_size_config,
@@ -6678,7 +6757,8 @@ class ChatbotApp:
             'status_bar_anim_style': self.config.get("status_bar_anim_style", "spinner"),
             'status_bar_dmn_idle': self.config.get("status_bar_dmn_idle", True),
             'status_bar_fallback_info': self.config.get("status_bar_fallback_info", True),
-        }
+            'tutorial_completed': self.config.get("tutorial_completed", False),
+        })
         with open(self.config_file, 'w') as f: json.dump(data, f, indent=4)
 
     def _get_inference_params(self, temp_messages=None):
@@ -7021,20 +7101,20 @@ class ChatbotApp:
             started = self.stt_manager.start_recording(device_index=dev_idx)
             if started:
                 if self.mic_button:
-                    self.mic_button.config(text="🔴 Rec...", fg="#ff4444", bg="#4a0000")
+                    self.mic_button.config(text="🔴", fg="#ff4444", bg="#4a0000")
                 self._log_and_display("Microphone recording active...")
             else:
                 messagebox.showerror("Audio Error", "Failed to start microphone recording. Check audio input device.")
         else:
             # Stop Recording & Begin Transcription
             if self.mic_button:
-                self.mic_button.config(text="⏳ Dictating...", fg="#ffd700", bg=THEME["button_bg_color"], state="disabled")
+                self.mic_button.config(text="⏳", fg="#ffd700", bg=THEME["button_bg_color"], state="disabled")
             self._log_and_display("Processing speech-to-text transcription...")
             
             wav_bytes = self.stt_manager.stop_recording()
             if not wav_bytes:
                 if self.mic_button:
-                    self.mic_button.config(text="🎙️ Mic", fg=THEME["fg_color"], bg=THEME["button_bg_color"], state="normal")
+                    self.mic_button.config(text="🎙️", fg=THEME["fg_color"], bg=THEME["button_bg_color"], state="normal")
                 self._log_and_display("No speech detected.")
                 return
 
@@ -7053,7 +7133,7 @@ class ChatbotApp:
     def _handle_stt_result(self, transcript: str, error: Optional[str] = None):
         """Inserts transcribed speech into user input field and resets mic button UI."""
         if self.mic_button:
-            self.mic_button.config(text="🎙️ Mic", fg=THEME["fg_color"], bg=THEME["button_bg_color"], state="normal")
+            self.mic_button.config(text="🎙️", fg=THEME["fg_color"], bg=THEME["button_bg_color"], state="normal")
         
         if transcript:
             if self.user_input:
