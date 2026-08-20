@@ -132,7 +132,7 @@ def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_ar
             # Determine target architecture
             orig_arch_lower = orig_arch.lower()
             if "muse" in orig_arch_lower or "glimmer" in orig_arch_lower:
-                target_arch = "llama"
+                target_arch = "qwen2"
             elif "gemma" in orig_arch_lower:
                 # Ensure gemma-4 stays gemma-4 (prevent misrouting to llama)
                 target_arch = orig_arch
@@ -868,26 +868,337 @@ class ThreadSafeList(list):
             return ThreadSafeList(super().copy())
 
 
-class ThinkingDisplay(tk.Frame):
-    def __init__(self, parent, *args, **kwargs):
+class DynamicStatusWidget(tk.Frame):
+    """
+    Advanced configurable status & loading display for SerenityPC.
+    Supports:
+    - Active Generation Tasks (prefill, reasoning, generating, loading, synthesis)
+    - Percentage Gauge (Model loading % & TTFT / Estimated completion)
+    - Selectable Canvas Animations (Spinner, Pulse, Orbit)
+    - Serenity Prayer with smooth text fading
+    - DMN Idle Timer
+    - Hybrid / Smart mode (Auto-switches states and reports final t/s)
+    - Fallback telemetry info (Persona level, KV cache size/quant)
+    """
+    def __init__(self, parent, app=None, *args, **kwargs):
         super().__init__(parent, bg=THEME["bg_color"], *args, **kwargs)
-        self.label = tk.Label(self, text="Thinking...", font=("Open Sans", 10, "italic"), 
-                            fg=THEME["electric_blue"], bg=THEME["bg_color"])
-        self.label.pack(side=tk.LEFT, padx=5)
-        self.progress = ttk.Progressbar(self, mode='indeterminate', length=150)
-        self.progress.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-    
+        self.app = app
+        
+        # State trackers
+        self._is_active = False
+        self._current_phase = "idle"
+        self._start_time = 0.0
+        self._ttft = 0.0
+        self._token_count = 0
+        self._tokens_per_sec = 0.0
+        self._estimated_total_tokens = 0
+        self._status_text = "Ready"
+        self._anim_angle = 0
+        self._anim_job = None
+        self._prayer_idx = 0
+        self._prayer_alpha = 0.0
+        self._prayer_direction = 1
+        self._prayer_pause_counter = 0
+        self._idle_start_time = time.time()
+        self._idle_timer_job = None
+        
+        # UI Components
+        self.header_frame = tk.Frame(self, bg=THEME["bg_color"])
+        self.header_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
+        
+        self.label = tk.Label(
+            self.header_frame, text="System: Ready", font=("Open Sans", 10, "italic"),
+            fg=THEME["electric_blue"], bg=THEME["bg_color"], anchor="w"
+        )
+        self.label.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+        self.telemetry_label = tk.Label(
+            self.header_frame, text="", font=("Consolas", 9),
+            fg="#888888", bg=THEME["bg_color"], anchor="e"
+        )
+        self.telemetry_label.pack(side=tk.RIGHT, padx=5)
+
+        self.progress_container = tk.Frame(self, bg=THEME["bg_color"])
+        self.progress_container.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 2))
+
+        self.progress = ttk.Progressbar(self.progress_container, mode='determinate', length=150)
+        self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        self.gauge_label = tk.Label(
+            self.progress_container, text="", font=("Consolas", 9, "bold"),
+            fg="#00ffcc", bg=THEME["bg_color"], width=18, anchor="e"
+        )
+        self.gauge_label.pack(side=tk.RIGHT, padx=5)
+
+        self.anim_canvas = tk.Canvas(self.header_frame, width=24, height=24, bg=THEME["bg_color"], highlightthickness=0)
+        
+        self.tasks_frame = tk.Frame(self, bg=THEME["bg_color"])
+        self.task_lines_label = tk.Label(
+            self.tasks_frame, text="", font=("Consolas", 9),
+            fg="#a0c0e0", bg=THEME["bg_color"], justify=tk.LEFT, anchor="w"
+        )
+        self.task_lines_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        self.prayer_label = tk.Label(
+            self, text="", font=("Open Sans", 10, "italic"),
+            fg=THEME["electric_blue"], bg=THEME["bg_color"], justify=tk.CENTER
+        )
+
+        self._start_idle_loop()
+
+    def _get_config(self, key, default):
+        if self.app and hasattr(self.app, 'config'):
+            return self.app.config.get(key, default)
+        return default
+
+    def set_phase(self, phase: str, details: str = "", tokens: int = 0, speed: float = 0.0, progress_val: float = -1):
+        self._current_phase = phase
+        if tokens > 0: self._token_count = tokens
+        if speed > 0: self._tokens_per_sec = speed
+
+        mode = self._get_config("status_bar_mode", "hybrid")
+        
+        if phase == "loading":
+            self._status_text = f"[Loading Model] {details}"
+            if progress_val >= 0:
+                self.progress["mode"] = "determinate"
+                self.progress["value"] = progress_val
+                self.gauge_label.config(text=f"LOAD: {progress_val:.0f}%")
+            else:
+                self.progress["mode"] = "indeterminate"
+        elif phase == "prefill":
+            self._status_text = f"[Prefill / Ingest] {details}"
+            self.gauge_label.config(text="PREFILL...")
+        elif phase == "reasoning":
+            self._status_text = f"[Reasoning / Deep Thoughts] {details}"
+            self.gauge_label.config(text="THINKING...")
+        elif phase == "generating":
+            ttft_str = f"TTFT: {self._ttft:.2f}s | " if self._ttft > 0 else ""
+            speed_str = f"{self._tokens_per_sec:.1f} t/s" if self._tokens_per_sec > 0 else f"{self._token_count} tok"
+            self._status_text = f"[Generating] {ttft_str}{speed_str}"
+            if self._estimated_total_tokens > 0:
+                pct = min(100.0, (self._token_count / self._estimated_total_tokens) * 100.0)
+                self.progress["mode"] = "determinate"
+                self.progress["value"] = pct
+                self.gauge_label.config(text=f"{pct:.0f}% ({speed_str})")
+            else:
+                self.gauge_label.config(text=speed_str)
+        elif phase == "complete":
+            speed_str = f"{self._tokens_per_sec:.1f} t/s" if self._tokens_per_sec > 0 else ""
+            self._status_text = f"Complete. {speed_str}".strip()
+            self.gauge_label.config(text=speed_str if speed_str else "DONE")
+            self.progress["value"] = 100
+        else:
+            self._status_text = details if details else "Ready"
+            self.gauge_label.config(text="")
+
+        self.label.config(text=self._status_text)
+        self._update_multiline_tasks()
+        self._update_fallback_info()
+
+    def record_ttft(self, ttft_sec: float):
+        self._ttft = ttft_sec
+
+    def set_estimated_tokens(self, total: int):
+        self._estimated_total_tokens = total
+
+    def _update_multiline_tasks(self):
+        lines = [
+            f"• Phase: {self._current_phase.upper()}",
+            f"• Tokens: {self._token_count} | Speed: {self._tokens_per_sec:.1f} t/s",
+        ]
+        if self._ttft > 0:
+            lines.append(f"• TTFT: {self._ttft:.2f}s")
+        self.task_lines_label.config(text="  ".join(lines))
+
+    def _update_fallback_info(self):
+        if not self._get_config("status_bar_fallback_info", True):
+            self.telemetry_label.config(text="")
+            return
+
+        parts = []
+        if self.app:
+            lvl = getattr(self.app, 'active_persona_level', 3)
+            parts.append(f"Lvl {lvl}")
+            if hasattr(self.app, 'context_size_config') and hasattr(self.app, 'current_model_tier'):
+                tier = self.app.current_model_tier
+                ctx = self.app.context_size_config.get(tier, "Default")
+                parts.append(f"Ctx: {ctx}")
+            if hasattr(self.app, 'config'):
+                quant = self.app.config.get("flash_attention_kv", "q8_0")
+                parts.append(f"KV: {quant}")
+        
+        self.telemetry_label.config(text=" | ".join(parts))
+
     def start(self):
         if not self.winfo_exists(): return
-        self.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
-        self.progress.start(15)
+        self._is_active = True
+        self._start_time = time.time()
+        self._token_count = 0
+        self._tokens_per_sec = 0.0
+        self._ttft = 0.0
+        self.pack(side=tk.TOP, fill=tk.X, padx=10, pady=4)
         
-    def stop(self):
+        mode = self._get_config("status_bar_mode", "hybrid")
+        
+        if mode == "tasks":
+            self.progress_container.pack_forget()
+            self.prayer_label.pack_forget()
+            self.anim_canvas.pack_forget()
+            self.tasks_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
+        elif mode == "percentage":
+            self.tasks_frame.pack_forget()
+            self.prayer_label.pack_forget()
+            self.anim_canvas.pack_forget()
+            self.progress_container.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 2))
+            self.progress["mode"] = "indeterminate"
+            self.progress.start(10)
+        elif mode == "animation":
+            self.tasks_frame.pack_forget()
+            self.progress_container.pack_forget()
+            self.prayer_label.pack_forget()
+            self.anim_canvas.pack(side=tk.RIGHT, padx=5)
+            self._start_canvas_animation()
+        elif mode == "prayer":
+            self.tasks_frame.pack_forget()
+            self.progress_container.pack_forget()
+            self.anim_canvas.pack_forget()
+            self.prayer_label.pack(side=tk.TOP, fill=tk.X, padx=5, pady=4)
+            self._start_prayer_animation()
+        else:  # hybrid
+            self.tasks_frame.pack_forget()
+            self.prayer_label.pack_forget()
+            self.anim_canvas.pack_forget()
+            self.progress_container.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 2))
+            self.progress["mode"] = "indeterminate"
+            self.progress.start(15)
+
+        self._update_fallback_info()
+
+    def stop(self, final_status: str = ""):
         if not self.winfo_exists(): return
+        self._is_active = False
+        self._idle_start_time = time.time()
+        
+        if self._anim_job:
+            try: self.after_cancel(self._anim_job)
+            except Exception: pass
+            self._anim_job = None
+        
         self.progress.stop()
-        self.pack_forget()
-        self.label.config(text="Thinking...")
+        
+        mode = self._get_config("status_bar_mode", "hybrid")
+        if mode == "hybrid" and self._tokens_per_sec > 0:
+            self.set_phase("complete")
+            self.after(2500, self._transition_to_idle)
+        else:
+            self._transition_to_idle()
+
+    def _transition_to_idle(self):
+        if self._is_active: return
+        self.tasks_frame.pack_forget()
+        self.prayer_label.pack_forget()
+        self.anim_canvas.pack_forget()
+        
+        show_dmn = self._get_config("status_bar_dmn_idle", True)
+        if not show_dmn:
+            self.pack_forget()
+        else:
+            self.progress_container.pack_forget()
+            self._update_idle_display()
 
     def update_status(self, text):
         if not self.winfo_exists(): return
+        self._status_text = text
         self.label.config(text=text)
+
+    def _start_canvas_animation(self):
+        anim_style = self._get_config("status_bar_anim_style", "spinner")
+        self.anim_canvas.delete("all")
+        w, h = 24, 24
+        cx, cy = w / 2, h / 2
+        r = 8
+        import math
+        self._anim_angle = (self._anim_angle + 20) % 360
+        rad = math.radians(self._anim_angle)
+
+        if anim_style == "spinner":
+            x2 = cx + r * math.cos(rad)
+            y2 = cy + r * math.sin(rad)
+            self.anim_canvas.create_oval(cx - r, cy - r, cx + r, cy + r, outline="#333333", width=2)
+            self.anim_canvas.create_line(cx, cy, x2, y2, fill="#00ffcc", width=2)
+        elif anim_style == "pulse":
+            scale = 0.5 + 0.5 * math.sin(rad)
+            pr = max(2, int(r * scale))
+            self.anim_canvas.create_oval(cx - pr, cy - pr, cx + pr, cy + pr, fill="#00ffcc", outline="")
+        else:  # orbit
+            x2 = cx + r * math.cos(rad)
+            y2 = cy + r * math.sin(rad)
+            self.anim_canvas.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill="#888888", outline="")
+            self.anim_canvas.create_oval(x2 - 3, y2 - 3, x2 + 3, y2 + 3, fill="#00ffcc", outline="")
+
+        if self._is_active:
+            self._anim_job = self.after(50, self._start_canvas_animation)
+
+    def _start_prayer_animation(self):
+        if not self._is_active: return
+        lines = [
+            "God, grant me the serenity to accept the things I cannot change,",
+            "The courage to change the things I can,",
+            "And the wisdom to know the difference."
+        ]
+        line = lines[self._prayer_idx]
+        
+        val = int(30 + 190 * self._prayer_alpha)
+        hex_col = f"#{val:02x}{val:02x}{val:02x}" if val < 100 else f"#00{val:02x}{val:02x}"
+        self.prayer_label.config(text=line, fg=hex_col)
+
+        if self._prayer_direction == 1:
+            self._prayer_alpha += 0.08
+            if self._prayer_alpha >= 1.0:
+                self._prayer_alpha = 1.0
+                self._prayer_direction = 0
+                self._prayer_pause_counter = 25
+        elif self._prayer_direction == 0:
+            self._prayer_pause_counter -= 1
+            if self._prayer_pause_counter <= 0:
+                self._prayer_direction = -1
+        elif self._prayer_direction == -1:
+            self._prayer_alpha -= 0.08
+            if self._prayer_alpha <= 0.0:
+                self._prayer_alpha = 0.0
+                self._prayer_direction = 1
+                self._prayer_idx = (self._prayer_idx + 1) % len(lines)
+                self._prayer_pause_counter = 40 if self._prayer_idx == 0 else 10
+                self._prayer_direction = 0
+
+        self.after(60, self._start_prayer_animation)
+
+    def _start_idle_loop(self):
+        self._update_idle_display()
+        self._idle_timer_job = self.after(1000, self._start_idle_loop)
+
+    def _update_idle_display(self):
+        if self._is_active: return
+        if not self.winfo_exists(): return
+        
+        show_dmn = self._get_config("status_bar_dmn_idle", True)
+        if not show_dmn: return
+
+        idle_sec = int(time.time() - self._idle_start_time)
+        m, s = divmod(idle_sec, 60)
+        h, m = divmod(m, 60)
+        time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+        dmn_status = "[DMN Idle]"
+        if self.app and hasattr(self.app, 'state'):
+            if self.app.state.get("auto_watch", False):
+                dmn_status = "[DMN Simmering]"
+
+        self.label.config(text=f"{dmn_status} Idle Time: {time_str}")
+        self._update_fallback_info()
+
+
+class ThinkingDisplay(DynamicStatusWidget):
+    def __init__(self, parent, app=None, *args, **kwargs):
+        super().__init__(parent, app=app, *args, **kwargs)

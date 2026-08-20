@@ -57,6 +57,7 @@ from System.markdown_engine import MarkdownEngine
 from System.settings_ui import open_settings_window, run_auto_detect
 from System.vault_manager import VaultManager, DISCLAIMER_WARNING_TEXT
 from System.network_guard import set_offline_mode, is_offline_mode
+from System.stt_manager import STTManager
 
 # --- Debugging & Fault Handling ---
 enable_fault_debugging()
@@ -132,7 +133,7 @@ def load_heavy_libraries():
         nvidia_ml = nvml
         SYSTEM_MONITOR_LOADED = True
     except Exception as e:
-        print(f"Warning: System monitoring libraries (psutil/pynvml) not found. {e}", file=sys.stderr)
+        print(f"Warning: System monitoring libraries (psutil/nvidia-ml-py) not found. {e}", file=sys.stderr)
 
     try:
         import torch as th
@@ -295,6 +296,8 @@ class ChatbotApp:
         self.loading_screen = loading_screen
         self.tool_registry = GemmaToolRegistry(self)
         self.dynamic_param_registry = DynamicParamRegistry()
+        self.stt_manager = STTManager()
+        self.mic_button = None
         
         self._rgb_supported_val = None
         self.media_cache = {}
@@ -321,7 +324,7 @@ class ChatbotApp:
             messagebox.showerror("Dependency Error", EARLY_IMPORT_ERROR_MSG)
             self.root.quit(); return
 
-        self.dirs = {d: os.path.join(self.script_dir, d) for d in ["Media", "History", "Models", "Logs", "System"]}
+        self.dirs = {d: os.path.join(self.script_dir, d) for d in ["Media", "History", "Models", "Logs", "System", "Users"]}
         for d in self.dirs.values(): os.makedirs(d, exist_ok=True)
         
         self.turbo_vec = None
@@ -339,6 +342,9 @@ class ChatbotApp:
             self.config_file = os.path.join(self.script_dir, "config.json")
         self.scratchpad_file = os.path.join(self.dirs["Logs"], "scratchpad.txt")
         self.error_log_file = os.path.join(self.dirs["Logs"], "error_log.txt")
+
+        # Migrate legacy root history & user files
+        self._migrate_legacy_user_files()
 
         # --- Visual Resources ---
         self.fonts = {
@@ -519,6 +525,8 @@ class ChatbotApp:
             "tool_log_update": lambda msg: self._buffer_tool_log(msg.get("content", "")),
             "diag_log_update": lambda msg: self._buffer_diag_log(msg.get("content", "")),
             "thinking_status": lambda msg: self.thinking_display.update_status(msg.get("content", "Thinking...")) if self.thinking_display and self.thinking_display.winfo_exists() else None,
+            "status_phase": lambda msg: self.thinking_display.set_phase(msg.get("phase", ""), msg.get("details", ""), msg.get("tokens", 0), msg.get("speed", 0.0), msg.get("progress_val", -1)) if self.thinking_display and self.thinking_display.winfo_exists() else None,
+            "status_ttft": lambda msg: self.thinking_display.record_ttft(msg.get("ttft", 0.0)) if self.thinking_display and self.thinking_display.winfo_exists() else None,
             "streaming": lambda msg: self._buffer_text(msg.get("content", "")),
             "streaming_replace": lambda msg: self._replace_ai_message(msg.get("content", "")),
             "success": lambda msg: self._handle_session_finished({"user_msg": self.last_user_message, "final_answer": msg.get("content", ""), "is_error": False}),
@@ -529,6 +537,7 @@ class ChatbotApp:
             "deep_cook_ui_stream": lambda msg: self._handle_deep_cook_ui_stream(msg),
             "vision_oneshot_finish": lambda msg: self.offload_model(),
             "video_progress": lambda msg: self._set_progress(msg.get("content", 0)),
+            "stt_transcript": lambda msg: self._handle_stt_result(msg.get("content", ""), msg.get("error", None)),
             "error": lambda msg: self._handle_session_finished({"user_msg": self.last_user_message, "final_answer": msg.get("content", ""), "is_error": True}),
             "cleanup": lambda msg: self._run_hygiene_on_main_thread()
         }
@@ -539,12 +548,76 @@ class ChatbotApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.set_ui_state(model_loaded=False, generating=False)
 
+    # ================= USER PROFILES & DIRECTORIES =================
+    def get_active_username(self) -> str:
+        un = str(self.config.get("username", "Default")).strip()
+        return un if un else "Default"
+
+    def get_user_history_dir(self, username: Optional[str] = None) -> str:
+        un = username if username else self.get_active_username()
+        p = os.path.join(self.dirs["History"], un)
+        os.makedirs(p, exist_ok=True)
+        return p
+
+    def get_user_dir(self, username: Optional[str] = None) -> str:
+        un = username if username else self.get_active_username()
+        p = os.path.join(self.dirs["Users"], un)
+        os.makedirs(p, exist_ok=True)
+        return p
+
+    def list_user_profiles(self) -> List[str]:
+        users = set(["Default"])
+        if os.path.exists(self.dirs["Users"]):
+            for item in os.listdir(self.dirs["Users"]):
+                if os.path.isdir(os.path.join(self.dirs["Users"], item)) and item != "backups":
+                    users.add(item)
+        if os.path.exists(self.dirs["History"]):
+            for item in os.listdir(self.dirs["History"]):
+                if os.path.isdir(os.path.join(self.dirs["History"], item)) and item != "backups":
+                    users.add(item)
+        curr = self.get_active_username()
+        if curr: users.add(curr)
+        return sorted(list(users))
+
+    def switch_user(self, new_username: str):
+        clean_un = "".join(c for c in new_username.strip() if c.isalnum() or c in ("-", "_", " ")).strip()
+        if not clean_un: clean_un = "Default"
+        
+        self.config["username"] = clean_un
+        self.save_config()
+        self.get_user_dir(clean_un)
+        self.get_user_history_dir(clean_un)
+        self._load_dmn_backbone()
+        if hasattr(self, 'load_history'):
+            self.load_history(render_active=True)
+        if hasattr(self, 'refresh_history_view') and getattr(self, 'active_tab', '') == "history":
+            self.refresh_history_view()
+        self._log_and_display(f"Switched user profile to: {clean_un}")
+
+    def _migrate_legacy_user_files(self):
+        """Auto-migrates legacy flat History/*.history.* files into History/Default/"""
+        try:
+            hist_root = self.dirs.get("History")
+            if hist_root and os.path.exists(hist_root):
+                target_def = os.path.join(hist_root, "Default")
+                for f in os.listdir(hist_root):
+                    full_p = os.path.join(hist_root, f)
+                    if os.path.isfile(full_p) and (f.endswith(".history.jsonz") or f.endswith(".history.encz")):
+                        os.makedirs(target_def, exist_ok=True)
+                        dest = os.path.join(target_def, f)
+                        if not os.path.exists(dest):
+                            shutil.move(full_p, dest)
+        except Exception as e:
+            print(f"[USER] Legacy migration warning: {e}")
+
     # ================= UI & SETUP =================
     def final_initial_setup(self):
         if self.state["initial_setup"]: return
         self.state["initial_setup"] = True
         self.config = self.load_config()
-        if 'main_window' in self.config: self.root.geometry(self.config['main_window'])
+        if 'main_window' in self.config and self.config['main_window']: 
+            self.root.geometry(self.config['main_window'])
+        self.root.minsize(960, 640)
         
         if self.loading_screen:
             self.loading_screen.stop_and_destroy()
@@ -574,6 +647,9 @@ class ChatbotApp:
 
         # Non-blocking, lazy query for RGB support
         self._check_rgb_support_async()
+
+        # Synchronize button state and colors with loaded config
+        self.set_ui_state(model_loaded=(self.model is not None), generating=False)
 
         # Non-blocking, background initialization for TurboVec history indexing
         threading.Thread(target=self._init_turbovec, daemon=True).start()
@@ -863,7 +939,7 @@ class ChatbotApp:
         s_frame = tk.Frame(chat_frame, bg=THEME["trim_color"])
         self.status_frame = s_frame
         s_frame.pack(side=tk.TOP, fill=tk.X)
-        self.thinking_display = ThinkingDisplay(s_frame)
+        self.thinking_display = ThinkingDisplay(s_frame, app=self)
 
         # --- TEXT WIDGETS ---
         # 1. Floating Pinned Prompt (Hidden on startup)
@@ -990,6 +1066,9 @@ class ChatbotApp:
         
         btn_send = self._add_btn(ctrl_frame, "Send", self.send_message, side=tk.RIGHT)
         self.send_button = btn_send
+        
+        btn_mic = self._add_btn(ctrl_frame, "🎙️ Mic", self.toggle_voice_recording, side=tk.RIGHT, font=self.fonts["main"])
+        self.mic_button = btn_mic
         
         btn_deep = self._add_btn(ctrl_frame, "Deep Cook", self.toggle_deep_cook_mode, side=tk.RIGHT)
         self.deep_thought_button = btn_deep
@@ -1185,9 +1264,13 @@ class ChatbotApp:
         if self.history_menu_frame is not None:
             self.history_menu_frame.pack_forget()
         
-        # Bring back the pinned prompt and chat history
-        if self.prompt_display is not None:
-            self.prompt_display.pack(side=tk.TOP, fill="x", padx=2, pady=(2, 0))
+        # Bring back the pinned prompt only if it contains active text
+        if self.prompt_display is not None and self.prompt_display.winfo_exists():
+            prompt_txt = self.prompt_display.get("1.0", tk.END).strip()
+            if prompt_txt:
+                self.prompt_display.pack(side=tk.TOP, fill="x", padx=2, pady=(2, 0))
+            else:
+                self.prompt_display.pack_forget()
         
         # We pack chat_history first so we can refer to it with 'before=' if we pack others dynamically
         if self.chat_history is not None:
@@ -1501,9 +1584,9 @@ class ChatbotApp:
         widget.bind("<Leave>", _on_leave, add="+")
 
     def _get_all_history_entries(self):
-        """Scans History directory and parses metadata and date categories."""
+        """Scans User History directory and parses metadata and date categories."""
         import datetime
-        history_dir = self.dirs.get("History")
+        history_dir = self.get_user_history_dir() if hasattr(self, 'get_user_history_dir') else self.dirs.get("History")
         if not history_dir or not os.path.exists(history_dir):
             return []
 
@@ -1596,7 +1679,7 @@ class ChatbotApp:
 
     def _async_deep_history_search(self, query):
         """Deep Full-Text Search inside raw .history.jsonz and .history.encz message contents."""
-        history_dir = self.dirs.get("History")
+        history_dir = self.get_user_history_dir() if hasattr(self, 'get_user_history_dir') else self.dirs.get("History")
         if not history_dir or not os.path.exists(history_dir): return
 
         matches = {}
@@ -1788,7 +1871,7 @@ class ChatbotApp:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save edits: {e}")
 
-    def clear_chat_ui(self):
+    def clear_chat_ui(self, preserve_pending=True):
         # Clear the Pinned Prompt
         if hasattr(self, 'prompt_display') and self.prompt_display.winfo_exists():
             self.prompt_display.pack_forget()
@@ -1802,6 +1885,13 @@ class ChatbotApp:
                 if self.chat_history.winfo_exists():
                     self.chat_history.config(state='normal')
                     self.chat_history.delete('1.0', tk.END)
+                    
+                    # If we have a pending task with a user message, preserve its display during loading
+                    if preserve_pending and getattr(self, 'pending_task', None) and isinstance(self.pending_task, dict):
+                        p_msg = self.pending_task.get("message", "")
+                        if p_msg:
+                            self.chat_history.insert(tk.END, f"\nYou: {p_msg}\n", ("user",))
+                            
                     self.chat_history.config(state='disabled')
                     self.state["response_started"] = False
             except tk.TclError: pass
@@ -3450,6 +3540,7 @@ class ChatbotApp:
 
             status_text = "Analyzing logical momentum..." if self.active_persona_level >= 3 else "Direct Strike: Pre-computing..."
             self.process_queue.put({"status": "thinking_status", "content": status_text})
+            self.process_queue.put({"status": "status_phase", "phase": "prefill", "details": "Ingesting prompt context..."})
             
             # GIL-Safety: Internal Streaming with Thought Stream Demuxing & Draft Rollback Protection
             full_resp = ""
@@ -3462,6 +3553,10 @@ class ChatbotApp:
             openers = ["<think>", "<|channel>thought", "<thought>", "<|think|>", "<|im_start|>thought", "[draft]"]
             closers = ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "<|channel>text", "<|channel>assistant"]
 
+            t_gen_start = time.time()
+            ttft_recorded = False
+            token_count = 0
+
             gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
             for chunk in gen_iterator:
                 if self.stop_process.is_set(): break
@@ -3469,6 +3564,22 @@ class ChatbotApp:
                     txt = chunk["choices"][0]["delta"]["content"]
                     full_resp += txt
                     lower_resp = full_resp.lower()
+
+                    if not ttft_recorded:
+                        ttft = time.time() - t_gen_start
+                        ttft_recorded = True
+                        self.process_queue.put({"status": "status_ttft", "ttft": ttft})
+                    
+                    token_count += 1
+                    elapsed = max(0.001, time.time() - t_gen_start)
+                    cur_speed = token_count / elapsed
+                    if token_count % 3 == 0:
+                        self.process_queue.put({
+                            "status": "status_phase", 
+                            "phase": "reasoning" if in_thought_channel else "generating", 
+                            "tokens": token_count, 
+                            "speed": cur_speed
+                        })
                     
                     if not thought_detected:
                         if any(tag in lower_resp for tag in openers):
@@ -3516,6 +3627,10 @@ class ChatbotApp:
                     self.process_queue.put({"status": "diag_log_update", "content": "[RUNTIME] Repetition loop detected! Breaking inference stream to preserve sanity."})
                     print("[RUNTIME] Repetition loop detected! Breaking inference stream.")
                     break
+
+            elapsed_total = max(0.001, time.time() - t_gen_start)
+            final_speed = token_count / elapsed_total if token_count > 0 else 0.0
+            self.process_queue.put({"status": "status_phase", "phase": "complete", "tokens": token_count, "speed": final_speed})
 
             think_log = ""
             final_answer = full_resp.strip()
@@ -4491,14 +4606,6 @@ class ChatbotApp:
 
     def _run_tool_loop(self, full_resp, prompt_str, params, depth=0):
         """
-        Parses tool calls from model output, executes them, and recursively 
-        generates the final answer. Max depth 3 to prevent runaway inference.
-        """
-        if depth > 3:
-            return f"{full_resp}\n\n[SYSTEM]: Tool recursion limit reached. Truncating response."
-
-    def _run_tool_loop(self, full_resp, prompt_str, params, depth=0):
-        """
         Parses tool calls from model output (supporting Programmatic Tool Calling Python syntax
         and legacy tags), executes them, and recursively generates the final answer.
         Max depth 3 to prevent runaway inference.
@@ -4614,22 +4721,76 @@ class ChatbotApp:
         except Exception as e:
             return f"{full_resp}\n\nI apologize, but I encountered a system-level error during the synthesis phase: {str(e)}. Please try rephrasing your request."
       
-    def _detect_repetition(self, text, min_len=45, max_repeats=3):
-        """Detects if any substring of at least min_len characters is repeated max_repeats or more times in the last 400 characters."""
+    def _detect_repetition(self, text, mode=None):
+        """
+        Detects repetitive generation loops according to the configured mode:
+        - 'off': Loop detection disabled (never interrupts).
+        - 'lazy': Relaxed detection for coding and repeated tool calling (ignores code blocks/tool syntax, high repetition threshold).
+        - 'hyper': Aggressive detection with tight substring matching and stall phrase checks.
+        """
         if not text:
             return False
-        recent = text[-400:]
-        n = len(recent)
-        
-        # Self-correction stall / hallucination loop detection
-        stall_phrases = ["re-read", "re-read", "reread", "look again", "let me look", "actually the prompt", "wait, the input"]
-        stall_count = sum(recent.lower().count(phrase) for phrase in stall_phrases)
-        if stall_count >= 3:
-            return True
+            
+        if mode is None:
+            mode = self.config.get("repeat_detection_mode", "lazy").lower()
+        else:
+            mode = str(mode).lower()
 
+        if mode == "off":
+            return False
+
+        if mode == "hyper":
+            recent = text[-400:]
+            n = len(recent)
+            
+            stall_phrases = ["re-read", "reread", "look again", "let me look", "actually the prompt", "wait, the input"]
+            stall_count = sum(recent.lower().count(phrase) for phrase in stall_phrases)
+            if stall_count >= 3:
+                return True
+
+            min_len = 35
+            max_repeats = 3
+            if n < min_len * max_repeats:
+                return False
+            
+            seen = set()
+            for i in range(n - min_len + 1):
+                sub = recent[i:i+min_len]
+                if sub in seen:
+                    continue
+                seen.add(sub)
+                if not any(c.isalnum() for c in sub):
+                    continue
+                if recent.count(sub) >= max_repeats:
+                    return True
+            return False
+
+        # Default / "lazy" mode:
+        # 1. Filter out code blocks and tool calls so repetitive code / tool queries don't trigger false positives
+        cleaned = re.sub(r'```[\s\S]*?```', ' [CODE_BLOCK] ', text)
+        cleaned = re.sub(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)[\s\S]*?(?:<\/(?:execute_tool|executetool)>|\}|\n|$)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\b(?:web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\([\s\S]*?\)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
+
+        recent = cleaned[-800:]
+        n = len(recent)
+
+        # Check for consecutive repeating identical lines (e.g. spamming the exact same sentence 5+ times)
+        lines = [line.strip() for line in recent.split('\n') if len(line.strip()) >= 15]
+        if len(lines) >= 5:
+            consecutive_count = 1
+            for j in range(1, len(lines)):
+                if lines[j] == lines[j - 1] and lines[j] not in ["[CODE_BLOCK]", "[TOOL_CALL]"]:
+                    consecutive_count += 1
+                    if consecutive_count >= 5:
+                        return True
+                else:
+                    consecutive_count = 1
+
+        min_len = 80
+        max_repeats = 4
         if n < min_len * max_repeats:
             return False
-        
+
         seen = set()
         for i in range(n - min_len + 1):
             sub = recent[i:i+min_len]
@@ -5921,13 +6082,14 @@ class ChatbotApp:
 
     def get_history_path(self): 
         if not self.model_path: return None
+        hist_dir = self.get_user_history_dir()
         base = f"{os.path.splitext(os.path.basename(self.model_path))[0]}_lvl{self.active_persona_level}.history"
-        p_enc = os.path.join(self.dirs["History"], f"{base}.encz")
-        p_jsonz = os.path.join(self.dirs["History"], f"{base}.jsonz")
+        p_enc = os.path.join(hist_dir, f"{base}.encz")
+        p_jsonz = os.path.join(hist_dir, f"{base}.jsonz")
         if os.path.exists(p_enc): return p_enc
         if os.path.exists(p_jsonz): return p_jsonz
         ext = ".encz" if (hasattr(self, 'vault_manager') and self.vault_manager.is_lock_enabled()) else ".jsonz"
-        return os.path.join(self.dirs["History"], f"{base}{ext}")
+        return os.path.join(hist_dir, f"{base}{ext}")
 
     def save_history(self):
         if self.config.get("ghost_mode", False):
@@ -6228,7 +6390,7 @@ class ChatbotApp:
                 log_win = self.log_window_item
                 if log_win is not None:
                     canvas_r.coords(log_win, w/2, h/4)
-                    canvas_r.itemconfigure(log_win, width=w, height=h//2)
+                    canvas_r.itemconfigure(log_win, width=max(10, w - 20), height=max(10, h//2 - 20))
                 
                 av_img = self.avatar_image_item
                 if av_img is not None:
@@ -6328,6 +6490,8 @@ class ChatbotApp:
 
         if "offline_mode" not in self.config:
             self.config["offline_mode"] = False
+        if "repeat_detection_mode" not in self.config:
+            self.config["repeat_detection_mode"] = "lazy"
         if "theme" not in self.config:
             self.config["theme"] = "default"
         if "texture_style" not in self.config:
@@ -6447,25 +6611,33 @@ class ChatbotApp:
             print(f"[THEME] Theme re-application warning: {e}")
 
     def _load_dmn_backbone(self):
-        p = os.path.join(self.dirs["System"], "dmn_backbone.json")
+        user_dir = self.get_user_dir()
+        p = os.path.join(user_dir, "dmn_backbone.json")
+        fallback_p = os.path.join(self.dirs["System"], "dmn_backbone.json")
         try:
             if os.path.exists(p):
-                with open(p, 'r') as f:
+                with open(p, 'r', encoding='utf-8') as f:
                     self.state["dmn_backbone"] = json.load(f)
+            elif os.path.exists(fallback_p):
+                with open(fallback_p, 'r', encoding='utf-8') as f:
+                    self.state["dmn_backbone"] = json.load(f)
+                self._save_dmn_backbone()
             else:
                 self.state["dmn_backbone"] = {}
         except:
             self.state["dmn_backbone"] = {}
 
     def _save_dmn_backbone(self):
-        p = os.path.join(self.dirs["System"], "dmn_backbone.json")
+        user_dir = self.get_user_dir()
+        p = os.path.join(user_dir, "dmn_backbone.json")
         try:
-            with open(p, 'w') as f:
+            with open(p, 'w', encoding='utf-8') as f:
                 json.dump(self.state["dmn_backbone"], f, indent=4)
         except: pass
 
     def save_config(self):
         data = {
+            'username': self.get_active_username(),
             'main_window': self.root.winfo_geometry(), 'model_paths': self.model_paths,
             'gpu_layer_config': self.gpu_layer_config, 'context_size_config': self.context_size_config,
             'temp_config': self.temp_config,
@@ -6501,6 +6673,11 @@ class ChatbotApp:
             'theme': self.config.get("theme", "default"),
             'texture_style': self.config.get("texture_style", "default"),
             'frosted_glass': self.config.get("frosted_glass", False),
+            'repeat_detection_mode': self.config.get("repeat_detection_mode", "lazy"),
+            'status_bar_mode': self.config.get("status_bar_mode", "hybrid"),
+            'status_bar_anim_style': self.config.get("status_bar_anim_style", "spinner"),
+            'status_bar_dmn_idle': self.config.get("status_bar_dmn_idle", True),
+            'status_bar_fallback_info': self.config.get("status_bar_fallback_info", True),
         }
         with open(self.config_file, 'w') as f: json.dump(data, f, indent=4)
 
@@ -6514,6 +6691,10 @@ class ChatbotApp:
         if "<|end_of_turn|>" not in stops: stops.append("<|end_of_turn|>") # Fallback for old models
         if "<|/>" not in stops: stops.append("<|/>")
         if "<turn/>" not in stops: stops.append("<turn/>")
+        if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
+            for tok in ["<|end_of_text|>", "<|eot|>"]:
+                if tok not in stops: stops.append(tok)
+            stops = [s for s in stops if s != "<|eom|>"]
         
         # Baseline defaults
         inf_params = {
@@ -6659,6 +6840,23 @@ class ChatbotApp:
                 btn_hurry.config(state='normal' if (is_gen or is_loading) else 'disabled')
             if btn_deep is not None:
                 btn_deep.config(state='disabled' if (is_loading or is_gen) else 'normal')
+            
+            # Synchronize Ghost and History Usage button labels & colors
+            if hasattr(self, 'ghost_button') and self.ghost_button is not None:
+                self.ghost_button.config(
+                    text=self._get_ghost_mode_label(),
+                    fg=self._get_ghost_mode_color(),
+                    state='disabled' if is_gen else 'normal'
+                )
+            if hasattr(self, 'history_usage_button') and self.history_usage_button is not None:
+                self.history_usage_button.config(
+                    text=self._get_history_usage_label(),
+                    fg=self._get_history_usage_color(),
+                    state='disabled' if is_gen else 'normal'
+                )
+            if hasattr(self, 'mic_button') and self.mic_button is not None:
+                if not (hasattr(self, 'stt_manager') and self.stt_manager.is_recording):
+                    self.mic_button.config(state='disabled' if (is_gen or is_loading) else 'normal')
         except: pass
 
     def _handle_input_key(self, event):
@@ -6810,6 +7008,65 @@ class ChatbotApp:
         self.history_usage_button.config(text=self._get_history_usage_label(), fg=self._get_history_usage_color())
         label_disp = "CURRENT WINDOW" if next_mode == "current_window" else next_mode.upper()
         self._log_and_display(f"History usage set to: {label_disp}")
+
+    def toggle_voice_recording(self):
+        """Toggles push-to-record voice input using sounddevice and local STTManager."""
+        if not hasattr(self, "stt_manager") or not self.stt_manager.is_available():
+            messagebox.showwarning("STT Unavailable", "Audio recording dependencies (sounddevice, speech_recognition) are not available.")
+            return
+
+        if not self.stt_manager.is_recording:
+            # Start Recording
+            dev_idx = self.config.get("stt_device_index", None)
+            started = self.stt_manager.start_recording(device_index=dev_idx)
+            if started:
+                if self.mic_button:
+                    self.mic_button.config(text="🔴 Rec...", fg="#ff4444", bg="#4a0000")
+                self._log_and_display("Microphone recording active...")
+            else:
+                messagebox.showerror("Audio Error", "Failed to start microphone recording. Check audio input device.")
+        else:
+            # Stop Recording & Begin Transcription
+            if self.mic_button:
+                self.mic_button.config(text="⏳ Dictating...", fg="#ffd700", bg=THEME["button_bg_color"], state="disabled")
+            self._log_and_display("Processing speech-to-text transcription...")
+            
+            wav_bytes = self.stt_manager.stop_recording()
+            if not wav_bytes:
+                if self.mic_button:
+                    self.mic_button.config(text="🎙️ Mic", fg=THEME["fg_color"], bg=THEME["button_bg_color"], state="normal")
+                self._log_and_display("No speech detected.")
+                return
+
+            lang = self.config.get("stt_language", "en-US")
+            
+            def _on_stt_done(transcript, err):
+                self.process_queue.put({"status": "stt_transcript", "content": transcript, "error": err})
+
+            self.stt_manager.transcribe_wav_bytes(
+                wav_bytes,
+                language=lang,
+                on_complete=_on_stt_done,
+                llm_model=self.model if (self.model and getattr(self.model, "chat_handler", None) is not None) else None
+            )
+
+    def _handle_stt_result(self, transcript: str, error: Optional[str] = None):
+        """Inserts transcribed speech into user input field and resets mic button UI."""
+        if self.mic_button:
+            self.mic_button.config(text="🎙️ Mic", fg=THEME["fg_color"], bg=THEME["button_bg_color"], state="normal")
+        
+        if transcript:
+            if self.user_input:
+                existing = self.user_input.get("1.0", tk.END).strip()
+                new_text = f"{existing} {transcript}".strip() if existing else transcript
+                self.user_input.delete("1.0", tk.END)
+                self.user_input.insert("1.0", new_text)
+                self.user_input.see(tk.END)
+            self._log_and_display(f"Dictated: \"{transcript}\"")
+        elif error:
+            self._log_and_display(f"STT: {error}")
+        else:
+            self._log_and_display("No speech recognized.")
 
     def _init_turbovec(self):
         try:

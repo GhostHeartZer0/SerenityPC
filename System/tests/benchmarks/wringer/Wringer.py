@@ -34,9 +34,11 @@ from typing import List, Dict, Any
 
 
 class WringerFramework:
-    def __init__(self, judge_model_path: str = None, manual_grading: bool = False):
+    def __init__(self, judge_model_path: str = None, manual_grading: bool = False, weight_speed: bool = False, auto_open_charts: bool = False):
         self.judge_model_path = judge_model_path
         self.manual_grading = manual_grading
+        self.weight_speed = weight_speed
+        self.auto_open_charts = auto_open_charts
         # Define evaluation metrics
         self.metrics = [
             "math reasoning", "spatial reasoning", "logic puzzle", 
@@ -204,131 +206,133 @@ class WringerFramework:
                 "Simulate a real-time multimodal tactical session: Monitor a live game state and deliver high-stress combat adjustments (e.g., tracking a boss armor phase while managing status effects).",
                 "provide 20-30 example interactions between a user and a live assistant"
             ],
-            "carwash_test": [
+            "carwash": [
                 "I need to wash my car, which is at home with me. The automated car wash is 50 meters away. Should I drive or walk? I could use some exercise."
             ]
         }
 
-    def calculate_dynamic_gpu_layers(self, model_path: str, ctx_size: int, targeted_reserve_vram_mb: int = 5400) -> int:
-        import os, struct
-        if not model_path or not os.path.exists(model_path):
-            return 0
-        
-        total_layers = 0
-        expert_count = 0
-        expert_used_count = 0
-        
-        # Method A: Try gguf / llama_cpp GGUFReader
+    def _get_system_vram_info(self) -> Dict[str, float]:
+        """Calculates free and total VRAM via PyNVML / NVIDIA-SMI."""
+        free_mb = 0.0
+        total_mb = 0.0
         try:
-            try:
-                from gguf import GGUFReader
-                reader = GGUFReader(model_path)
-            except Exception:
-                from llama_cpp.llama_speculative import LlamaGGUFReader
-                reader = LlamaGGUFReader(model_path)
-            
-            fields = reader.fields.values() if isinstance(getattr(reader, 'fields', None), dict) else getattr(reader, 'fields', [])
-            for field in fields:
-                field_name = getattr(field, 'name', '') or getattr(field, 'key', '')
-                parts = getattr(field, 'parts', [])
-                if field_name.endswith(".block_count") and parts:
-                    total_layers = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
-                elif field_name.endswith(".expert_count") and parts:
-                    expert_count = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
-                elif field_name.endswith(".expert_used_count") and parts:
-                    expert_used_count = int(parts[0][0] if isinstance(parts[0], (list, tuple, np.ndarray)) else parts[0])
+            import pynvml
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            free_mb = mem_info.free / (1024 ** 2)
+            total_mb = mem_info.total / (1024 ** 2)
+            pynvml.nvmlShutdown()
         except Exception:
-            pass
-            
-        # Method B: Fallback to binary parser
-        if total_layers == 0 or expert_count == 0:
             try:
-                with open(model_path, "rb") as f:
-                    magic = f.read(4)
-                    if magic == b"GGUF":
-                        version = struct.unpack("<I", f.read(4))[0]
-                        tensor_count = struct.unpack("<Q", f.read(8))[0]
-                        kv_count = struct.unpack("<Q", f.read(8))[0]
-                        
-                        def read_str(file_obj):
-                            length = struct.unpack("<Q", file_obj.read(8))[0]
-                            return file_obj.read(length).decode("utf-8", errors="ignore")
-                            
-                        def skip_value(file_obj, val_type):
-                            if val_type in [0, 1, 7]: file_obj.read(1)
-                            elif val_type in [2, 3]: file_obj.read(2)
-                            elif val_type in [4, 5, 6]: file_obj.read(4)
-                            elif val_type in [10, 11, 12]: file_obj.read(8)
-                            elif val_type == 8:
-                                length = struct.unpack("<Q", file_obj.read(8))[0]
-                                file_obj.read(length)
-                            elif val_type == 9:
-                                item_type = struct.unpack("<I", file_obj.read(4))[0]
-                                array_len = struct.unpack("<Q", file_obj.read(8))[0]
-                                for _ in range(array_len):
-                                    skip_value(file_obj, item_type)
-                            else:
-                                raise ValueError(f"Unknown GGUF type: {val_type}")
-                                
-                        for _ in range(kv_count):
-                            key = read_str(f)
-                            val_type = struct.unpack("<I", f.read(4))[0]
-                            if key.endswith(".block_count"):
-                                if val_type == 4: total_layers = struct.unpack("<I", f.read(4))[0]
-                                elif val_type == 5: total_layers = struct.unpack("<i", f.read(4))[0]
-                                elif val_type == 10: total_layers = struct.unpack("<Q", f.read(8))[0]
-                                elif val_type == 11: total_layers = struct.unpack("<q", f.read(8))[0]
-                            elif key.endswith(".expert_count"):
-                                if val_type == 4: expert_count = struct.unpack("<I", f.read(4))[0]
-                                elif val_type == 5: expert_count = struct.unpack("<i", f.read(4))[0]
-                                elif val_type == 10: expert_count = struct.unpack("<Q", f.read(8))[0]
-                                elif val_type == 11: expert_count = struct.unpack("<q", f.read(8))[0]
-                            elif key.endswith(".expert_used_count"):
-                                if val_type == 4: expert_used_count = struct.unpack("<I", f.read(4))[0]
-                                elif val_type == 5: expert_used_count = struct.unpack("<i", f.read(4))[0]
-                                elif val_type == 10: expert_used_count = struct.unpack("<Q", f.read(8))[0]
-                                elif val_type == 11: expert_used_count = struct.unpack("<q", f.read(8))[0]
-                            else:
-                                skip_value(f, val_type)
+                import subprocess
+                smi_output = subprocess.check_output(
+                    ["nvidia-smi", "--query-gpu=memory.free,memory.total", "--format=csv,nounits,noheader"],
+                    encoding="utf-8"
+                )
+                free_str, total_str = smi_output.strip().split("\n")[0].split(",")
+                free_mb = float(free_str.strip())
+                total_mb = float(total_str.strip())
             except Exception:
-                pass
+                # Default safety fallback (Assume 8GB with 6GB free)
+                free_mb = 6144.0
+                total_mb = 8192.0
+                
+        return {"free_mb": free_mb, "total_mb": total_mb}
 
-        if total_layers == 0:
-            total_layers = 32
+    def calculate_dynamic_gpu_layers(self, model_path: str, context_size: int = 2048) -> int:
+        """Dynamically calculates max safe offloadable layers for a model without OOM."""
+        vram_info = self._get_system_vram_info()
+        available_vram_mb = vram_info["free_mb"]
+        
+        # Buffer reserve (1000 MiB safety headroom for PyTorch, desktop GUI, CUDA graphs)
+        VRAM_SAFETY_BUFFER_MB = 1000.0
+        usable_vram_mb = max(0.0, available_vram_mb - VRAM_SAFETY_BUFFER_MB)
+        
+        # Parse GGUF architecture if possible
+        total_layers = 33 # Default standard fallback
+        is_moe = False
+        expert_count = 0
+        try:
+            from gguf import GGUFReader
+            reader = GGUFReader(model_path)
+            
+            # Extract block count
+            for field in reader.fields.values():
+                if field.name.endswith(".block_count"):
+                    total_layers = int(field.parts[field.data[0]])
+                    break
+                if field.name.endswith(".expert_count"):
+                    expert_count = int(field.parts[field.data[0]])
+                    is_moe = True
+        except Exception:
+            # Fallback based on file size heuristic
+            file_size_gb = os.path.getsize(model_path) / (1024 ** 3)
+            if file_size_gb > 15:
+                total_layers = 64
+            elif file_size_gb > 8:
+                total_layers = 48
+            else:
+                total_layers = 33
 
-        file_size_bytes = os.path.getsize(model_path)
-        model_base_vram_mb = file_size_bytes / (1024 * 1024)
+        # Model file base weights
+        model_size_mb = os.path.getsize(model_path) / (1024 ** 2)
         
-        vram_per_layer = model_base_vram_mb / total_layers
+        # Context KV cache calculation (Q4_0 cache ~ 0.5 bytes per element per layer)
+        # Formula: 2 (K+V) * context * n_embd_head * n_head_kv * bytes_per_elem * layers
+        # Rough average estimation: ~0.15 MB per layer per 1024 context at Q4_0
+        kv_cache_vram_mb = (context_size / 1024.0) * 0.15 * total_layers
         
-        raw_kv_est = (ctx_size / 49152) * 900.0
-        kv_cache_vram_mb = max(250.0, min(targeted_reserve_vram_mb * 0.35, raw_kv_est))
-
-        available_weight_vram = targeted_reserve_vram_mb - kv_cache_vram_mb
+        # Determine remaining VRAM for base layer weights
+        vram_for_weights = usable_vram_mb - kv_cache_vram_mb
         
-        if available_weight_vram <= 0:
+        if vram_for_weights <= 0:
             return 0
             
-        safe_layers = int(available_weight_vram // vram_per_layer)
-        final_layers = max(0, min(total_layers, safe_layers))
-
-        print("--- DYNAMIC VRAM REPORT (WRINGER) ---")
-        print(f"Model Detected:   {os.path.basename(model_path)}")
-        if expert_count > 0:
-            print(f"Model Type:       Mixture of Experts (MoE)")
-            print(f"MoE Router Map:   {expert_used_count}/{expert_count} experts active per token")
+        if is_moe and expert_count > 0:
+            # MoE weights: Only active experts contribute to active compute, but all layers reside in memory
+            vram_per_layer = model_size_mb / total_layers
+        else:
+            vram_per_layer = model_size_mb / total_layers
+            
+        calculated_layers = int(vram_for_weights / vram_per_layer)
+        
+        # Apply bounds
+        final_layers = max(0, min(total_layers, calculated_layers))
+        
+        # Formatting diagnostic log
+        print(f"\n[--- Dynamic Auto-Offload Calculation ---]")
+        print(f"Model:            {os.path.basename(model_path)}")
+        print(f"Usable VRAM:      {usable_vram_mb:.1f} MiB")
+        if is_moe:
+            print(f"Model Type:       MoE ({expert_count} Experts)")
         else:
             print(f"Model Type:       Dense")
         print(f"Total Layers:     {total_layers}")
-        print(f"File/Weight Size: {model_base_vram_mb:.1f} MiB (~{vram_per_layer:.1f} MiB/layer)")
+        print(f"File/Weight Size: {model_size_mb:.1f} MiB (~{vram_per_layer:.1f} MiB/layer)")
         print(f"Est. KV Cache:    {kv_cache_vram_mb:.1f} MiB")
         print(f"Action:           Offloading {final_layers}/{total_layers} layers to GPU")
         print("----------------------------")
 
         return final_layers
 
-    def generate_responses(self, model_path: str, prompts: List[str]) -> List[str]:
-        """Loads a model with llama_cpp, runs inference for all prompts synchronously, and unloads it."""
+    @staticmethod
+    def _estimate_tokens(text: str, llm=None) -> int:
+        """Counts or reliably estimates token count."""
+        if not text:
+            return 0
+        if llm is not None and hasattr(llm, "tokenize"):
+            try:
+                tokens = llm.tokenize(text.encode("utf-8", errors="ignore"))
+                return len(tokens)
+            except Exception:
+                pass
+        # Fallback estimation: ~4 chars per token or words * 1.3
+        words = len(text.split())
+        return max(1, int(max(words * 1.3, len(text) / 3.8)))
+
+    def generate_responses(self, model_path: str, prompts: List[str]) -> List[Dict[str, Any]]:
+        """Loads a model with llama_cpp, runs inference with token streaming to capture prefill, decode, and overall t/s."""
         import llama_cpp
         import gc
         
@@ -341,8 +345,6 @@ class WringerFramework:
             is_diffusion = "diffusion" in model_name.lower()
             if is_diffusion:
                 import sys
-                # __file__ is System/tests/benchmarks/wringer/Wringer.py
-                # We need to go up 5 levels to get the project root (where the System folder lives)
                 wringer_dir = os.path.dirname(os.path.abspath(__file__))
                 benchmarks_dir = os.path.dirname(wringer_dir)
                 tests_dir = os.path.dirname(benchmarks_dir)
@@ -370,15 +372,28 @@ class WringerFramework:
                 )
         except Exception as e:
             print(f"[-] Failed to load model {model_name}: {e}")
-            return ["Error loading model."] * len(prompts)
+            err_res = []
+            for _ in prompts:
+                err_res.append({
+                    "content": "Error loading model.",
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "prefill_time": 0.0,
+                    "decode_time": 0.0,
+                    "total_time": 0.0,
+                    "prefill_tps": 0.0,
+                    "decode_tps": 0.0,
+                    "overall_tps": 0.0
+                })
+            return err_res
             
         is_nemotron = "nemotron" in model_name.lower()
         is_gemma = "gemma" in model_name.lower()
         is_qwen = "qwen" in model_name.lower()
         is_reasoning = any(kw in model_name.lower() for kw in ["qwq", "thinking", "r1", "deepseek"])
         
-        # Qwen and Nemotron models often perform better at slightly lower temperatures compared to Gemma
         temp = 0.7 if (is_qwen or is_nemotron) else 1.0
+        results = []
         
         for i, prompt in enumerate(prompts):
             print(f"    -> Generating response {i+1}/{len(prompts)}...", end="\r")
@@ -393,24 +408,83 @@ class WringerFramework:
                     {"role": "system", "content": sys_content},
                     {"role": "user", "content": prompt}
                 ]
-                output = llm.create_chat_completion(
+                
+                # Estimate prompt token count
+                prompt_combined = f"{sys_content}\n{prompt}"
+                prompt_tokens = self._estimate_tokens(prompt_combined, llm=llm)
+                
+                t_start = time.perf_counter()
+                t_first_token = None
+                output_tokens = 0
+                full_text = ""
+                
+                # Stream to separate prefill (TTFT) and decode speeds
+                gen = llm.create_chat_completion(
                     messages=messages, 
                     max_tokens=4096,
                     temperature=temp,
                     top_p=0.95,
                     top_k=64,
-                    stream=False
+                    stream=True
                 )
-                responses.append(output["choices"][0]["message"]["content"].strip())
+                
+                for chunk in gen:
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    content_chunk = delta.get("content", "")
+                    if content_chunk:
+                        if t_first_token is None:
+                            t_first_token = time.perf_counter()
+                        full_text += content_chunk
+                        output_tokens += 1
+                        
+                t_end = time.perf_counter()
+                
+                # If non-streaming or empty chunks yielded single block
+                if t_first_token is None:
+                    t_first_token = t_end
+                if output_tokens == 0 and full_text:
+                    output_tokens = self._estimate_tokens(full_text, llm=llm)
+                    
+                prefill_time = max(0.0001, t_first_token - t_start)
+                decode_time = max(0.0001, t_end - t_first_token)
+                total_time = max(0.0001, t_end - t_start)
+                
+                # If decode tokens > 0 but decode_time near 0, fall back gracefully
+                decode_tokens = max(1, output_tokens)
+                prefill_tps = prompt_tokens / prefill_time
+                decode_tps = decode_tokens / decode_time if (t_end > t_first_token) else (output_tokens / total_time)
+                overall_tps = (prompt_tokens + decode_tokens) / total_time
+                
+                results.append({
+                    "content": full_text.strip(),
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": decode_tokens,
+                    "prefill_time": round(prefill_time, 4),
+                    "decode_time": round(decode_time, 4),
+                    "total_time": round(total_time, 4),
+                    "prefill_tps": round(prefill_tps, 2),
+                    "decode_tps": round(decode_tps, 2),
+                    "overall_tps": round(overall_tps, 2)
+                })
             except Exception as e:
-                responses.append(f"Error during inference: {e}")
+                results.append({
+                    "content": f"Error during inference: {e}",
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "prefill_time": 0.0,
+                    "decode_time": 0.0,
+                    "total_time": 0.0,
+                    "prefill_tps": 0.0,
+                    "decode_tps": 0.0,
+                    "overall_tps": 0.0
+                })
                 
         print(f"\n[+] Generation complete for {len(prompts)} prompts.")
         
         del llm
         gc.collect()
         
-        return responses
+        return results
 
     def grade_responses(self, qa_pairs: List[Dict[str, str]]) -> List[float]:
         """Grades responses manually (RLHF) or via a judge LLM."""
@@ -555,6 +629,38 @@ class WringerFramework:
 
         return think_log, final_answer
 
+    @staticmethod
+    def detect_anomalies_and_stats(values: List[float]) -> Dict[str, Any]:
+        """Calculates mean, identifies IQR outliers (anomalies), and returns robust statistics."""
+        if not values:
+            return {"mean": 0.0, "anomaly_count": 0, "anomalies": [], "clean_mean": 0.0}
+        
+        arr = np.array(values, dtype=float)
+        mean_val = float(np.mean(arr))
+        if len(arr) < 4:
+            return {
+                "mean": round(mean_val, 2),
+                "anomaly_count": 0,
+                "anomalies": [],
+                "clean_mean": round(mean_val, 2)
+            }
+            
+        q25, q75 = np.percentile(arr, 25), np.percentile(arr, 75)
+        iqr = q75 - q25
+        lower_bound = q25 - 1.5 * iqr
+        upper_bound = q75 + 1.5 * iqr
+        
+        anomalies = [float(x) for x in arr if x < lower_bound or x > upper_bound]
+        clean_vals = [float(x) for x in arr if lower_bound <= x <= upper_bound]
+        clean_mean = float(np.mean(clean_vals)) if clean_vals else mean_val
+        
+        return {
+            "mean": round(mean_val, 2),
+            "anomaly_count": len(anomalies),
+            "anomalies": [round(a, 2) for a in anomalies],
+            "clean_mean": round(clean_mean, 2)
+        }
+
     def run_evaluation(self, model_path: str, selected_levels: List[str] = None) -> Dict[str, Any]:
         """Runs the Wringer benchmark for a single designated model."""
         levels_to_run = selected_levels if selected_levels else list(self.test_bank.keys())
@@ -569,39 +675,80 @@ class WringerFramework:
             if not prompts: continue
             
             print(f"\n--- Processing Level: {lvl} ---")
-            responses = self.generate_responses(model_path, prompts)
+            gen_data = self.generate_responses(model_path, prompts)
             
             # Grade clean answers when thoughts are present
             qa_pairs = []
             parsed_pairs = []
-            for p, r in zip(prompts, responses):
-                thought, answer = self.split_thoughts_and_answer(r)
-                clean_ans = answer if answer else r
+            for p, g in zip(prompts, gen_data):
+                raw_txt = g["content"]
+                thought, answer = self.split_thoughts_and_answer(raw_txt)
+                clean_ans = answer if answer else raw_txt
                 qa_pairs.append({"prompt": p, "response": clean_ans})
-                parsed_pairs.append((p, clean_ans, thought))
+                parsed_pairs.append((p, clean_ans, thought, g))
 
             scores = self.grade_responses(qa_pairs)
             
             if scores:
-                lvl_avg = sum(scores) / len(scores)
-                lvl_percentage = (lvl_avg / 10.0) * 100
+                lvl_avg_score = sum(scores) / len(scores)
+                lvl_percentage = (lvl_avg_score / 10.0) * 100
+                
+                # Token speeds weighted aggregations
+                tot_p_tokens = sum(g["prompt_tokens"] for g in gen_data)
+                tot_p_time = sum(g["prefill_time"] for g in gen_data)
+                tot_c_tokens = sum(g["completion_tokens"] for g in gen_data)
+                tot_d_time = sum(g["decode_time"] for g in gen_data)
+                tot_time = sum(g["total_time"] for g in gen_data)
+                
+                lvl_prefill_tps = tot_p_tokens / tot_p_time if tot_p_time > 0 else 0.0
+                lvl_decode_tps = tot_c_tokens / tot_d_time if tot_d_time > 0 else 0.0
+                lvl_overall_tps = (tot_p_tokens + tot_c_tokens) / tot_time if tot_time > 0 else 0.0
+                
+                # Decode speed anomaly analysis
+                decode_speeds = [g["decode_tps"] for g in gen_data if g["decode_tps"] > 0]
+                speed_anomaly_data = self.detect_anomalies_and_stats(decode_speeds)
+                
+                # Composite score calculation (Quality + Speed weighting if enabled)
+                # Baseline reference: 50 t/s decode = 100% speed rating; speed factor = min(1.0, decode_tps / 50.0)
+                speed_factor = min(10.0, (lvl_decode_tps / 5.0)) # 50 t/s = 10.0
+                if self.weight_speed:
+                    # 75% accuracy quality + 25% throughput
+                    composite_score = round(0.75 * lvl_avg_score + 0.25 * speed_factor, 2)
+                else:
+                    composite_score = round(lvl_avg_score, 2)
                 
                 details = []
-                for (p, ans, thought), s in zip(parsed_pairs, scores):
-                    item = {"prompt": p, "response": ans, "score": round(s, 2)}
+                for (p, ans, thought, g), s in zip(parsed_pairs, scores):
+                    item = {
+                        "prompt": p, 
+                        "response": ans, 
+                        "score": round(s, 2),
+                        "prompt_tokens": g["prompt_tokens"],
+                        "completion_tokens": g["completion_tokens"],
+                        "prefill_tps": g["prefill_tps"],
+                        "decode_tps": g["decode_tps"],
+                        "overall_tps": g["overall_tps"]
+                    }
                     if thought:
                         item["thought"] = thought
                     details.append(item)
                     
                 model_results[lvl] = {
-                    "average_score": round(lvl_avg, 2),
+                    "average_score": round(lvl_avg_score, 2),
                     "percentage": f"{round(lvl_percentage, 1)}%",
+                    "composite_score": composite_score,
+                    "prefill_tps": round(lvl_prefill_tps, 2),
+                    "decode_tps": round(lvl_decode_tps, 2),
+                    "overall_tps": round(lvl_overall_tps, 2),
+                    "anomaly_count": speed_anomaly_data["anomaly_count"],
+                    "anomalies": speed_anomaly_data["anomalies"],
+                    "clean_decode_tps": speed_anomaly_data["clean_mean"],
                     "details": details
                 }
         
         total_duration = time.time() - start_time
         
-        # Export detailed markdown with dropdown for reasoning
+        # Export detailed markdown with dropdown for reasoning & speed telemetry
         report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
         os.makedirs(report_dir, exist_ok=True)
         report_path = os.path.join(report_dir, f"{model_name}_report.md")
@@ -609,12 +756,22 @@ class WringerFramework:
         try:
             with open(report_path, "w", encoding="utf-8") as rf:
                 rf.write(f"# Benchmark Report: {model_name}\n\n")
+                rf.write(f"- **Total Duration**: {round(total_duration, 2)}s\n")
+                rf.write(f"- **Speed Weighting Active**: {'Yes (75% Quality, 25% Speed)' if self.weight_speed else 'No (Quality and Speed strictly separated)'}\n\n")
+                
                 for lvl, data in model_results.items():
-                    rf.write(f"## {lvl} (Average: {data['average_score']}/10, {data['percentage']})\n\n")
+                    rf.write(f"## {lvl}\n")
+                    rf.write(f"- **Quality Score**: {data['average_score']}/10 ({data['percentage']})\n")
+                    rf.write(f"- **Composite Score**: {data['composite_score']}/10\n")
+                    rf.write(f"- **Speed**: Prefill: {data['prefill_tps']} t/s | Decode: {data['decode_tps']} t/s | Overall: {data['overall_tps']} t/s\n")
+                    if data["anomaly_count"] > 0:
+                        rf.write(f"- **Speed Outliers / Anomaly Count**: {data['anomaly_count']} (Outliers: {data['anomalies']}, Clean Mean: {data['clean_decode_tps']} t/s)\n")
+                    rf.write("\n")
+                    
                     if "details" in data:
                         for d in data["details"]:
                             rf.write(f"### Prompt:\n```text\n{d['prompt']}\n```\n\n")
-                            rf.write(f"**Score:** {d['score']}/10\n\n")
+                            rf.write(f"**Score:** {d['score']}/10 | **Speed:** {d['decode_tps']} t/s decode ({d['overall_tps']} t/s overall)\n\n")
                             if d.get("thought"):
                                 rf.write(f"<details>\n<summary>Reasoning</summary>\n\n```text\n{d['thought']}\n```\n</details>\n\n")
                             rf.write(f"**Response:**\n```text\n{d['response']}\n```\n\n")
@@ -623,14 +780,24 @@ class WringerFramework:
         except Exception as e:
             print(f"[-] Failed to save markdown report: {e}")
 
-
-        # Compare and update high scores
+        # Compare and update high scores (quality + separate speed highscores)
         self.compare_high_scores(model_name, model_results)
 
-        # Generate a per-level chart for this single model and auto-open it
-        chart_data = {lvl: data["average_score"] for lvl, data in model_results.items()}
+        # Generate a per-level chart for this single model
+        chart_data = {
+            lvl: {
+                "score": data["average_score"],
+                "decode_tps": data["decode_tps"],
+                "composite": data["composite_score"]
+            } for lvl, data in model_results.items()
+        }
         if chart_data:
-            self.generate_comparison_chart(chart_data, f"Performance Breakdown: {model_name}", f"{model_name}_breakdown_chart.png")
+            self.generate_comparison_chart(
+                chart_data, 
+                f"Performance Breakdown: {model_name}", 
+                f"{model_name}_breakdown_chart.png",
+                auto_open=self.auto_open_charts
+            )
 
         return {
             "model": model_name,
@@ -639,7 +806,7 @@ class WringerFramework:
         }
 
     def compare_high_scores(self, model_name: str, model_results: Dict[str, Any]) -> None:
-        """Compares the current run results against the best recorded run per level."""
+        """Compares the current run results against quality and speed high scores per level."""
         scores_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wringer_highscores.json")
         high_scores = {}
         
@@ -650,42 +817,57 @@ class WringerFramework:
             except Exception as e:
                 print(f"[-] Warning: Failed to load high scores: {e}")
 
-        print(f"\n=== Per-Level High Score Comparison for {model_name} ===")
-        print(f"{'Level':<15} | {'Current Score':<15} | {'Best Score':<15} | {'Best Model':<25} | {'Status'}")
-        print("-" * 80)
+        print(f"\n=== Per-Level High Score & Speed Comparison for {model_name} ===")
+        print(f"{'Level':<10} | {'Score':<10} | {'Best Score':<18} | {'Decode t/s':<11} | {'Best t/s':<18} | {'Anomalies':<9} | {'Status'}")
+        print("-" * 95)
         
         updated = False
         for lvl, data in model_results.items():
             curr_score = data["average_score"]
             curr_pct = data["percentage"]
+            curr_decode_tps = data["decode_tps"]
+            curr_anomalies = data["anomaly_count"]
             
-            best_data = high_scores.get(lvl)
-            if best_data is None:
-                status = "[NEW RECORD!]"
-                high_scores[lvl] = {
-                    "model": model_name,
-                    "average_score": curr_score,
-                    "percentage": curr_pct
-                }
-                best_score_str = "N/A"
-                best_model = "N/A"
+            best_data = high_scores.get(lvl, {})
+            best_score = best_data.get("average_score", 0.0)
+            best_score_model = best_data.get("model", "N/A")
+            best_tps = best_data.get("best_decode_tps", 0.0)
+            best_tps_model = best_data.get("speed_model", "N/A")
+            
+            score_record = False
+            speed_record = False
+            
+            if curr_score > best_score:
+                score_record = True
+                best_data["model"] = model_name
+                best_data["average_score"] = curr_score
+                best_data["percentage"] = curr_pct
+                best_data["composite_score"] = data["composite_score"]
                 updated = True
-            elif curr_score > best_data["average_score"]:
-                status = "[NEW RECORD!]"
-                best_score_str = f"{best_data['average_score']} ({best_data['percentage']})"
-                best_model = best_data["model"]
-                high_scores[lvl] = {
-                    "model": model_name,
-                    "average_score": curr_score,
-                    "percentage": curr_pct
-                }
-                updated = True
-            else:
-                status = "Keep trying!"
-                best_score_str = f"{best_data['average_score']} ({best_data['percentage']})"
-                best_model = best_data["model"]
                 
-            print(f"{lvl:<15} | {curr_score} ({curr_pct}) | {best_score_str:<15} | {best_model:<25} | {status}")
+            if curr_decode_tps > best_tps:
+                speed_record = True
+                best_data["best_decode_tps"] = curr_decode_tps
+                best_data["speed_model"] = model_name
+                updated = True
+                
+            best_data["last_tested_model"] = model_name
+            best_data["last_anomaly_count"] = curr_anomalies
+            high_scores[lvl] = best_data
+            
+            if score_record and speed_record:
+                status = "[ALL-TIME RECORD! (Score+Speed)]"
+            elif score_record:
+                status = "[NEW SCORE RECORD!]"
+            elif speed_record:
+                status = "[NEW SPEED RECORD!]"
+            else:
+                status = "Completed"
+                
+            best_score_disp = f"{best_data.get('average_score', 'N/A')} ({best_data.get('model', 'N/A')[:10]})"
+            best_tps_disp = f"{best_data.get('best_decode_tps', 'N/A')} t/s ({best_data.get('speed_model', 'N/A')[:10]})"
+            
+            print(f"{lvl:<10} | {curr_score:<10} | {best_score_disp:<18} | {curr_decode_tps:<11} | {best_tps_disp:<18} | {curr_anomalies:<9} | {status}")
             
         if updated:
             try:
@@ -695,15 +877,15 @@ class WringerFramework:
             except Exception as e:
                 print(f"[-] Warning: Failed to save high scores: {e}")
 
-
-    def generate_comparison_chart(self, data: Dict[str, Any], title: str, filename: str, auto_open: bool = True) -> None:
+    def generate_comparison_chart(self, data: Dict[str, Any], title: str, filename: str, auto_open: bool = False) -> str:
+        """Generates charts comparing quality scores and decode tokens/sec (t/s) side by side."""
         try:
             import matplotlib.pyplot as plt
             import numpy as np
             import re
             
             if not data:
-                return
+                return ""
 
             def level_sort_key(lvl_name: str):
                 if lvl_name == "Overall":
@@ -712,10 +894,122 @@ class WringerFramework:
                 if match:
                     return (0, int(match.group(1)), str(lvl_name))
                 return (1, 0, str(lvl_name))
-                
-            is_2d = any(isinstance(v, dict) for v in data.values())
+
+            report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
+            os.makedirs(report_dir, exist_ok=True)
+            chart_path = os.path.join(report_dir, filename)
+
+            # Check structure of data
+            # Format A: {lvl: {"score": 9.5, "decode_tps": 42.1, "composite": 9.2}, ...}
+            # Format B: {model_name: {"Overall": 9.5, "lvl1": 9.0, ...}, ...}
+            # Format C: {model_name: score_float, ...}
             
-            if not is_2d:
+            first_val = next(iter(data.values()))
+            is_single_model_breakdown = isinstance(first_val, dict) and "score" in first_val
+            
+            if is_single_model_breakdown:
+                sorted_items = sorted(data.items(), key=lambda x: level_sort_key(x[0]))
+                levels = [k for k, v in sorted_items]
+                scores = [v.get("score", 0.0) for k, v in sorted_items]
+                tps = [v.get("decode_tps", 0.0) for k, v in sorted_items]
+                composites = [v.get("composite", v.get("score", 0.0)) for k, v in sorted_items]
+                
+                x = np.arange(len(levels))
+                width = 0.35
+                
+                fig, ax1 = plt.subplots(figsize=(12, 6))
+                
+                # Left Y-axis: Score
+                color_score = '#1f77b4' # blue
+                ax1.set_xlabel('Benchmark Level', fontweight='bold')
+                ax1.set_ylabel('Quality Score (1-10)', color=color_score, fontweight='bold')
+                bars1 = ax1.bar(x - width/2, scores, width, label='Quality Score', color=color_score, alpha=0.85)
+                ax1.tick_params(axis='y', labelcolor=color_score)
+                ax1.set_ylim(0, 10.5)
+                ax1.set_xticks(x)
+                ax1.set_xticklabels(levels, rotation=30, ha='right')
+                
+                # Value tags on score bars
+                for bar in bars1:
+                    h = bar.get_height()
+                    ax1.text(bar.get_x() + bar.get_width()/2, h + 0.15, f"{h:.1f}", ha='center', va='bottom', fontsize=8, color=color_score)
+
+                # Right Y-axis: Speed (t/s)
+                ax2 = ax1.twinx()
+                color_speed = '#2ca02c' # green
+                ax2.set_ylabel('Decode Speed (tokens/sec)', color=color_speed, fontweight='bold')
+                bars2 = ax2.bar(x + width/2, tps, width, label='Decode Speed (t/s)', color=color_speed, alpha=0.85)
+                ax2.tick_params(axis='y', labelcolor=color_speed)
+                max_tps = max(tps) if tps else 50
+                ax2.set_ylim(0, max(60, max_tps * 1.2))
+                
+                for bar in bars2:
+                    h = bar.get_height()
+                    ax2.text(bar.get_x() + bar.get_width()/2, h + 0.5, f"{h:.1f} t/s", ha='center', va='bottom', fontsize=8, color=color_speed)
+
+                plt.title(f"{title} (Speed & Quality Metrics)", fontsize=13, fontweight='bold')
+                fig.tight_layout()
+                plt.savefig(chart_path, dpi=120)
+                plt.close(fig)
+                
+            elif isinstance(first_val, dict):
+                # Multi-model multi-level comparison
+                def get_overall(v):
+                    if isinstance(v, dict):
+                        return v.get("Overall", sum([val for val in v.values() if isinstance(val, (int, float))])/max(1, len(v)))
+                    return float(v)
+                
+                sorted_items = sorted(data.items(), key=lambda x: get_overall(x[1]), reverse=True)
+                models = [k for k, v in sorted_items]
+                
+                levels_set = set()
+                for k, v in sorted_items:
+                    if isinstance(v, dict):
+                        for lvl in v.keys():
+                            levels_set.add(lvl)
+                            
+                other_levels = sorted([lvl for lvl in levels_set if lvl != "Overall"], key=level_sort_key)
+                
+                import matplotlib.gridspec as gridspec
+                cols = 2
+                rows = math.ceil(len(other_levels) / cols) if other_levels else 0
+                
+                fig = plt.figure(figsize=(14, 6 + 5 * rows))
+                gs = fig.add_gridspec(rows + 1, cols)
+                
+                ax_overall = fig.add_subplot(gs[0, :])
+                overall_scores = [get_overall(v) for k, v in sorted_items]
+                bars = ax_overall.bar(models, overall_scores, color='#3498db')
+                ax_overall.set_title(f"{title} - Overall", fontweight='bold')
+                ax_overall.set_ylabel("Score (1-10)")
+                ax_overall.set_ylim(0, 10.5)
+                ax_overall.set_xticks(range(len(models)))
+                ax_overall.set_xticklabels(models, rotation=35, ha='right')
+                for bar in bars:
+                    yval = bar.get_height()
+                    if yval > 0:
+                        ax_overall.text(bar.get_x() + bar.get_width()/2, yval + 0.1, f"{round(yval, 2)}", ha='center', va='bottom', fontsize=9)
+                
+                for i, lvl in enumerate(other_levels):
+                    r = 1 + (i // cols)
+                    c = i % cols
+                    ax = fig.add_subplot(gs[r, c])
+                    lvl_scores = [v.get(lvl, 0) if isinstance(v, dict) else 0 for k, v in sorted_items]
+                    bars = ax.bar(models, lvl_scores, color='#2ecc71')
+                    ax.set_title(f"{lvl}", fontweight='bold')
+                    ax.set_ylim(0, 10.5)
+                    ax.set_xticks(range(len(models)))
+                    ax.set_xticklabels(models, rotation=35, ha='right', fontsize=8)
+                    for bar in bars:
+                        yval = bar.get_height()
+                        if yval > 0:
+                            ax.text(bar.get_x() + bar.get_width()/2, yval + 0.1, f"{round(yval, 2)}", ha='center', va='bottom', fontsize=8)
+
+                plt.tight_layout(pad=2.0)
+                plt.savefig(chart_path, dpi=120)
+                plt.close(fig)
+            else:
+                # 1D single model or simple dictionary
                 is_level_data = any(re.match(r"^(lvl\d+|carwash)", str(k), re.IGNORECASE) for k in data.keys())
                 if is_level_data:
                     sorted_items = sorted(data.items(), key=lambda x: level_sort_key(x[0]))
@@ -726,121 +1020,51 @@ class WringerFramework:
                 scores = [v for k, v in sorted_items]
                 
                 plt.figure(figsize=(10, 6))
-                bars = plt.bar(models, scores, color='skyblue')
-                plt.xlabel('Levels' if is_level_data else 'Models')
-                plt.ylabel('Average Score (out of 10)')
-                plt.title(title)
-                plt.ylim(0, 10)
-                plt.xticks(rotation=45, ha='right')
+                bars = plt.bar(models, scores, color='#3498db')
+                plt.xlabel('Levels' if is_level_data else 'Models', fontweight='bold')
+                plt.ylabel('Average Score (1-10)', fontweight='bold')
+                plt.title(title, fontweight='bold')
+                plt.ylim(0, 10.5)
+                plt.xticks(rotation=35, ha='right')
                 
                 for bar in bars:
                     yval = bar.get_height()
                     plt.text(bar.get_x() + bar.get_width()/2, yval + 0.1, f"{round(yval, 2)}", ha='center', va='bottom')
                     
                 plt.tight_layout()
-            else:
-                def get_overall(v):
-                    return v.get("Overall", sum(v.values())/len(v) if v else 0)
-                
-                sorted_items = sorted(data.items(), key=lambda x: get_overall(x[1]), reverse=True)
-                models = [k for k, v in sorted_items]
-                
-                levels_set = set()
-                for k, v in sorted_items:
-                    for lvl in v.keys():
-                        levels_set.add(lvl)
-                
-                other_levels = sorted([lvl for lvl in levels_set if lvl != "Overall"], key=level_sort_key)
-                
-                report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
-                os.makedirs(report_dir, exist_ok=True)
-                
-                import math
-                import matplotlib.gridspec as gridspec
+                plt.savefig(chart_path, dpi=120)
+                plt.close()
 
-                cols = 2
-                rows = math.ceil(len(other_levels) / cols) if other_levels else 0
-                
-                fig = plt.figure(figsize=(14, 6 + 5 * rows))
-                gs = gridspec.GridSpec(rows + 1, cols, figure=fig)
-                
-                ax_overall = fig.add_subplot(gs[0, :])
-                overall_scores = [v.get("Overall", 0) for k, v in sorted_items]
-                bars = ax_overall.bar(models, overall_scores, color='skyblue')
-                ax_overall.set_title(f"{title} - Overall")
-                ax_overall.set_ylabel("Score (out of 10)")
-                ax_overall.set_ylim(0, 10)
-                ax_overall.set_xticks(range(len(models)))
-                ax_overall.set_xticklabels(models, rotation=45, ha='right')
-                for bar in bars:
-                    yval = bar.get_height()
-                    if yval > 0:
-                        ax_overall.text(bar.get_x() + bar.get_width()/2, yval + 0.1, f"{round(yval, 2)}", ha='center', va='bottom', fontsize=9)
-                
-                for i, lvl in enumerate(other_levels):
-                    r = 1 + (i // cols)
-                    c = i % cols
-                    ax = fig.add_subplot(gs[r, c])
-                    lvl_scores = [v.get(lvl, 0) for k, v in sorted_items]
-                    bars = ax.bar(models, lvl_scores, color='lightgreen')
-                    ax.set_title(f"{lvl}")
-                    ax.set_ylim(0, 10)
-                    ax.set_xticks(range(len(models)))
-                    ax.set_xticklabels(models, rotation=45, ha='right', fontsize=8)
-                    for bar in bars:
-                        yval = bar.get_height()
-                        if yval > 0:
-                            ax.text(bar.get_x() + bar.get_width()/2, yval + 0.1, f"{round(yval, 2)}", ha='center', va='bottom', fontsize=8)
-
-                plt.tight_layout(pad=2.0)
-                chart_path = os.path.join(report_dir, filename)
-                plt.savefig(chart_path)
-                plt.close(fig)
-                print(f"[+] Saved consolidated comparison chart to: {chart_path}")
-                
-                if auto_open:
-                    try:
-                        import sys
-                        if os.name == 'nt':
-                            os.startfile(chart_path)
-                        elif sys.platform == 'darwin':
-                            import subprocess
-                            subprocess.call(['open', chart_path])
-                        else:
-                            import subprocess
-                            subprocess.call(['xdg-open', chart_path])
-                    except Exception as e:
-                        print(f"[-] Could not auto-open chart: {e}")
-                
-                return # Exit early so we don't hit the 1D chart save logic below
-            
-            report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
-            os.makedirs(report_dir, exist_ok=True)
-            chart_path = os.path.join(report_dir, filename)
-            
-            plt.savefig(chart_path)
-            plt.close()
             print(f"[+] Saved comparison chart to: {chart_path}")
             
-            # Automatically open the chart
             if auto_open:
-                try:
-                    import sys
-                    if os.name == 'nt':
-                        os.startfile(chart_path)
-                    elif sys.platform == 'darwin':
-                        import subprocess
-                        subprocess.call(['open', chart_path])
-                    else:
-                        import subprocess
-                        subprocess.call(['xdg-open', chart_path])
-                except Exception as e:
-                    print(f"[-] Could not auto-open chart: {e}")
+                self.open_chart_file(chart_path)
                 
+            return chart_path
         except ImportError:
             print("[-] Matplotlib not installed. Skipping chart generation. (pip install matplotlib)")
+            return ""
         except Exception as e:
             print(f"[-] Failed to generate chart: {e}")
+            return ""
+
+    @staticmethod
+    def open_chart_file(chart_path: str):
+        """Cleanly opens a chart file upon user request or configuration."""
+        if not os.path.exists(chart_path):
+            print(f"[-] Chart file not found: {chart_path}")
+            return
+        try:
+            import subprocess
+            if os.name == 'nt':
+                os.startfile(chart_path)
+            elif sys.platform == 'darwin':
+                subprocess.call(['open', chart_path])
+            else:
+                subprocess.call(['xdg-open', chart_path])
+            print(f"[+] Opened chart: {chart_path}")
+        except Exception as e:
+            print(f"[-] Could not open chart: {e}")
 
     def evaluate_sequential_database(self, database_models: List[str]) -> List[Dict[str, Any]]:
         """Iterates through an entire pool of models sequentially."""
@@ -861,7 +1085,12 @@ class WringerFramework:
                 }
                 
         if chart_data:
-            self.generate_comparison_chart(chart_data, "Database Batch Test Results", "database_batch_chart.png")
+            self.generate_comparison_chart(
+                chart_data, 
+                "Database Batch Test Results", 
+                "database_batch_chart.png", 
+                auto_open=self.auto_open_charts
+            )
             
         return master_report
 
@@ -888,7 +1117,6 @@ class WringerFramework:
                 pct = metrics["percentage"]
                 chart_data[model_name] = avg_score
             else:
-                # Average across all evaluated levels
                 total_score = sum(data["average_score"] for data in results.values())
                 avg_score = total_score / len(results) if results else 0
                 pct = f"{(avg_score / 10.0) * 100:.1f}%"
@@ -901,7 +1129,12 @@ class WringerFramework:
             print(f"{model_name:<25} | {avg_score:<10} | {pct}")
             
         if chart_data:
-            self.generate_comparison_chart(chart_data, f"Comparative Analysis ({level_name})", "comparison_chart.png")
+            self.generate_comparison_chart(
+                chart_data, 
+                f"Comparative Analysis ({level_name})", 
+                "comparison_chart.png", 
+                auto_open=self.auto_open_charts
+            )
 
 
 # ==========================================
@@ -912,13 +1145,18 @@ def interactive_menu():
     from tkinter import filedialog
     import sys
     
-    # Hide the main tkinter window since we only need dialogs
     root = tk.Tk()
     root.withdraw()
     
     print("\n--- Wringer Initial Setup ---")
-    rlhf_choice = input("Use Manual Human Grading (RLHF) instead of LLM judge? (y/n): ").strip().lower()
+    rlhf_choice = input("Use Manual Human Grading (RLHF) instead of LLM judge? (y/n, default=n): ").strip().lower()
     manual_grading = rlhf_choice == 'y'
+    
+    weight_choice = input("Weigh speed (t/s) into composite score? (y=weigh speed & accuracy, n=keep strictly separate, default=n): ").strip().lower()
+    weight_speed = weight_choice == 'y'
+    
+    auto_open_choice = input("Auto-open graph popups immediately after generation? (y/n, default=n): ").strip().lower()
+    auto_open_charts = auto_open_choice == 'y'
     
     judge_model_path = None
     if not manual_grading:
@@ -929,19 +1167,27 @@ def interactive_menu():
         else:
             print(f"[+] Judge Model Selected: {os.path.basename(judge_model_path)}")
             
-    wringer = WringerFramework(judge_model_path=judge_model_path, manual_grading=manual_grading)
+    wringer = WringerFramework(
+        judge_model_path=judge_model_path, 
+        manual_grading=manual_grading, 
+        weight_speed=weight_speed,
+        auto_open_charts=auto_open_charts
+    )
     
     while True:
-        print("\n" + "="*50)
-        print("   Wringer Evaluation Framework - Main Menu   ")
-        print("="*50)
+        print("\n" + "="*55)
+        print("     Wringer Evaluation Framework - Main Menu     ")
+        print(f"     Mode: {'Weighted Speed & Accuracy' if wringer.weight_speed else 'Strictly Separate Speed & Accuracy'} | Auto-Popup: {wringer.auto_open_charts}")
+        print("="*55)
         print("1. Test an individual model")
         print("2. Compare multiple models")
         print("3. Test an entire database of models sequentially")
-        print("4. Exit")
-        print("="*50)
+        print("4. View saved benchmark charts / reports folder")
+        print("5. Toggle speed weighting & graph popup settings")
+        print("6. Exit")
+        print("="*55)
         
-        choice = input("\nSelect an option (1-4): ").strip()
+        choice = input("\nSelect an option (1-6): ").strip()
         
         if choice == "1":
             print("\nPlease select a model file...")
@@ -956,8 +1202,19 @@ def interactive_menu():
             selected_levels = [lvl] if lvl else None
             
             report = wringer.run_evaluation(model_path, selected_levels=selected_levels)
-            print("\nFinal Report:")
-            print(json.dumps(report, indent=4))
+            print("\nFinal Summary Report:")
+            print(json.dumps({
+                "model": report["model"],
+                "duration_seconds": report["duration_seconds"],
+                "levels": {k: {"score": v["average_score"], "decode_tps": v["decode_tps"], "anomalies": v["anomaly_count"]} for k, v in report["results"].items()}
+            }, indent=4))
+            
+            if not wringer.auto_open_charts:
+                open_now = input("\nOpen generated chart now? (y/n, default=y): ").strip().lower()
+                if open_now != 'n':
+                    report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
+                    chart_file = os.path.join(report_dir, f"{model_name}_breakdown_chart.png")
+                    wringer.open_chart_file(chart_file)
             
         elif choice == "2":
             print("\nPlease select model files to compare (you can select multiple)...")
@@ -965,13 +1222,18 @@ def interactive_menu():
             if not model_paths:
                 print("[-] No models selected.")
                 continue
-            model_names = [os.path.basename(p) for p in model_paths]
-            print(f"[+] Selected models: {', '.join(model_names)}")
             
             lvl = input("Enter target level to compare (e.g., lvl5) or press Enter for ALL levels: ").strip()
             target_level = lvl if lvl else None
             
             wringer.compare_models(model_paths, target_level=target_level)
+            
+            if not wringer.auto_open_charts:
+                open_now = input("\nOpen comparative chart now? (y/n, default=y): ").strip().lower()
+                if open_now != 'n':
+                    report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
+                    chart_file = os.path.join(report_dir, "comparison_chart.png")
+                    wringer.open_chart_file(chart_file)
             
         elif choice == "3":
             print("\nPlease select a directory containing models...")
@@ -980,11 +1242,9 @@ def interactive_menu():
                 print("[-] No directory selected.")
                 continue
             
-            # Recursively find all files in the directory and its subfolders
             models = []
             for current_dir, _, files in os.walk(db_dir):
                 for f in files:
-                    # Skip unwanted models
                     if any(k in f.lower() for k in ["mmproj", "assistant", "mtp", "dflash", "drafter"]):
                         continue
                     if f.endswith(".gguf") or f.endswith(".bin"):
@@ -998,7 +1258,24 @@ def interactive_menu():
             reports = wringer.evaluate_sequential_database(models)
             print("\n[+] Batch Processing Complete.")
             
+            if not wringer.auto_open_charts:
+                open_now = input("\nOpen batch results chart now? (y/n, default=y): ").strip().lower()
+                if open_now != 'n':
+                    report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
+                    chart_file = os.path.join(report_dir, "database_batch_chart.png")
+                    wringer.open_chart_file(chart_file)
+            
         elif choice == "4":
+            report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_reports")
+            os.makedirs(report_dir, exist_ok=True)
+            wringer.open_chart_file(report_dir)
+            
+        elif choice == "5":
+            wringer.weight_speed = not wringer.weight_speed
+            wringer.auto_open_charts = not wringer.auto_open_charts
+            print(f"[+] Settings Updated: Speed Weighting = {wringer.weight_speed}, Auto-Open Charts = {wringer.auto_open_charts}")
+            
+        elif choice == "6":
             print("Exiting Wringer Framework.")
             break
         else:
@@ -1009,8 +1286,6 @@ def interactive_menu():
 if __name__ == "__main__":
     import sys
     
-    # If the user passes any arguments, we could still support argparse here, 
-    # but to keep it simple and address the direct request, we default to the interactive menu.
     try:
         interactive_menu()
     except KeyboardInterrupt:
@@ -1024,5 +1299,3 @@ if __name__ == "__main__":
         except Exception:
             pass
         sys.exit(1)
-
-

@@ -344,32 +344,37 @@ class VaultManager:
         os.makedirs(backup_dir, exist_ok=True)
 
         try:
-            # 1. Discover all history files
-            all_files = [
-                f for f in os.listdir(self.history_dir) 
-                if f.endswith(".history.jsonz") or f.endswith(".history.encz")
-            ]
+            # 1. Discover all history files (root + user subdirectories)
+            all_files_rel = []
+            for root, dirs, files in os.walk(self.history_dir):
+                if "backups" in root:
+                    continue
+                for f in files:
+                    if f.endswith(".history.jsonz") or f.endswith(".history.encz"):
+                        rel_path = os.path.relpath(os.path.join(root, f), self.history_dir)
+                        all_files_rel.append(rel_path)
 
-            if not all_files:
+            if not all_files_rel:
                 return True, "No history files to migrate."
 
-            print(f"[VAULT] Backing up {len(all_files)} history archives to {backup_dir}...")
-            for f in all_files:
-                src = os.path.join(self.history_dir, f)
-                dst = os.path.join(backup_dir, f)
+            print(f"[VAULT] Backing up {len(all_files_rel)} history archives to {backup_dir}...")
+            for rel_f in all_files_rel:
+                src = os.path.join(self.history_dir, rel_f)
+                dst = os.path.join(backup_dir, rel_f)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy2(src, dst)
 
             # 2. Execute migration step-by-step with verification
             staged_deletions = []
             staged_creations = []
 
-            for f in all_files:
-                src_path = os.path.join(self.history_dir, f)
+            for rel_f in all_files_rel:
+                src_path = os.path.join(self.history_dir, rel_f)
                 with open(src_path, "rb") as fp:
                     raw_data = fp.read()
 
                 # A. Obtain original decompressed JSON content
-                if f.endswith(".encz") or raw_data.startswith(self.HEADER_MAGIC):
+                if rel_f.endswith(".encz") or raw_data.startswith(self.HEADER_MAGIC):
                     if not source_key:
                         raise ValueError(f"Cannot decrypt {f} without source master key.")
                     decrypted_raw = self.decrypt_data(raw_data, custom_key=source_key)
@@ -384,8 +389,9 @@ class VaultManager:
                 compressed_bytes = zlib.compress(json.dumps(parsed_json).encode("utf-8"))
 
                 if to_encrypted:
-                    target_filename = f.replace(".history.jsonz", ".history.encz")
+                    target_filename = rel_f.replace(".history.jsonz", ".history.encz")
                     target_path = os.path.join(self.history_dir, target_filename)
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
                     transformed_data = self.encrypt_data(compressed_bytes, custom_key=target_key)
                     
                     # Verify immediately that transformed data can be decrypted and verified
@@ -393,8 +399,9 @@ class VaultManager:
                     if verify_decomp != json.dumps(parsed_json):
                         raise ValueError(f"Integrity verification failed for {target_filename}")
                 else:
-                    target_filename = f.replace(".history.encz", ".history.jsonz")
+                    target_filename = rel_f.replace(".history.encz", ".history.jsonz")
                     target_path = os.path.join(self.history_dir, target_filename)
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
                     transformed_data = compressed_bytes
                     
                     verify_decomp = zlib.decompress(transformed_data).decode("utf-8")
@@ -414,7 +421,7 @@ class VaultManager:
                 if os.path.exists(old_path):
                     os.remove(old_path)
 
-            print(f"[VAULT] Successfully migrated {len(all_files)} archives (Backup retained at {backup_dir}).")
+            print(f"[VAULT] Successfully migrated {len(all_files_rel)} archives (Backup retained at {backup_dir}).")
             return True, "Migration completed successfully."
 
         except Exception as e:
@@ -425,10 +432,13 @@ class VaultManager:
                     if os.path.exists(created):
                         try: os.remove(created)
                         except: pass
-                for f in os.listdir(backup_dir):
-                    backup_file = os.path.join(backup_dir, f)
-                    if os.path.isfile(backup_file):
-                        shutil.copy2(backup_file, os.path.join(self.history_dir, f))
+                for root, dirs, files in os.walk(backup_dir):
+                    for f in files:
+                        b_file = os.path.join(root, f)
+                        rel_b = os.path.relpath(b_file, backup_dir)
+                        restore_path = os.path.join(self.history_dir, rel_b)
+                        os.makedirs(os.path.dirname(restore_path), exist_ok=True)
+                        shutil.copy2(b_file, restore_path)
                 print("[VAULT] Rollback complete. Original archives restored intact.", file=sys.stderr)
             except Exception as rollback_err:
                 print(f"[VAULT] CRITICAL: Rollback encountered error: {rollback_err}", file=sys.stderr)

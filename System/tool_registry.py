@@ -308,10 +308,26 @@ root.mainloop()"""
             return f"Error executing tool: {str(e)}"
 
     def get_definitions(self, level=1) -> List[Dict[str, Any]]:
-        """Returns tool definitions permitted for the current persona level."""
+        """Returns tool definitions permitted for the current persona level and offline state."""
         if level < 2: return []
-        if level < 5: return [self.tools[0], self.tools[2], self.tools[3]]
-        return self.tools
+        
+        # Check Offline Mode Guard
+        from System.network_guard import is_offline_mode
+        is_offline = is_offline_mode() or (self.app and getattr(self.app, 'config', {}).get("offline_mode", False))
+        
+        base_tools = self.tools
+        if is_offline:
+            # Strictly filter out web_search and remote internet services when offline
+            base_tools = [t for t in base_tools if t["function"]["name"] not in ("web_search",)]
+            
+        if level < 5:
+            # Filter low-level allowed tools
+            allowed_names = {"get_system_stats", "control_rgb"}
+            if not is_offline:
+                allowed_names.add("web_search")
+            return [t for t in base_tools if t["function"]["name"] in allowed_names]
+            
+        return base_tools
 
     def get_python_stubs(self, level: int = 1) -> str:
         """Generates typed Python function stubs for Programmatic Tool Calling (PTC - arXiv:2608.06370v1)."""
