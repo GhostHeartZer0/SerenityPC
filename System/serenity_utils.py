@@ -1099,12 +1099,13 @@ class DynamicStatusWidget(tk.Frame):
         self.tasks_frame.pack_forget()
         self.prayer_label.pack_forget()
         self.anim_canvas.pack_forget()
+        self.progress_container.pack_forget()
         
         show_dmn = self._get_config("status_bar_dmn_idle", True)
         if not show_dmn:
-            self.pack_forget()
+            self.label.config(text="System: Ready")
+            self.gauge_label.config(text="")
         else:
-            self.progress_container.pack_forget()
             self._update_idle_display()
 
     def update_status(self, text):
@@ -1149,30 +1150,36 @@ class DynamicStatusWidget(tk.Frame):
         ]
         line = lines[self._prayer_idx]
         
-        val = int(30 + 190 * self._prayer_alpha)
-        hex_col = f"#{val:02x}{val:02x}{val:02x}" if val < 100 else f"#00{val:02x}{val:02x}"
+        # Smooth transition color fade from gentle slate-cyan to brilliant electric cyan
+        r = int(50 * (1.0 - self._prayer_alpha))
+        g = int(140 + 115 * self._prayer_alpha)
+        b = int(180 + 75 * self._prayer_alpha)
+        hex_col = f"#{r:02x}{g:02x}{b:02x}"
         self.prayer_label.config(text=line, fg=hex_col)
 
         if self._prayer_direction == 1:
-            self._prayer_alpha += 0.08
+            self._prayer_alpha += 0.05
             if self._prayer_alpha >= 1.0:
                 self._prayer_alpha = 1.0
                 self._prayer_direction = 0
-                self._prayer_pause_counter = 25
+                self._prayer_pause_counter = 35
         elif self._prayer_direction == 0:
             self._prayer_pause_counter -= 1
             if self._prayer_pause_counter <= 0:
                 self._prayer_direction = -1
         elif self._prayer_direction == -1:
-            self._prayer_alpha -= 0.08
+            self._prayer_alpha -= 0.05
             if self._prayer_alpha <= 0.0:
                 self._prayer_alpha = 0.0
-                self._prayer_direction = 1
+                self._prayer_direction = 2
+                self._prayer_pause_counter = 12
+        elif self._prayer_direction == 2:
+            self._prayer_pause_counter -= 1
+            if self._prayer_pause_counter <= 0:
                 self._prayer_idx = (self._prayer_idx + 1) % len(lines)
-                self._prayer_pause_counter = 40 if self._prayer_idx == 0 else 10
-                self._prayer_direction = 0
+                self._prayer_direction = 1
 
-        self.after(60, self._start_prayer_animation)
+        self.after(50, self._start_prayer_animation)
 
     def _start_idle_loop(self):
         self._update_idle_display()
@@ -1185,20 +1192,641 @@ class DynamicStatusWidget(tk.Frame):
         show_dmn = self._get_config("status_bar_dmn_idle", True)
         if not show_dmn: return
 
-        idle_sec = int(time.time() - self._idle_start_time)
-        m, s = divmod(idle_sec, 60)
-        h, m = divmod(m, 60)
-        time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-
-        dmn_status = "[DMN Idle]"
+        # DMN State: Track actual time in DMN state
+        dmn_active = False
+        dmn_entry_time = None
         if self.app and hasattr(self.app, 'state'):
-            if self.app.state.get("auto_watch", False):
-                dmn_status = "[DMN Simmering]"
+            cur_av = str(self.app.state.get("avatar_current", ""))
+            dmn_active = self.app.state.get("dmn_active", False) or cur_av.startswith("dmn")
+            dmn_entry_time = self.app.state.get("dmn_entry_time")
 
-        self.label.config(text=f"{dmn_status} Idle Time: {time_str}")
+        if dmn_active:
+            if not dmn_entry_time:
+                dmn_entry_time = time.time()
+                if self.app and hasattr(self.app, 'state'):
+                    self.app.state["dmn_entry_time"] = dmn_entry_time
+
+            dmn_sec = int(time.time() - dmn_entry_time)
+            m, s = divmod(dmn_sec, 60)
+            h, m = divmod(m, 60)
+            time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+            dmn_status = "[DMN Idle]"
+            if self.app and hasattr(self.app, 'state'):
+                if self.app.state.get("auto_watch", False) or self.app.state.get("xmemory_active", False):
+                    dmn_status = "[DMN Simmering]"
+
+            self.label.config(text=f"{dmn_status} Time in DMN: {time_str}")
+        else:
+            timeout_sec = 300
+            if self.app and hasattr(self.app, '_parse_dmn_timeout_sec'):
+                timeout_sec = self.app._parse_dmn_timeout_sec()
+            
+            idle_sec = int(time.time() - self._idle_start_time)
+            rem_sec = max(0, timeout_sec - idle_sec)
+            m, s = divmod(rem_sec, 60)
+            self.label.config(text=f"[Idle] Next DMN in: {m:02d}:{s:02d}")
+
         self._update_fallback_info()
 
 
 class ThinkingDisplay(DynamicStatusWidget):
     def __init__(self, parent, app=None, *args, **kwargs):
         super().__init__(parent, app=app, *args, **kwargs)
+
+
+# =========================================================================
+# LINGER-HOVER HELP BOXES (TOOLTIPS)
+# =========================================================================
+
+class ToolTip:
+    """
+    Linger-hover help box for Tkinter widgets.
+    Displays a sleek themed description after hovering for a specified delay.
+    Respects app.config['show_tooltips'] toggle.
+    """
+    def __init__(self, widget, text_or_callable, delay_ms: int = 1500, app=None, wraplength: int = 300):
+        self.widget = widget
+        self.text_or_callable = text_or_callable
+        self.delay_ms = delay_ms
+        self.app = app
+        self.wraplength = wraplength
+        self.tip_window = None
+        self._after_id = None
+
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+        self.widget.bind("<Unmap>", self._on_leave, add="+")
+        self.widget.bind("<Destroy>", self._on_destroy, add="+")
+
+    def _on_enter(self, event=None):
+        self._schedule()
+
+    def _on_leave(self, event=None):
+        self._unschedule()
+        self._hide()
+
+    def _on_destroy(self, event=None):
+        self._unschedule()
+        self._hide()
+
+    def _schedule(self):
+        self._unschedule()
+        if self.app and hasattr(self.app, 'config'):
+            if not self.app.config.get("show_tooltips", True):
+                return
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _unschedule(self):
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self):
+        if self.tip_window or not self.widget.winfo_exists():
+            return
+        if self.app and hasattr(self.app, 'config'):
+            if not self.app.config.get("show_tooltips", True):
+                return
+        
+        text = self.text_or_callable() if callable(self.text_or_callable) else self.text_or_callable
+        if not text:
+            return
+
+        try:
+            x = self.widget.winfo_rootx() + 15
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+            
+            # Boundary guard: keep within screen geometry
+            scr_w = self.widget.winfo_screenwidth()
+            scr_h = self.widget.winfo_screenheight()
+            if x + self.wraplength + 40 > scr_w:
+                x = max(10, scr_w - self.wraplength - 50)
+            if y + 80 > scr_h:
+                y = max(10, self.widget.winfo_rooty() - 60)
+
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tw.attributes("-topmost", True)
+
+            bg_col = THEME.get("widget_bg_color", "#121212")
+            fg_col = THEME.get("fg_color", "#ffffff")
+            accent = THEME.get("electric_blue", "#007acc")
+
+            frame = tk.Frame(tw, bg=bg_col, highlightbackground=accent, highlightthickness=1, bd=0, padx=8, pady=5)
+            frame.pack()
+
+            lbl = tk.Label(frame, text=text, justify=tk.LEFT,
+                           bg=bg_col, fg=fg_col,
+                           font=("Segoe UI", 9),
+                           wraplength=self.wraplength)
+            lbl.pack()
+        except Exception:
+            self._hide()
+
+    def _hide(self):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+
+
+# =========================================================================
+# TRANSLUCENT TUTORIAL OVERLAY & WALKTHROUGH
+# =========================================================================
+
+TUTORIAL_SCREENS = [
+    {
+        "area": "Overview",
+        "target_key": "overview",
+        "badge": "1 / 9",
+        "title": "🌟 Welcome to Serenity PC",
+        "subtitle": "High-Performance Local AI Engine & Persona Intelligence",
+        "desc": (
+            "Serenity PC is a fully local, privacy-first AI companion platform built on quantized llama.cpp "
+            "and Gemma-4 architectures.\n\n"
+            "• Zero Cloud Tethering: Everything runs natively on your GPU and CPU.\n"
+            "• Isolated Contexts: Multi-tier personas, multimodal vision, and encrypted memory archives.\n"
+            "• Real-Time Thought Channels: Stream internal reasoning separate from final answers."
+        ),
+        "hint": "Tip: Use Left/Right Arrow keys or the buttons below to navigate."
+    },
+    {
+        "area": "Top Action Bar & Status",
+        "target_key": "top_bar",
+        "badge": "2 / 9",
+        "title": "⚡ Top Action Bar, Controls & Telemetry",
+        "subtitle": "Model Loading, Execution Controls & Dynamic Pipeline Tracking",
+        "desc": (
+            "The top action bar provides core engine controls and live telemetry:\n\n"
+            "• [Settings] & [Begin!]: Access configuration and instantly load or swap the active model tier.\n"
+            "• Multimodal Controls: [🎥 Video] for video frame analysis, [🧠 Pulse] for idle observation, and [Clear] for staging.\n"
+            "• Active Chat / History Archive Tabs: Switch between live chat and searchable past conversation archives.\n"
+            "• Dynamic Status Area: Displays real-time phase tracking ([Loading Model], [Prefill], [Reasoning], [Generating]), tokens/sec speed, TTFT, and DMN idle timer.\n"
+            "• Hardware & Security Badges: Indicates hardware execution mode ([APEX i7] / [LEGACY i5]) and offline network guard status."
+        ),
+        "hint": "Click [Settings] in the top bar to customize hardware allocations, themes, and KV formats."
+    },
+    {
+        "area": "Persona Matrix",
+        "target_key": "persona",
+        "badge": "3 / 9",
+        "title": "🧠 Persona Hierarchy & Evolution (Lvl 1 - 7)",
+        "subtitle": "Modular Complexity from Direct Utility to Transcendent Wisdom",
+        "desc": (
+            "Adjust the bottom Persona Slider from Level 1 to Level 6 to modulate depth and personality:\n\n"
+            "• Lvl 1 - 2: Concise, direct utility and rapid facts.\n"
+            "• Lvl 3 - 5: Balanced reasoning, thoughtful synthesis, and deep technical mastery.\n"
+            "• Lvl 6: The Transcendent One — comprehensive multi-angle philosophical synthesis.\n"
+            "• Lvl 7 (Secret): Click the 'Persona:' header 6 times to evolve the interface into Cecilia."
+        ),
+        "hint": "Each persona maintains separate dialogue history and memory context."
+    },
+    {
+        "area": "Console & Speech",
+        "target_key": "console",
+        "badge": "4 / 9",
+        "title": "💬 Multi-Input Console & Offline Speech-to-Text",
+        "subtitle": "Direct Text, Audio Dictation, and Media Multimodal Attachments",
+        "desc": (
+            "Engage with Serenity using multiple native input modalities:\n\n"
+            "• [🎙️ Mic]: Click to record speech offline using local speech recognition.\n"
+            "• [+] Attachments: Drag-and-drop or click '+' to attach images, documents, and video slices.\n"
+            "• [👻 Ghost Mode]: Temporarily stops session logging for private, non-persisted chats.\n"
+            "• [📚 History]: Toggles history lookup across past conversations."
+        ),
+        "hint": "Press Enter to send, or Shift+Enter to insert a new line."
+    },
+    {
+        "area": "Reasoning Logs",
+        "target_key": "logs",
+        "badge": "5 / 9",
+        "title": "🔬 Streaming Answers & Isolated Thought Channels",
+        "subtitle": "Demuxed Internal Reasoning & LaTeX Math Formatting",
+        "desc": (
+            "Advanced models generate internal reasoning before emitting final answers:\n\n"
+            "• Real-Time Demuxing: Internal thinking is routed live into Thought Logs and expandable dropdowns.\n"
+            "• Collapsible Reasoning: Expand the thought block in any response to view the model's inner logic.\n"
+            "• Full Markdown Engine: Automatic rendering of LaTeX math ($...$), code blocks, and GFM tables."
+        ),
+        "hint": "Hover over elements to see linger help tooltips explaining active features."
+    },
+    {
+        "area": "History & Vault",
+        "target_key": "history",
+        "badge": "6 / 9",
+        "title": "🗄️ Multi-User Archives & AES-256 Vault Encryption",
+        "subtitle": "Deep Search and Enterprise Cryptographic Protection",
+        "desc": (
+            "Manage and safeguard all conversational archives:\n\n"
+            "• History Archive Tab: Unified search with Level filters, Date filters, and deep text query.\n"
+            "• User Profiles: Switch profiles in Settings to keep separate workspaces and DMN reflections.\n"
+            "• AES-256-GCM Vault: Encrypt all histories with a Master Password and inactivity auto-lock."
+        ),
+        "hint": "Switch between 'Active Chat' and 'History Archive' at the top of the chat area."
+    },
+    {
+        "area": "Deep Cook & Debate",
+        "target_key": "deep_cook",
+        "badge": "7 / 9",
+        "title": "⚔️ Deep Cook Cycles",
+        "subtitle": "Recursive Problem Solving",
+        "desc": (
+            "Harness advanced generation modes for complex reasoning:\n\n"
+            "• Deep Cook Button: Activates multi-cycle recursive synthesis for heavy coding and logic problems.\n"
+            "• Repetition Guard: Configurable loop detectors ('lazy', 'hyper', 'off') prevent generation stalls."
+        ),
+        "hint": "Deep Cook behavior can be toggled between One-Shot and Toggle Mode in Settings."
+    },
+    {
+        "area": "Settings & Tuning",
+        "target_key": "settings",
+        "badge": "8 / 9",
+        "title": "⚙️ Complete Settings Walkthrough",
+        "subtitle": "Hardware Allocations, Sampling Presets, Themes & Cryptographic Vault",
+        "desc": (
+            "The Settings Window (click [Settings] in the top bar) provides full system control:\n\n"
+            "• Engine Tiers & Auto-Detect: Configure GPU Layers, Ctx size, Batch, and samplers per tier. Click [Auto-Detect] to benchmark and allocate VRAM automatically.\n"
+            "• Templating Engine: 32 instant slots to Save, Write, or Modify parameter presets across tiers.\n"
+            "• Global Overrides: Select KV Cache formats (FP16, Q8_0, Q5_0, Q4_0, etc.), SWA offload, Dynamic Auto-Tune, and response headroom.\n"
+            "• Themes & Textures: Switch between Apex Dark, Goth Obsidian, Crystal Cavern, Fractal Logic, and 6 texture finishes + Frosted Glass.\n"
+            "• Vault & Profiles: Set a Master Password with auto-lock timer to encrypt archives, and manage user profile workspaces.\n"
+            "• Instant [Apply]: Test changes live without closing Settings, or click [Save & Close] to persist."
+        ),
+        "hint": "Click [Settings] in the top bar anytime to access hardware tuning and visual customization."
+    },
+    {
+        "area": "Complete",
+        "target_key": "complete",
+        "badge": "9 / 9",
+        "title": "🚀 You're Ready to Begin!",
+        "subtitle": "Explore Serenity PC at Your Own Pace",
+        "desc": (
+            "You have completed the interface walkthrough.\n\n"
+            "• Replay Anytime: Click '[🚀 Start Tutorial Walkthrough]' in Settings whenever needed.\n"
+            "• Instant Help: Hover over buttons and controls to view descriptions.\n"
+            "• Get Started: Select a persona level, type your prompt, and click [Begin!] or [Send]."
+        ),
+        "hint": "Click Finish or press Escape to start your session."
+    }
+]
+
+
+class TutorialOverlay:
+    """
+    Translucent overlay modal guiding the user through Serenity PC's core features.
+    Features progress tracking, dynamic spotlight framing around active UI sections,
+    and adaptive card placement.
+    """
+    def __init__(self, parent_app, on_finish=None):
+        self.app = parent_app
+        self.on_finish = on_finish
+        self.current_step = 0
+        self.total_steps = len(TUTORIAL_SCREENS)
+        self.win = None
+        self._build_ui()
+
+    def _build_ui(self):
+        root = getattr(self.app, 'root', None)
+        if not root or not root.winfo_exists():
+            return
+
+        self.win = win = tk.Toplevel(root)
+        win.title("Serenity PC - Tutorial Walkthrough")
+        win.transient(root)
+        win.grab_set()
+
+        # Geometry & Translucency
+        try:
+            rw = root.winfo_width()
+            rh = root.winfo_height()
+            rx = root.winfo_rootx()
+            ry = root.winfo_rooty()
+            if rw < 400 or rh < 300:
+                rw, rh = 960, 640
+                rx, ry = 100, 100
+            win.geometry(f"{rw}x{rh}+{rx}+{ry}")
+        except Exception:
+            win.geometry("960x640")
+
+        bg_col = THEME.get("bg_color", "#000000")
+        card_bg = THEME.get("widget_bg_color", "#121212")
+        accent = THEME.get("electric_blue", "#007acc")
+        fg_col = THEME.get("fg_color", "#ffffff")
+
+        win.config(bg=bg_col)
+        try:
+            win.attributes("-alpha", 0.72)
+        except Exception:
+            pass
+
+        # Interactive Canvas for spotlight highlights
+        self.canvas = tk.Canvas(win, bg=bg_col, highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Centered / Floating Modal Card
+        self.card = tk.Frame(self.canvas, bg=card_bg, highlightbackground=accent, highlightthickness=2, bd=0, padx=22, pady=16)
+
+        # Bottom Action Bar (Back, Skip, Next/Finish) - pack from BOTTOM first so never pushed off
+        btn_bar = tk.Frame(self.card, bg=card_bg)
+        btn_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
+
+        self.btn_back = tk.Button(btn_bar, text="< Back", command=self.prev_step,
+                                  bg=THEME.get("button_bg_color", "#202020"), fg=fg_col,
+                                  font=("Segoe UI", 9, "bold"), padx=14, pady=4, relief=tk.FLAT)
+        self.btn_back.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.btn_skip = tk.Button(btn_bar, text="Skip Tutorial", command=self.skip,
+                                  bg=card_bg, fg="#ffaa00",
+                                  font=("Segoe UI", 9), padx=10, pady=4, relief=tk.FLAT)
+        self.btn_skip.pack(side=tk.LEFT)
+
+        self.btn_next = tk.Button(btn_bar, text="Next >", command=self.next_step,
+                                  bg=THEME.get("button_active_color", "#007acc"), fg=fg_col,
+                                  font=("Segoe UI", 9, "bold"), padx=18, pady=4, relief=tk.FLAT)
+        self.btn_next.pack(side=tk.RIGHT)
+
+        # Hint Banner - pack above bottom buttons
+        self.hint_lbl = tk.Label(self.card, text="", font=("Segoe UI", 9, "italic"),
+                                 bg=card_bg, fg="#888888", anchor="w", justify=tk.LEFT)
+        self.hint_lbl.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 4))
+
+        # Header Frame: Area tag + Progress Badge
+        header_f = tk.Frame(self.card, bg=card_bg)
+        header_f.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
+
+        self.area_lbl = tk.Label(header_f, text="OVERVIEW", font=("Segoe UI", 9, "bold"),
+                                 bg=card_bg, fg=accent)
+        self.area_lbl.pack(side=tk.LEFT)
+
+        self.badge_lbl = tk.Label(header_f, text="Step 1 of 9", font=("Segoe UI", 9, "bold"),
+                                  bg=THEME.get("button_bg_color", "#202020"), fg=fg_col, padx=8, pady=2)
+        self.badge_lbl.pack(side=tk.RIGHT)
+
+        # Progress Bar
+        self.prog_var = tk.DoubleVar(value=1.0)
+        self.progress_bar = ttk.Progressbar(self.card, variable=self.prog_var, maximum=float(self.total_steps),
+                                            orient=tk.HORIZONTAL, mode="determinate")
+        self.progress_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, 6))
+
+        # Title & Subtitle
+        self.title_lbl = tk.Label(self.card, text="", font=("Segoe UI", 13, "bold"),
+                                  bg=card_bg, fg=THEME.get("accent_highlight", "#00ffcc"), anchor="w", justify=tk.LEFT)
+        self.title_lbl.pack(side=tk.TOP, fill=tk.X, pady=(0, 1))
+
+        self.sub_lbl = tk.Label(self.card, text="", font=("Segoe UI", 9, "italic"),
+                                bg=card_bg, fg=accent, anchor="w", justify=tk.LEFT)
+        self.sub_lbl.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
+
+        # Separator line
+        sep = tk.Frame(self.card, height=1, bg=THEME.get("trim_color", "#333333"))
+        sep.pack(side=tk.TOP, fill=tk.X, pady=(0, 6))
+
+        # Body Text - expands dynamically in remaining central space
+        self.body_lbl = tk.Label(self.card, text="", font=("Segoe UI", 9),
+                                 bg=card_bg, fg=fg_col, anchor="nw", justify=tk.LEFT, wraplength=720)
+        self.body_lbl.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 2))
+
+        # Dynamic text wrap on card resize
+        self.card.bind("<Configure>", lambda e: self.body_lbl.config(wraplength=max(220, e.width - 32)))
+
+        # Keyboard Navigation
+        win.bind("<Left>", lambda e: self.prev_step())
+        win.bind("<Right>", lambda e: self.next_step())
+        win.bind("<Return>", lambda e: self.next_step())
+        win.bind("<Escape>", lambda e: self.skip())
+        win.protocol("WM_DELETE_WINDOW", self.skip)
+
+        # Re-render spotlight on window resize
+        self._resize_job = None
+        def _on_win_configure(e):
+            if e.widget == win:
+                if self._resize_job:
+                    win.after_cancel(self._resize_job)
+                self._resize_job = win.after(100, self._render_step)
+        win.bind("<Configure>", _on_win_configure)
+
+        try:
+            win.update_idletasks()
+        except Exception:
+            pass
+        self._render_step()
+
+    def _get_target_widgets(self, key: str) -> List[Any]:
+        app = self.app
+        if not app:
+            return []
+        widgets = []
+        if key in ["avatar_status", "top_bar"]:
+            for attr in ["top_bar_frame", "tab_bar_frame", "load_model_button", "action_button", "btn_video", "btn_watch", "btn_clear_queue", "btn_active", "btn_history", "system_status_label", "hw_mode_label", "status_frame", "thinking_display"]:
+                w = getattr(app, attr, None)
+                if w and hasattr(w, "winfo_exists") and w.winfo_exists():
+                    widgets.append(w)
+        elif key == "persona":
+            for attr in ["persona_control_frame", "persona_label", "depth_slider", "persona_name_button", "desc_container", "persona_desc_label"]:
+                w = getattr(app, attr, None)
+                if w and hasattr(w, "winfo_exists") and w.winfo_exists():
+                    widgets.append(w)
+        elif key == "console":
+            for attr in ["input_control_frame", "user_input", "attachment_frame", "mic_button", "ghost_button", "history_usage_button", "send_button", "deep_thought_button", "hurry_button", "rgb_button", "footer_control_frame"]:
+                w = getattr(app, attr, None)
+                if w and hasattr(w, "winfo_exists") and w.winfo_exists():
+                    widgets.append(w)
+        elif key == "logs":
+            for attr in ["chat_frame", "chat_history", "right_panel", "log_container", "thought_log"]:
+                w = getattr(app, attr, None)
+                if w and hasattr(w, "winfo_exists") and w.winfo_exists():
+                    widgets.append(w)
+        elif key == "history":
+            for attr in ["tab_bar_frame", "btn_active", "btn_history"]:
+                w = getattr(app, attr, None)
+                if w and hasattr(w, "winfo_exists") and w.winfo_exists():
+                    widgets.append(w)
+        elif key == "deep_cook":
+            for attr in ["deep_thought_button", "hurry_button"]:
+                w = getattr(app, attr, None)
+                if w and hasattr(w, "winfo_exists") and w.winfo_exists():
+                    widgets.append(w)
+        elif key == "settings":
+            for attr in ["load_model_button"]:
+                w = getattr(app, attr, None)
+                if w and hasattr(w, "winfo_exists") and w.winfo_exists():
+                    widgets.append(w)
+        return widgets
+
+    def _get_target_bounds(self, target_key: str):
+        widgets = self._get_target_widgets(target_key)
+        if not widgets or not self.win or not self.win.winfo_exists():
+            return None
+        
+        try:
+            self.win.update_idletasks()
+            wx = self.win.winfo_rootx()
+            wy = self.win.winfo_rooty()
+            
+            min_x = 999999
+            min_y = 999999
+            max_x = -999999
+            max_y = -999999
+            found = False
+            
+            for w in widgets:
+                if hasattr(w, "winfo_exists") and w.winfo_exists():
+                    try:
+                        w_x = w.winfo_rootx() - wx
+                        w_y = w.winfo_rooty() - wy
+                        w_w = w.winfo_width()
+                        w_h = w.winfo_height()
+                        if w_w > 10 and w_h > 10:
+                            min_x = min(min_x, w_x)
+                            min_y = min(min_y, w_y)
+                            max_x = max(max_x, w_x + w_w)
+                            max_y = max(max_y, w_y + w_h)
+                            found = True
+                    except Exception:
+                        pass
+            if found and max_x > min_x and max_y > min_y:
+                return (min_x, min_y, max_x, max_y)
+        except Exception:
+            pass
+        return None
+
+    def _render_step(self):
+        if self.current_step < 0:
+            self.current_step = 0
+        if self.current_step >= self.total_steps:
+            self._complete()
+            return
+
+        screen = TUTORIAL_SCREENS[self.current_step]
+        self.area_lbl.config(text=screen["area"].upper())
+        self.badge_lbl.config(text=f"Step {self.current_step + 1} of {self.total_steps}")
+        self.prog_var.set(float(self.current_step + 1))
+        self.title_lbl.config(text=screen["title"])
+        self.sub_lbl.config(text=screen["subtitle"])
+        self.body_lbl.config(text=screen["desc"])
+        self.hint_lbl.config(text=screen["hint"])
+
+        if self.current_step == 0:
+            self.btn_back.config(state=tk.DISABLED)
+        else:
+            self.btn_back.config(state=tk.NORMAL)
+
+        if self.current_step == self.total_steps - 1:
+            self.btn_next.config(text="Finish Tutorial 🚀", bg=THEME.get("accent_highlight", "#00ffcc"), fg="#000000")
+        else:
+            self.btn_next.config(text="Next >", bg=THEME.get("button_active_color", "#007acc"), fg=THEME.get("fg_color", "#ffffff"))
+
+        # Visual Section Spotlight & Card Repositioning
+        if hasattr(self, 'canvas') and self.canvas and self.canvas.winfo_exists():
+            self.canvas.delete("spotlight")
+            try:
+                self.win.update_idletasks()
+            except Exception:
+                pass
+            win_w = max(600, self.win.winfo_width())
+            win_h = max(400, self.win.winfo_height())
+            bounds = self._get_target_bounds(screen.get("target_key", ""))
+            
+            if bounds:
+                bx1, by1, bx2, by2 = bounds
+                pad = 8
+                bx1, by1 = max(4, bx1 - pad), max(4, by1 - pad)
+                bx2, by2 = min(win_w - 4, bx2 + pad), min(win_h - 4, by2 + pad)
+                
+                # Multi-layered glowing neon frame
+                self.canvas.create_rectangle(bx1 - 4, by1 - 4, bx2 + 4, by2 + 4,
+                                             outline="#003366", width=4, tags="spotlight")
+                self.canvas.create_rectangle(bx1 - 2, by1 - 2, bx2 + 2, by2 + 2,
+                                             outline="#007acc", width=2, tags="spotlight")
+                self.canvas.create_rectangle(bx1, by1, bx2, by2,
+                                             outline="#00ffcc", width=2, tags="spotlight")
+                
+                # Section Badge Banner
+                badge_text = f" 📍 SECTION IN FOCUS: {screen['area'].upper()} "
+                badge_y = by1 - 12 if by1 > 30 else by2 + 14
+                self.canvas.create_text(bx1 + 10, badge_y, text=badge_text,
+                                        font=("Segoe UI", 9, "bold"), fill="#00ffcc", anchor="w", tags="spotlight")
+                
+                # Adaptive Smart Placement for the dialog card
+                target_mid_x = (bx1 + bx2) / 2
+                
+                if target_mid_x > win_w * 0.50:
+                    # Target is on right half (e.g. Avatar/Logs): position card on left
+                    c_w = min(560, max(420, int(win_w * 0.48)))
+                    c_h = min(540, max(380, win_h - 60))
+                    c_x = 24
+                    c_y = max(20, (win_h - c_h) // 2)
+                elif by1 > win_h * 0.45:
+                    # Target is at the bottom (e.g. Console / Persona Slider): position card in top half
+                    c_w = min(780, max(460, win_w - 60))
+                    c_h = min(480, max(360, int(by1 - 30)))
+                    c_x = (win_w - c_w) // 2
+                    c_y = 20
+                elif by2 < win_h * 0.55:
+                    # Target is at top (e.g. Settings toolbar / tabs): position card in bottom half
+                    c_y = max(20, int(by2 + 20))
+                    c_w = min(780, max(460, win_w - 60))
+                    c_h = min(500, max(360, win_h - c_y - 30))
+                    c_x = (win_w - c_w) // 2
+                else:
+                    c_w = min(780, max(460, win_w - 80))
+                    c_h = min(480, max(360, win_h - 80))
+                    c_x = (win_w - c_w) // 2
+                    c_y = (win_h - c_h) // 2
+            else:
+                c_w = min(800, max(480, win_w - 80))
+                c_h = min(500, max(380, win_h - 80))
+                c_x = (win_w - c_w) // 2
+                c_y = (win_h - c_h) // 2
+
+            # Safety clamp so card never exceeds window bounds
+            if c_x + c_w > win_w - 10:
+                c_w = max(320, win_w - c_x - 10)
+            if c_y + c_h > win_h - 10:
+                c_y = max(10, win_h - c_h - 10)
+                if c_y + c_h > win_h - 10:
+                    c_h = max(260, win_h - c_y - 10)
+
+            self.card.place(x=c_x, y=c_y, width=c_w, height=c_h, relx=0, rely=0, relwidth=0, relheight=0)
+
+    def next_step(self):
+        if self.current_step < self.total_steps - 1:
+            self.current_step += 1
+            self._render_step()
+        else:
+            self._complete()
+
+    def prev_step(self):
+        if self.current_step > 0:
+            self.current_step -= 1
+            self._render_step()
+
+    def skip(self):
+        self._complete()
+
+    def _complete(self):
+        if self.app and hasattr(self.app, 'config'):
+            self.app.config["tutorial_completed"] = True
+            if hasattr(self.app, 'save_config'):
+                self.app.save_config()
+        if self.win:
+            try:
+                self.win.grab_release()
+                self.win.destroy()
+            except Exception:
+                pass
+            self.win = None
+        if self.on_finish:
+            try:
+                self.on_finish()
+            except Exception:
+                pass
+

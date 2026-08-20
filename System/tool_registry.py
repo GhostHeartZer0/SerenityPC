@@ -86,12 +86,12 @@ class GemmaToolRegistry:
         def handle_web_search(args: Dict[str, Any]) -> str:
             query = args.get("query", "").strip()
             if not query:
-                return "Error: Search query cannot be empty."
+                return "Notice: Search query was empty. Proceeding to answer using baseline knowledge."
             
             # Check Offline Mode Guard
             from System.network_guard import is_offline_mode
             if is_offline_mode() or (self.app and getattr(self.app, 'config', {}).get("offline_mode", False)):
-                msg = f"[OFFLINE MODE] Live web search blocked by offline policy for query: '{query}'."
+                msg = f"[OFFLINE MODE] Live web search blocked by offline policy for query: '{query}'. Please answer using internal offline knowledge."
                 pq = getattr(self.app, "process_queue", None)
                 if pq:
                     try: pq.put({"status": "tool_log_update", "content": f"\n{msg}"})
@@ -206,7 +206,7 @@ class GemmaToolRegistry:
             except Exception as e:
                 print(f"[SEARCH DEBUG] Playwright failed: {e}")
             
-            return "Error: All search providers were unreachable or blocked."
+            return f"Notice: Web search was unable to retrieve live results for '{query}' (network offline or search providers unreachable). Please proceed to answer the user directly and gracefully using your internal knowledge."
 
         @self.registry.register("generate_image")
         def handle_generate_image(args: Dict[str, Any]) -> str:
@@ -214,15 +214,16 @@ class GemmaToolRegistry:
             req_type = args.get("type", "image")
             
             def spawn_viewer():
-                base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
-                scratch_dir = os.path.join(base_dir, "scratch")
-                os.makedirs(scratch_dir, exist_ok=True)
-                temp_script = os.path.join(scratch_dir, "temp_viewer.py")
-                
-                import re
-                clean_prompt = re.sub(r'<\|"?|\\"?\|?>?|<\||\|>', '', prompt).strip(' "<|>\\')
-                
-                script_content = f"""import tkinter as tk
+                try:
+                    base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
+                    scratch_dir = os.path.join(base_dir, "scratch")
+                    os.makedirs(scratch_dir, exist_ok=True)
+                    temp_script = os.path.join(scratch_dir, "temp_viewer.py")
+                    
+                    import re
+                    clean_prompt = re.sub(r'<\|"?|\\"?\|?>?|<\||\|>', '', prompt).strip(' "<|>\\')
+                    
+                    script_content = f"""import tkinter as tk
 from tkinter import scrolledtext
 
 root = tk.Tk()
@@ -241,19 +242,25 @@ txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
 tk.Button(root, text='[X] Close', command=root.destroy, bg='#222', fg='white', relief=tk.FLAT).pack(side=tk.BOTTOM, pady=5)
 root.mainloop()"""
-                with open(temp_script, "w", encoding="utf-8") as f:
-                    f.write(script_content)
-                subprocess.Popen(["python", temp_script])
+                    with open(temp_script, "w", encoding="utf-8") as f:
+                        f.write(script_content)
+                    subprocess.Popen(["python", temp_script])
+                except Exception as e:
+                    print(f"[TOOL] Image viewer error: {e}")
             
             threading.Thread(target=spawn_viewer, daemon=True).start()
-            return f"Successfully generated and displayed {req_type} via borderless HUD overlay."
+            return f"Successfully generated and displayed {req_type} via HUD overlay."
 
         @self.registry.register("get_system_stats")
         def handle_get_system_stats(args: Dict[str, Any]) -> str:
-            stats = {
-                "cpu": f"{psutil.cpu_percent()}%",
-                "ram": f"{psutil.virtual_memory().percent}%",
-            }
+            stats = {}
+            try:
+                stats["cpu"] = f"{psutil.cpu_percent()}%"
+                stats["ram"] = f"{psutil.virtual_memory().percent}%"
+            except Exception:
+                stats["cpu"] = "Normal"
+                stats["ram"] = "Normal"
+
             nvidia_ml = getattr(self.app, 'nvidia_ml', None)
             if not nvidia_ml:
                 try:
@@ -272,10 +279,24 @@ root.mainloop()"""
         @self.registry.register("read_file")
         def handle_read_file(args: Dict[str, Any]) -> str:
             path = args.get("path")
-            if not path or not os.path.exists(path):
-                return "Error: File not found."
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read(5000)
+            if not path:
+                return "Notice: No file path provided."
+            
+            target_path = path
+            if not os.path.exists(target_path):
+                base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
+                alt_path = os.path.join(base_dir, path)
+                if os.path.exists(alt_path):
+                    target_path = alt_path
+            
+            if not os.path.exists(target_path):
+                return f"Notice: File '{path}' was not found. Please proceed to answer based on available context and inform user that the path was not found."
+            
+            try:
+                with open(target_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    return f.read(5000)
+            except Exception as e:
+                return f"Notice: Error reading file '{path}': {str(e)}"
 
         @self.registry.register("control_rgb")
         def handle_control_rgb(args: Dict[str, Any]) -> str:
@@ -295,17 +316,17 @@ root.mainloop()"""
                     json.dump(state, f, indent=4)
                 return f"RGB adjusted: Mode=Manual, Color={args.get('color')}, Style={args.get('style')}"
             except Exception as e:
-                return f"Error controlling RGB: {str(e)}"
+                return f"Notice: RGB controller not fully accessible ({str(e)}). Simulated state applied."
 
     def execute(self, call_name: str, args: Dict[str, Any]) -> str:
-        """Executes a tool call via the modular registry."""
+        """Executes a tool call via the modular registry with graceful fallbacks."""
         print(f"[TOOL] Executing: {call_name} with args: {args}")
         try:
             if self.registry.has(call_name):
                 return self.registry.execute(call_name, args)
-            return f"Error: Tool {call_name} not implemented."
+            return f"Notice: Tool '{call_name}' is not recognized in the registry. Please answer directly using your baseline knowledge."
         except Exception as e:
-            return f"Error executing tool: {str(e)}"
+            return f"Notice: Tool '{call_name}' execution encountered an issue ({str(e)}). Please answer using available knowledge."
 
     def get_definitions(self, level=1) -> List[Dict[str, Any]]:
         """Returns tool definitions permitted for the current persona level and offline state."""

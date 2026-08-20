@@ -193,7 +193,6 @@ def calculate_dynamic_gpu_layers(model_path: str, ctx_size: int, targeted_reserv
 # --- KV Cache Quant Map ---
 KV_QUANT_OPTIONS = {
     "F16": 1,
-    "BF16": 16,
     "Q8_0": 8,
     "Q5_1": 7,
     "Q5_0": 6,
