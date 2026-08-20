@@ -11,12 +11,40 @@
 - Deep Cook Verified
 ### Version 1.7.0
 - Subagents Implemented
-### Version 1.6.9
-- Image generation verified
+## Version 1.6.9
+- **UI Dynamic Auto-Scaling, High-DPI Awareness & 1080p Layout Alignment**:
+  - Implemented `enable_high_dpi_awareness()` in `System/serenity_utils.py` and invoked on startup before `tk.Tk()` initialization to eliminate blurry scaling on Windows high-DPI displays.
+  - Normalized inverted and oversized `self.fonts` hierarchy in `main.py` (`small: 9pt`, `main/italic: 10pt`, `bold: 11pt`, `large: 12pt`, markdown fonts: `9-12pt`).
+  - Added dynamic persona slider length auto-scaling in `_on_left_resize` (`70-160px`) and tightened padding across persona control widgets to eliminate horizontal text clipping and keep attachment (`+`) and dictation (`🎙️`) buttons accessible at compact resolutions.
+  - Resolved telemetry key collision in `_setup_logs_and_stats()` (`"Total VRAM"` and `"RAM"`), refined column paddings, and switched to compact monospace typography preventing value truncation.
+  - Added responsive centered default geometry for 1080p displays with `minsize(960, 600)`.
+  - Added automated test suite `System/tests/test_ui_scaling_and_dpi.py`.
+- **Image Generation & ReAct / JSON Tool Calling Support**:
+  - Implemented balanced-brace JSON action block parsing in `main.py` (`_run_tool_loop`), properly intercepting `{"action": "generate_image", "action_input": ...}` ReAct tool calls without falling through to raw text or meta-commentary dumps.
+  - Added robust nested argument decoding (handling stringified JSON, single-quoted python dictionaries, and raw prompt strings) in `handle_generate_image` in `System/tool_registry.py`.
+  - Replaced hardcoded `python` subprocess call with `sys.executable` in `spawn_viewer` and restyled the HUD overlay with dark theme and electric blue accents.
+  - Enabled `generate_image` and `read_file` in `get_definitions` starting at Level 2+.
+- **Telemetry Population (VRAM, Total RAM, CPU Temp, CPU Power) Fix & Verification**:
+  - Initialized thread-local COM context (`pythoncom.CoInitialize()` / `pythoncom.CoUninitialize()`) in `SystemMonitor._stats_loop` to support reliable background WMI performance counter querying.
+  - Implemented `root\cimv2:Win32_PerfFormattedData_Counters_ThermalZoneInformation` non-admin queries for `CPU Temp` with Kelvin to Celsius conversion (`HighPrecisionTemperature` and `Temperature`), with multi-tier fallbacks to `LibreHardwareMonitor`, `OpenHardwareMonitor`, `root\wmi:MSAcpi_ThermalZoneTemperature`, and `psutil`.
+  - Implemented `root\cimv2:Win32_PerfFormattedData_PowerMeterCounter_EnergyMeter` RAPL hardware counter queries (`RAPL_Package0_PKG`, `RAPL_Package0_PP0`) for `CPU Power` in milliwatts, with multi-tier fallbacks to hardware monitors and dynamic CPU load-based TDP estimation curve.
+  - Resolved `SharedUsage` WMI query failure in `_get_shared_vram_used_bytes` and added non-NVML / integrated GPU adapter counter fallback (`Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory`) for dedicated and shared VRAM.
+  - Updated `_update_stats_display` in `main.py` to format both string and numeric power metrics uniformly (`XX.XW`) in standard and graph modes.
+- **Text Size & UI Font Scaling Options**:
+  - Implemented dynamic proportional font scaling in `main.py` via `apply_text_scale(scale_pct)` (70% - 250%), updating all `tkFont.Font` bindings across chat, markdown, logs, telemetry, and controls in real time.
+  - Re-proportioned base font specifications in `BASE_FONT_SPECS`: boosted main chat / prompt / response readability (`main/bold: 13pt`, `large/headers: 15-17pt`, `ui_button/ui_label: 11pt`) while keeping backend console and telemetry compact (`log: 9pt`, `stats: 8pt`).
+  - Switched default font family from missing `Open Sans` to native `Segoe UI` (guaranteed on Windows) to prevent silent fallback font distortion.
+  - Added Font Family selection dropdowns ("UI Font" and "Code / Log Font") in `System/settings_ui.py` with 14 popular UI choices (Times New Roman, Comic Sans MS, Arial, Calibri, Verdana, Tahoma, Trebuchet MS, Georgia, Cambria, Palatino Linotype, Franklin Gothic Medium, Impact, Lucida Sans Unicode, Segoe UI) and 5 monospace choices (Consolas, Courier New, Lucida Console, Cascadia Code, Cascadia Mono) with live preview and persistence.
+  - Eliminated all hardcoded `font=(...)` tuples across `main.py`, `settings_ui.py`, and `serenity_utils.py`, routing all UI elements through `self.fonts[...]` so scale and family changes propagate globally.
+  - Added "Text Size / Scale" preset dropdown (`85% (Compact)` to `200% (Maximum)`) in `System/settings_ui.py`.
+  - Added global browser-style zoom keyboard shortcuts: `Ctrl + Plus` / `Ctrl + Equal` (Zoom In +10%), `Ctrl + Minus` (Zoom Out -10%), and `Ctrl + 0` (Reset to 100%).
+  - Added automated test suite `System/tests/test_text_scaling.py` covering scale hierarchy, boundaries, and font family switching.
 
-### Version 1.6.8
-- Verify Loading bar
-- Verify Info Hovers & Tutorial
+## Version 1.6.8
+- **Loading Bar & Status Area Verification**:
+  - Verified hybrid status tracking, TTFT calculation, active task gauges, and Serenity Prayer animation transitions.
+- **Tutorial & Info Hover Verification**:
+  - Verified 9-step tutorial overlay alignment, non-blocking alpha darkening, and 1.5s tooltip timers across controls.
 
 ## Version 1.6.7
 - **Tutorial & Tooltip Enhancements**:

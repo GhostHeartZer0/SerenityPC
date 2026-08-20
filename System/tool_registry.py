@@ -209,9 +209,61 @@ class GemmaToolRegistry:
             return f"Notice: Web search was unable to retrieve live results for '{query}' (network offline or search providers unreachable). Please proceed to answer the user directly and gracefully using your internal knowledge."
 
         @self.registry.register("generate_image")
-        def handle_generate_image(args: Dict[str, Any]) -> str:
-            prompt = args.get("prompt", "")
+        def handle_generate_image(args: Any) -> str:
+            import sys
+            import ast
+            if isinstance(args, str):
+                try:
+                    parsed = ast.literal_eval(args)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                    else:
+                        args = {"prompt": args}
+                except Exception:
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {"prompt": args}
+            elif not isinstance(args, dict):
+                args = {"prompt": str(args)}
+
+            # Handle nested action_input / parameters / arguments
+            for k in ("action_input", "parameters", "arguments", "input"):
+                if k in args:
+                    nested = args[k]
+                    if isinstance(nested, str):
+                        try:
+                            nested_parsed = ast.literal_eval(nested)
+                            if isinstance(nested_parsed, dict):
+                                nested = nested_parsed
+                        except Exception:
+                            try:
+                                nested_parsed = json.loads(nested)
+                                if isinstance(nested_parsed, dict):
+                                    nested = nested_parsed
+                            except Exception: pass
+                    if isinstance(nested, dict):
+                        for nk, nv in nested.items():
+                            args.setdefault(nk, nv)
+                    elif isinstance(nested, str) and not args.get("prompt"):
+                        args["prompt"] = nested
+
+            prompt = args.get("prompt") or args.get("description") or args.get("code") or args.get("query") or args.get("text") or ""
             req_type = args.get("type", "image")
+            if isinstance(prompt, dict):
+                req_type = prompt.get("type", req_type)
+                prompt = prompt.get("prompt") or prompt.get("description") or str(prompt)
+            elif isinstance(prompt, str) and (prompt.strip().startswith("{") and prompt.strip().endswith("}")):
+                try:
+                    p_dict = ast.literal_eval(prompt)
+                    if isinstance(p_dict, dict):
+                        req_type = p_dict.get("type", req_type)
+                        prompt = p_dict.get("prompt") or p_dict.get("description") or prompt
+                except Exception: pass
+
+            clean_prompt = str(prompt).strip()
+            import re
+            clean_prompt = re.sub(r'<\|"?|\\"?\|?>?|<\||\|>', '', clean_prompt).strip(' "<|>\\')
             
             def spawn_viewer():
                 try:
@@ -220,36 +272,42 @@ class GemmaToolRegistry:
                     os.makedirs(scratch_dir, exist_ok=True)
                     temp_script = os.path.join(scratch_dir, "temp_viewer.py")
                     
-                    import re
-                    clean_prompt = re.sub(r'<\|"?|\\"?\|?>?|<\||\|>', '', prompt).strip(' "<|>\\')
-                    
                     script_content = f"""import tkinter as tk
 from tkinter import scrolledtext
 
 root = tk.Tk()
-root.overrideredirect(True)
+root.title("Serenity Visual HUD")
 root.attributes('-topmost', True)
-root.attributes('-alpha', 0.95)
-root.geometry("500x350+100+100")
-root.config(bg='black')
+root.attributes('-alpha', 0.96)
+root.geometry("560x420+120+120")
+root.config(bg='#0d0d12')
 
-tk.Label(root, text='[Serenity Image / Diagram Viewer]', fg='#00ffcc', bg='black', font=('Consolas', 10, 'bold')).pack(pady=5)
+hdr = tk.Frame(root, bg='#161622', pady=6)
+hdr.pack(fill=tk.X)
+tk.Label(hdr, text='✨ Serenity Visual & Diagram Viewer', fg='#00ffcc', bg='#161622', font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=10)
+tk.Label(hdr, text='[{req_type.upper()}]', fg='#8888aa', bg='#161622', font=('Consolas', 9)).pack(side=tk.RIGHT, padx=10)
 
-txt = scrolledtext.ScrolledText(root, fg='white', bg='#111111', font=('Consolas', 9), insertbackground='white', borderwidth=0)
+txt = scrolledtext.ScrolledText(root, fg='#e0e0ff', bg='#12121a', font=('Consolas', 10), insertbackground='white', borderwidth=0, wrap=tk.WORD)
 txt.insert(tk.END, {repr(clean_prompt)})
 txt.config(state=tk.DISABLED)
-txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+txt.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
-tk.Button(root, text='[X] Close', command=root.destroy, bg='#222', fg='white', relief=tk.FLAT).pack(side=tk.BOTTOM, pady=5)
+btn_f = tk.Frame(root, bg='#0d0d12', pady=6)
+btn_f.pack(fill=tk.X, padx=12)
+tk.Button(btn_f, text='Close HUD', command=root.destroy, bg='#252535', fg='#00ffcc', font=('Segoe UI', 9, 'bold'), relief=tk.FLAT, padx=12).pack(side=tk.RIGHT)
 root.mainloop()"""
                     with open(temp_script, "w", encoding="utf-8") as f:
                         f.write(script_content)
-                    subprocess.Popen(["python", temp_script])
+                    subprocess.Popen([sys.executable, temp_script])
                 except Exception as e:
                     print(f"[TOOL] Image viewer error: {e}")
             
             threading.Thread(target=spawn_viewer, daemon=True).start()
-            return f"Successfully generated and displayed {req_type} via HUD overlay."
+            if self.app and hasattr(self.app, "process_queue"):
+                try:
+                    self.app.process_queue.put({"status": "tool_log_update", "content": f"\n[IMAGE / VISUAL HUD] Rendered {req_type}: {clean_prompt[:80]}...\n"})
+                except: pass
+            return f"Successfully generated and displayed {req_type} visual prompt in HUD overlay: '{clean_prompt[:60]}...'"
 
         @self.registry.register("get_system_stats")
         def handle_get_system_stats(args: Dict[str, Any]) -> str:
@@ -341,14 +399,10 @@ root.mainloop()"""
             # Strictly filter out web_search and remote internet services when offline
             base_tools = [t for t in base_tools if t["function"]["name"] not in ("web_search",)]
             
-        if level < 5:
-            # Filter low-level allowed tools
-            allowed_names = {"get_system_stats", "control_rgb"}
-            if not is_offline:
-                allowed_names.add("web_search")
-            return [t for t in base_tools if t["function"]["name"] in allowed_names]
-            
-        return base_tools
+        allowed_names = {"get_system_stats", "control_rgb", "generate_image", "read_file"}
+        if not is_offline:
+            allowed_names.add("web_search")
+        return [t for t in base_tools if t["function"]["name"] in allowed_names]
 
     def get_python_stubs(self, level: int = 1) -> str:
         """Generates typed Python function stubs for Programmatic Tool Calling (PTC - arXiv:2608.06370v1)."""

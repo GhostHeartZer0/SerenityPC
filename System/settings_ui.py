@@ -96,7 +96,7 @@ def open_settings_window(app):
         
         tut_btn = tk.Button(btn_frame, text="🚀 Tutorial Walkthrough", 
                             command=lambda: (win.destroy(), getattr(app, 'start_tutorial_walkthrough', lambda: None)()),
-                            bg=THEME["widget_bg_color"], fg=THEME.get("accent_highlight", "#00ffcc"), font=("Segoe UI", 9, "bold"), relief=tk.FLAT)
+                            bg=THEME["widget_bg_color"], fg=THEME.get("accent_highlight", "#00ffcc"), font=app.fonts["ui_button"], relief=tk.FLAT)
         tut_btn.pack(side=tk.LEFT, padx=2)
         ToolTip(tut_btn, "Launch the interactive translucent tutorial walkthrough for Serenity PC.", app=app)
         
@@ -290,7 +290,7 @@ def open_settings_window(app):
         cb_tips.pack(anchor="w", pady=2)
         ToolTip(cb_tips, "Displays helpful linger-hover information boxes across UI controls.", app=app)
 
-        lbl_templ = tk.Label(center_header, text="Templating Engine (32 Slots):", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold"))
+        lbl_templ = tk.Label(center_header, text="Templating Engine (32 Slots):", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"])
         lbl_templ.pack(anchor="n")
         ToolTip(lbl_templ, "32 instant slots to Save, Write, or Modify parameter presets across tiers.", app=app)
         template_mode = tk.StringVar(value="modify")
@@ -442,7 +442,7 @@ def open_settings_window(app):
             key = f"vision_{tier_name}" if is_vision else tier_name
             lvl_map = {"fast": "1", "search": "2", "low": "3", "med": "4", "high": "5", "transcendent": "6", "secret": "7"}
             title_suffix = f" (Lvl {lvl_map[tier_name]})" if tier_name in lvl_map else ""
-            lf = tk.LabelFrame(parent, text=f"Engine: {tier_name.upper()}{title_suffix}", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"), pady=5)
+            lf = tk.LabelFrame(parent, text=f"Engine: {tier_name.upper()}{title_suffix}", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"], pady=5)
             lf.grid(row=row, column=col, sticky="nsew", padx=10, pady=5)
             
             def _bind_click(w):
@@ -451,7 +451,7 @@ def open_settings_window(app):
             
             r1 = tk.Frame(lf, bg=THEME["bg_color"]); r1.pack(fill=tk.X, padx=5)
             tk.Button(r1, text="Set Path", command=lambda t=key: app._set_path(t, labels, win)).pack(side=tk.LEFT)
-            labels[key] = tk.Label(r1, text=os.path.basename(app.model_paths.get(key, "") or "Not Set"), bg=THEME["bg_color"], fg=THEME["fg_color"], font=("Open Sans", 8))
+            labels[key] = tk.Label(r1, text=os.path.basename(app.model_paths.get(key, "") or "Not Set"), bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"])
             labels[key].pack(side=tk.LEFT, padx=5)
             
             r1b = tk.Frame(lf, bg=THEME["bg_color"]); r1b.pack(fill=tk.X, padx=5, pady=2)
@@ -464,30 +464,30 @@ def open_settings_window(app):
 
             r2 = tk.Frame(lf, bg=THEME["bg_color"]); r2.pack(fill=tk.X, padx=5)
             for l, d, c, df in [("Temp", temp_ents, app.temp_config, 0.8), ("Top-P", top_p_ents, app.top_p_config, 0.95), ("Min-P", min_p_ents, app.min_p_config, 0.05), ("Top-K", top_k_ents, app.top_k_config, 40)]:
-                tk.Label(r2, text=f"{l}:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=("Open Sans", 8)).pack(side=tk.LEFT, padx=(2, 0))
+                tk.Label(r2, text=f"{l}:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side=tk.LEFT, padx=(2, 0))
                 d[key] = tk.Entry(r2, width=5); d[key].insert(0, f"{c.get(key, df):g}"); d[key].pack(side=tk.LEFT, padx=2)
                 
             r2b = tk.Frame(lf, bg=THEME["bg_color"]); r2b.pack(fill=tk.X, padx=5)
             for l, d, c, df in [("Rep", rep_ents, app.repeat_penalty_config, 1.1), ("Freq", freq_ents, app.frequency_penalty_config, 0.0), ("Pres", pres_ents, app.presence_penalty_config, 0.0)]:
-                tk.Label(r2b, text=f"{l}:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=("Open Sans", 8)).pack(side=tk.LEFT, padx=(2, 0))
+                tk.Label(r2b, text=f"{l}:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side=tk.LEFT, padx=(2, 0))
                 d[key] = tk.Entry(r2b, width=5); d[key].insert(0, f"{c.get(key, df):g}"); d[key].pack(side=tk.LEFT, padx=2)
 
             r3 = tk.Frame(lf, bg=THEME["bg_color"]); r3.pack(fill=tk.X, padx=5)
-            tk.Label(r3, text="Stop:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=("Open Sans", 8)).pack(side=tk.LEFT)
-            stop_ents[key] = tk.Entry(r3, font=("Open Sans", 8), bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=50)
+            tk.Label(r3, text="Stop:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side=tk.LEFT)
+            stop_ents[key] = tk.Entry(r3, font=app.fonts["ui_small"], bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=50)
             stop_ents[key].insert(0, app.stop_strings_config.get(key, "")); stop_ents[key].pack(side=tk.LEFT, padx=5)
             
             if is_vision:
                 pk = f"{key}_projector"
                 r4 = tk.Frame(lf, bg=THEME["bg_color"]); r4.pack(fill=tk.X, padx=5, pady=2)
                 tk.Button(r4, text="Projector", command=lambda k=pk: app._set_path(k, labels, win, True)).pack(side=tk.LEFT)
-                labels[pk] = tk.Label(r4, text=os.path.basename(app.model_paths.get(pk, "") or "Not Set"), bg=THEME["bg_color"], fg=THEME["fg_color"], font=("Open Sans", 8))
+                labels[pk] = tk.Label(r4, text=os.path.basename(app.model_paths.get(pk, "") or "Not Set"), bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"])
                 labels[pk].pack(side=tk.LEFT, padx=5)
             _bind_click(lf)
 
         media_frame = tk.Frame(main, bg=THEME["bg_color"])
         media_frame.pack(fill=tk.X, pady=10)
-        lbl_med = tk.Label(media_frame, text="Rich Media Rendering:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"))
+        lbl_med = tk.Label(media_frame, text="Rich Media Rendering:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"])
         lbl_med.pack(side=tk.LEFT, padx=10)
         ToolTip(lbl_med, "Choose how rich media (images, plots, markdown) is displayed: None, Inline, or in a separate Popup.", app=app)
         media_var = tk.IntVar(value=app.config.get("media_rendering", 1))
@@ -496,7 +496,7 @@ def open_settings_window(app):
             rb_m.pack(side=tk.LEFT, padx=5)
             ToolTip(rb_m, f"Set media rendering mode to {t}.", app=app)
 
-        over_lf = tk.LabelFrame(main, text="Global Engine & Memory Overrides", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"), pady=5)
+        over_lf = tk.LabelFrame(main, text="Global Engine & Memory Overrides", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"], pady=5)
         over_lf.pack(fill=tk.X, padx=10, pady=5)
         
         over_subgrid = tk.Frame(over_lf, bg=THEME["bg_color"])
@@ -717,6 +717,85 @@ def open_settings_window(app):
         stt_lang_dropdown.grid(row=10, column=1, padx=5, pady=2)
         ToolTip(stt_lang_dropdown, "Select spoken language code for voice dictation.", app=app)
 
+        # --- TEXT & FONT SCALING ---
+        TEXT_SCALE_PRESETS = [
+            ("85% (Compact)", 85),
+            ("100% (Standard)", 100),
+            ("115% (Medium)", 115),
+            ("125% (Large)", 125),
+            ("140% (X-Large)", 140),
+            ("160% (Huge)", 160),
+            ("180% (Massive)", 180),
+            ("200% (Maximum)", 200)
+        ]
+        SCALE_MAP = {lbl: val for lbl, val in TEXT_SCALE_PRESETS}
+        SCALE_REV_MAP = {val: lbl for lbl, val in TEXT_SCALE_PRESETS}
+        
+        curr_text_scale = int(app.config.get("text_scale", 100))
+        default_preset_lbl = SCALE_REV_MAP.get(curr_text_scale, f"{curr_text_scale}%")
+        text_scale_display_var = tk.StringVar(value=default_preset_lbl)
+        text_scale_val_var = tk.IntVar(value=curr_text_scale)
+
+        lbl_scale = tk.Label(kv_frame, text="Text Size / Scale:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_scale.grid(row=11, column=0, sticky="w", pady=2)
+        ToolTip(lbl_scale, "Adjust text and font size scaling (70% - 250%). Use Ctrl + / Ctrl - for quick zoom.", app=app)
+        
+        scale_dropdown = ttk.Combobox(kv_frame, textvariable=text_scale_display_var, values=list(SCALE_MAP.keys()), state="readonly", width=14)
+        scale_dropdown.grid(row=11, column=1, padx=5, pady=2)
+        ToolTip(scale_dropdown, "Select text size scale preset.", app=app)
+        
+        def _on_scale_dropdown_select(*args):
+            sel = text_scale_display_var.get()
+            if sel in SCALE_MAP:
+                val = SCALE_MAP[sel]
+                text_scale_val_var.set(val)
+                if hasattr(app, 'apply_text_scale'):
+                    app.apply_text_scale(val, persist=False)
+        
+        scale_dropdown.bind("<<ComboboxSelected>>", _on_scale_dropdown_select)
+
+        # --- FONT FAMILY SELECTIONS ---
+        UI_FONT_OPTIONS = [
+            "Segoe UI", "Arial", "Calibri", "Verdana", "Tahoma",
+            "Trebuchet MS", "Times New Roman", "Georgia", "Cambria",
+            "Palatino Linotype", "Comic Sans MS", "Franklin Gothic Medium",
+            "Impact", "Lucida Sans Unicode"
+        ]
+        MONO_FONT_OPTIONS = [
+            "Consolas", "Courier New", "Lucida Console",
+            "Cascadia Code", "Cascadia Mono"
+        ]
+
+        curr_ui_font = app.config.get("ui_font", "Segoe UI")
+        curr_mono_font = app.config.get("mono_font", "Consolas")
+        ui_font_var = tk.StringVar(value=curr_ui_font if curr_ui_font in UI_FONT_OPTIONS else "Segoe UI")
+        mono_font_var = tk.StringVar(value=curr_mono_font if curr_mono_font in MONO_FONT_OPTIONS else "Consolas")
+
+        lbl_ui_font = tk.Label(kv_frame, text="UI Font:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_ui_font.grid(row=12, column=0, sticky="w", pady=2)
+        ToolTip(lbl_ui_font, "Select font family for chat, buttons, menus, and labels.", app=app)
+
+        ui_font_dropdown = ttk.Combobox(kv_frame, textvariable=ui_font_var, values=UI_FONT_OPTIONS, state="readonly", width=14)
+        ui_font_dropdown.grid(row=12, column=1, padx=5, pady=2)
+        ToolTip(ui_font_dropdown, "Choose UI typography font family.", app=app)
+
+        lbl_mono_font = tk.Label(kv_frame, text="Code / Log Font:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_mono_font.grid(row=13, column=0, sticky="w", pady=2)
+        ToolTip(lbl_mono_font, "Select font family for code blocks, telemetry, and backend logs.", app=app)
+
+        mono_font_dropdown = ttk.Combobox(kv_frame, textvariable=mono_font_var, values=MONO_FONT_OPTIONS, state="readonly", width=14)
+        mono_font_dropdown.grid(row=13, column=1, padx=5, pady=2)
+        ToolTip(mono_font_dropdown, "Choose monospace font family.", app=app)
+
+        def _on_font_family_change(*args):
+            u_fam = ui_font_var.get()
+            m_fam = mono_font_var.get()
+            if hasattr(app, "apply_font_family"):
+                app.apply_font_family(u_fam, m_fam, persist=False)
+
+        ui_font_dropdown.bind("<<ComboboxSelected>>", _on_font_family_change)
+        mono_font_dropdown.bind("<<ComboboxSelected>>", _on_font_family_change)
+
         # --- USER PROFILE & HISTORY SEPARATION ---
         user_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
         user_section.pack(fill=tk.X, padx=10, pady=(15, 5))
@@ -724,7 +803,7 @@ def open_settings_window(app):
         user_header = tk.Frame(user_section, bg=THEME["widget_bg_color"])
         user_header.pack(fill=tk.X, padx=0, pady=0)
         lbl_uhdr = tk.Label(user_header, text="👤 User Profile & Mind Separation (Users/<Username>/)", bg=THEME["widget_bg_color"], 
-                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"))
+                 fg=THEME["electric_blue"], font=app.fonts["bold"])
         lbl_uhdr.pack(side=tk.LEFT, padx=8, pady=4)
         ToolTip(lbl_uhdr, "Manage user profiles to keep isolated conversation histories and DMN memory states.", app=app)
 
@@ -761,7 +840,7 @@ def open_settings_window(app):
         sb_header = tk.Frame(status_bar_section, bg=THEME["widget_bg_color"])
         sb_header.pack(fill=tk.X, padx=0, pady=0)
         lbl_sb_hdr = tk.Label(sb_header, text="⏳ Loading Bar & Status Area Overhaul", bg=THEME["widget_bg_color"], 
-                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold"))
+                 fg=THEME["electric_blue"], font=app.fonts["bold"])
         lbl_sb_hdr.pack(side=tk.LEFT, padx=8, pady=4)
         ToolTip(lbl_sb_hdr, "Customize loading bar behavior, transition styles, and idle displays.", app=app)
 
@@ -771,7 +850,7 @@ def open_settings_window(app):
         opts_frame = tk.Frame(sb_body, bg=THEME["bg_color"])
         opts_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
-        lbl_disp_opts = tk.Label(opts_frame, text="Display Options:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold"))
+        lbl_disp_opts = tk.Label(opts_frame, text="Display Options:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"])
         lbl_disp_opts.pack(anchor="w", pady=(0, 2))
         ToolTip(lbl_disp_opts, "Select active loading indicator display mode.", app=app)
 
@@ -800,7 +879,7 @@ def open_settings_window(app):
         anim_combo.pack(anchor="w", pady=(2, 6))
         ToolTip(anim_combo, "Choose between spinner, pulse, or orbit canvas animation.", app=app)
 
-        lbl_sb_tog = tk.Label(toggles_frame, text="Status Area Toggles:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 9, "bold"))
+        lbl_sb_tog = tk.Label(toggles_frame, text="Status Area Toggles:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"])
         lbl_sb_tog.pack(anchor="w", pady=(4, 2))
         ToolTip(lbl_sb_tog, "Configure status bar idle behavior and fallback metadata.", app=app)
 
@@ -823,9 +902,9 @@ def open_settings_window(app):
         vault_header = tk.Frame(vault_section, bg=THEME["widget_bg_color"])
         vault_header.pack(fill=tk.X, padx=0, pady=0)
         tk.Label(vault_header, text="🔐 Security & Vault Encryption (AES-256-GCM)", bg=THEME["widget_bg_color"], 
-                 fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(side=tk.LEFT, padx=8, pady=4)
+                 fg=THEME["electric_blue"], font=app.fonts["bold"]).pack(side=tk.LEFT, padx=8, pady=4)
 
-        vault_status_lbl = tk.Label(vault_header, text="", font=("Segoe UI", 9, "bold"), bg=THEME["widget_bg_color"])
+        vault_status_lbl = tk.Label(vault_header, text="", font=app.fonts["ui_button"], bg=THEME["widget_bg_color"])
         vault_status_lbl.pack(side=tk.RIGHT, padx=8, pady=4)
 
         def _refresh_vault_status_ui():
@@ -859,7 +938,7 @@ def open_settings_window(app):
             disc_frame = tk.Frame(pwd_win, bg="#330000", bd=2, relief=tk.RIDGE)
             disc_frame.pack(fill=tk.X, padx=12, pady=10)
             tk.Label(disc_frame, text=DISCLAIMER_WARNING_TEXT, bg="#330000", fg="#ffcc00",
-                     font=("Consolas", 8, "bold"), justify=tk.LEFT).pack(padx=8, pady=8)
+                     font=app.fonts["log_bold"], justify=tk.LEFT).pack(padx=8, pady=8)
 
             fields_frame = tk.Frame(pwd_win, bg=THEME["bg_color"])
             fields_frame.pack(fill=tk.X, padx=16, pady=4)
@@ -913,7 +992,7 @@ def open_settings_window(app):
             btn_box = tk.Frame(pwd_win, bg=THEME["bg_color"])
             btn_box.pack(fill=tk.X, padx=16, pady=12)
             tk.Button(btn_box, text="Encrypt & Set Password", command=_apply_new_password,
-                      bg=THEME["button_active_color"], fg=THEME["fg_color"], font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=4)
+                      bg=THEME["button_active_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"]).pack(side=tk.LEFT, padx=4)
             tk.Button(btn_box, text="Cancel", command=pwd_win.destroy,
                       bg=THEME["button_bg_color"], fg=THEME["fg_color"]).pack(side=tk.RIGHT, padx=4)
 
@@ -930,7 +1009,7 @@ def open_settings_window(app):
             dis_win.grab_set()
 
             tk.Label(dis_win, text="Enter Master Password to Decrypt All Histories:", 
-                     bg=THEME["bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 9, "bold")).pack(padx=12, pady=10)
+                     bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"]).pack(padx=12, pady=10)
             
             pwd_ent = tk.Entry(dis_win, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
             pwd_ent.pack(padx=12, pady=6)
@@ -948,15 +1027,15 @@ def open_settings_window(app):
                     messagebox.showerror("Verification Failed", msg, parent=dis_win)
 
             tk.Button(dis_win, text="Decrypt & Disable", command=_do_disable,
-                      bg="#660000", fg="white", font=("Segoe UI", 9, "bold")).pack(pady=12)
+                      bg="#660000", fg="white", font=app.fonts["ui_button"]).pack(pady=12)
 
         btn_set_pwd = tk.Button(v_btn_row, text="🔑 Set / Change Master Password", command=_open_set_password_modal,
-                  bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 8, "bold"))
+                  bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"])
         btn_set_pwd.pack(side=tk.LEFT, padx=4)
         ToolTip(btn_set_pwd, "Set or change the AES-256-GCM Master Password for encrypting conversation histories.", app=app)
 
         btn_dis_vault = tk.Button(v_btn_row, text="🔓 Disable Vault Lock", command=_open_disable_vault_modal,
-                  bg=THEME["button_bg_color"], fg="#ffaa00", font=("Segoe UI", 8))
+                  bg=THEME["button_bg_color"], fg="#ffaa00", font=app.fonts["ui_small"])
         btn_dis_vault.pack(side=tk.LEFT, padx=4)
         ToolTip(btn_dis_vault, "Decrypt all histories back to plaintext and remove master password protection.", app=app)
 
@@ -970,7 +1049,7 @@ def open_settings_window(app):
                 messagebox.showinfo("Vault Inactive", "Enable Master Password first to lock the application.", parent=win)
 
         btn_lock_app = tk.Button(v_btn_row, text="🔒 Lock App Now", command=_lock_now,
-                  bg="#441111", fg="#ff8888", font=("Segoe UI", 8, "bold"))
+                  bg="#441111", fg="#ff8888", font=app.fonts["ui_small"])
         btn_lock_app.pack(side=tk.RIGHT, padx=4)
         ToolTip(btn_lock_app, "Instantly lock Serenity PC and encrypt active history memory.", app=app)
 
@@ -982,7 +1061,7 @@ def open_settings_window(app):
         inactivity_frame = tk.Frame(vault_body, bg=THEME["bg_color"])
         inactivity_frame.pack(fill=tk.X, pady=(4, 2))
 
-        lbl_alock = tk.Label(inactivity_frame, text="Auto-Lock Inactivity:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Segoe UI", 9))
+        lbl_alock = tk.Label(inactivity_frame, text="Auto-Lock Inactivity:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
         lbl_alock.pack(side=tk.LEFT, padx=(0, 6))
         ToolTip(lbl_alock, "Automatically locks vault after a period of user inactivity (0 = disabled).", app=app)
 
@@ -1020,16 +1099,16 @@ def open_settings_window(app):
 
         presets_frame = tk.Frame(vault_body, bg=THEME["bg_color"])
         presets_frame.pack(fill=tk.X, pady=(2, 4))
-        lbl_pres = tk.Label(presets_frame, text="Presets:", bg=THEME["bg_color"], fg="#777777", font=("Segoe UI", 8))
+        lbl_pres = tk.Label(presets_frame, text="Presets:", bg=THEME["bg_color"], fg="#777777", font=app.fonts["ui_small"])
         lbl_pres.pack(side=tk.LEFT, padx=(0, 4))
         ToolTip(lbl_pres, "Quick auto-lock timer duration presets.", app=app)
         for p_sec, p_lbl in [(0, "Off"), (15, "15s"), (30, "30s"), (45, "45s"), (300, "5m"), (900, "15m"), (1800, "30m")]:
             btn_p = tk.Button(presets_frame, text=p_lbl, command=lambda s=p_sec: _set_preset(s),
-                      bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 7), relief=tk.FLAT, padx=3, pady=0)
+                      bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"], relief=tk.FLAT, padx=3, pady=0)
             btn_p.pack(side=tk.LEFT, padx=2)
             ToolTip(btn_p, f"Set auto-lock inactivity timer to {p_lbl}.", app=app)
 
-        tk.Label(main, text="Text/Inline Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(anchor="w", padx=10, pady=(15, 5))
+        tk.Label(main, text="Text/Inline Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"]).pack(anchor="w", padx=10, pady=(15, 5))
         tier_grid = tk.Frame(main, bg=THEME["bg_color"])
         tier_grid.pack(fill=tk.X, pady=10)
         tier_grid.grid_columnconfigure(0, weight=1); tier_grid.grid_columnconfigure(1, weight=1)
@@ -1039,7 +1118,7 @@ def open_settings_window(app):
             _create_tier_block(tier_grid, tier, r, c)
 
 
-        tk.Label(main, text="Vision Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=("Open Sans", 10, "bold")).pack(anchor="w", padx=10, pady=(15, 5))
+        tk.Label(main, text="Vision Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"]).pack(anchor="w", padx=10, pady=(15, 5))
         v_grid = tk.Frame(main, bg=THEME["bg_color"]); v_grid.pack(fill=tk.X, pady=5)
         v_grid.grid_columnconfigure(0, weight=1); v_grid.grid_columnconfigure(1, weight=1)
         for i, vt in enumerate(["video", "video_deep", "multimodal"]):
@@ -1167,6 +1246,20 @@ def open_settings_window(app):
             app.config["status_bar_dmn_idle"] = sb_dmn_var.get()
             app.config["status_bar_fallback_info"] = sb_fallback_var.get()
 
+            target_scale = text_scale_val_var.get()
+            if hasattr(app, "apply_text_scale"):
+                app.apply_text_scale(target_scale, persist=True)
+            else:
+                app.config["text_scale"] = target_scale
+
+            target_ui_font = ui_font_var.get()
+            target_mono_font = mono_font_var.get()
+            if hasattr(app, "apply_font_family"):
+                app.apply_font_family(target_ui_font, target_mono_font, persist=True)
+            else:
+                app.config["ui_font"] = target_ui_font
+                app.config["mono_font"] = target_mono_font
+
             try:
                 from serenity_resources import apply_theme_to_global
                 apply_theme_to_global(theme_k, tex_k, f_glass)
@@ -1189,16 +1282,16 @@ def open_settings_window(app):
                 except Exception: pass
 
         save_close_btn = tk.Button(btn_frame, text="Save & Close", command=lambda: _apply_settings(True),
-                                   bg=THEME["button_active_color"], fg=THEME["fg_color"], font=("Segoe UI", 9, "bold"), relief=tk.FLAT)
+                                   bg=THEME["button_active_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"], relief=tk.FLAT)
         save_close_btn.pack(side=tk.RIGHT, padx=4)
         ToolTip(save_close_btn, "Save all settings to configuration file and close settings window.", app=app)
 
         apply_btn = tk.Button(btn_frame, text="Apply", command=lambda: _apply_settings(False),
-                              bg=THEME.get("button_bg_color", "#202020"), fg=THEME.get("accent_highlight", "#00ffcc"), font=("Segoe UI", 9, "bold"), relief=tk.FLAT)
+                              bg=THEME.get("button_bg_color", "#202020"), fg=THEME.get("accent_highlight", "#00ffcc"), font=app.fonts["ui_button"], relief=tk.FLAT)
         apply_btn.pack(side=tk.RIGHT, padx=4)
         ToolTip(apply_btn, "Apply current settings immediately without closing the settings window.", app=app)
 
-        btn_clr_h = tk.Button(btn_frame, text="Clear History", command=app.clear_current_history, bg="#660000", fg="white", font=("Segoe UI", 9), relief=tk.FLAT)
+        btn_clr_h = tk.Button(btn_frame, text="Clear History", command=app.clear_current_history, bg="#660000", fg="white", font=app.fonts["ui_button"], relief=tk.FLAT)
         btn_clr_h.pack(side=tk.RIGHT, padx=4)
         ToolTip(btn_clr_h, "Permanently delete active conversation history and reset memory.", app=app)
         
@@ -1213,11 +1306,11 @@ def open_settings_window(app):
                 try: win.lift()
                 except Exception: pass
         
-        btn_auto_d = tk.Button(btn_frame, text="Auto-Detect", command=_reset_defaults, bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 9), relief=tk.FLAT)
+        btn_auto_d = tk.Button(btn_frame, text="Auto-Detect", command=_reset_defaults, bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"], relief=tk.FLAT)
         btn_auto_d.pack(side=tk.RIGHT, padx=4)
         ToolTip(btn_auto_d, "Benchmark system hardware and auto-calculate GPU layer offloads across tiers.", app=app)
 
-        btn_cancel = tk.Button(btn_frame, text="Cancel", command=win.destroy, bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=("Segoe UI", 9), relief=tk.FLAT)
+        btn_cancel = tk.Button(btn_frame, text="Cancel", command=win.destroy, bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"], relief=tk.FLAT)
         btn_cancel.pack(side=tk.RIGHT, padx=4)
         ToolTip(btn_cancel, "Discard unapplied changes and close settings window.", app=app)
 
