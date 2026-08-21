@@ -117,6 +117,26 @@ class TestVaultManager(unittest.TestCase):
             read_msgs = self.vault.read_history_messages(p)
             self.assertEqual(read_msgs, expected_msgs)
 
+    def test_env_storage_key_sync_and_auto_unlock(self):
+        env_file = os.path.join(self.temp_dir.name, ".env")
+        
+        # 1. Sync master password to .env
+        success = VaultManager.sync_env_storage_key("VaultMasterPass2026!", env_path=env_file)
+        self.assertTrue(success)
+        self.assertTrue(os.path.exists(env_file))
+
+        # 2. Enable vault lock with same password
+        self.vault.set_password("VaultMasterPass2026!")
+        self.vault.lock()
+        self.assertTrue(self.vault.is_locked())
+
+        # 3. Instantiate new VaultManager pointing to state with .env present
+        vault2 = VaultManager(history_dir=self.history_dir, state_dir=self.state_dir)
+        # Should auto-unlock because password is in .env
+        self.assertFalse(vault2.is_locked())
+        self.assertIsNotNone(vault2._session_key)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -56,8 +56,107 @@ class VaultManager:
 
         if self._state.get("lock_enabled", False):
             self._is_locked = True
+            self._auto_unlock_from_env()
         else:
             self._is_locked = False
+
+    def _find_env_file(self) -> Optional[str]:
+        """Locates the .env file in workspace root or state parent directory."""
+        candidates = [
+            os.path.join(self.state_dir, ".env"),
+            os.path.join(os.path.dirname(self.state_dir), ".env"),
+            os.path.join(os.getcwd(), ".env"),
+        ]
+        for p in candidates:
+            if os.path.isfile(p):
+                return p
+        return None
+
+    def get_env_storage_key(self, env_path: Optional[str] = None) -> Optional[str]:
+        """Reads encrypted storage key / password from .env or os.environ."""
+        target = env_path or self._find_env_file()
+        if target and os.path.isfile(target):
+            try:
+                with open(target, "r", encoding="utf-8") as fp:
+                    for line in fp:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k in ("SERENITY_ENCRYPTED_STORAGE_KEY", "SERENITY_STORAGE_KEY", "SERENITY_VAULT_KEY", "SERENITY_VAULT_PASSWORD") and v:
+                            return v
+            except Exception as e:
+                print(f"[VAULT] Warning: Failed reading .env file: {e}", file=sys.stderr)
+        for var in ("SERENITY_ENCRYPTED_STORAGE_KEY", "SERENITY_STORAGE_KEY", "SERENITY_VAULT_KEY", "SERENITY_VAULT_PASSWORD"):
+            if val := os.environ.get(var):
+                return val.strip().strip("'\"")
+        return None
+
+    def _auto_unlock_from_env(self):
+        """Attempts auto-unlocking if a valid encrypted storage key or master password is provided in .env."""
+        if not self.is_lock_enabled() or not self.is_crypto_available():
+            return
+        env_val = self.get_env_storage_key()
+        if not env_val:
+            return
+        try:
+            # Check if hex 32-byte key
+            if len(env_val) == 64 and all(c in "0123456789abcdefABCDEF" for c in env_val):
+                candidate_key = bytes.fromhex(env_val)
+                verifier = self._compute_verifier(candidate_key)
+                if verifier == self._state.get("verifier_hash", ""):
+                    self._session_key = candidate_key
+                    self._is_locked = False
+                    print("[VAULT] Serenity Vault unlocked automatically via .env storage key.")
+                    return
+            # Check if password
+            if self.verify_password(env_val):
+                salt = bytes.fromhex(self._state["salt_hex"])
+                self._session_key = self.derive_key(env_val, salt)
+                self._is_locked = False
+                print("[VAULT] Serenity Vault unlocked automatically via .env master password.")
+        except Exception as e:
+            print(f"[VAULT] Note: .env key auto-unlock did not match: {e}", file=sys.stderr)
+
+    @classmethod
+    def sync_env_storage_key(cls, key_or_password: str, env_path: Optional[str] = None) -> bool:
+        """Safely updates or appends the SERENITY_ENCRYPTED_STORAGE_KEY in .env."""
+        target = env_path or os.path.join(os.getcwd(), ".env")
+        lines = []
+        key_found = False
+        key_name = "SERENITY_ENCRYPTED_STORAGE_KEY"
+        if os.path.isfile(target):
+            try:
+                with open(target, "r", encoding="utf-8") as fp:
+                    lines = fp.readlines()
+            except Exception:
+                lines = []
+
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped.startswith("#") and "=" in stripped:
+                k = stripped.split("=", 1)[0].strip()
+                if k in (key_name, "SERENITY_STORAGE_KEY", "SERENITY_VAULT_KEY", "SERENITY_VAULT_PASSWORD"):
+                    new_lines.append(f"{key_name}={key_or_password}\n")
+                    key_found = True
+                    continue
+            new_lines.append(line)
+
+        if not key_found:
+            if new_lines and not new_lines[-1].endswith("\n"):
+                new_lines[-1] += "\n"
+            new_lines.append(f"{key_name}={key_or_password}\n")
+
+        try:
+            with open(target, "w", encoding="utf-8") as fp:
+                fp.writelines(new_lines)
+            return True
+        except Exception as e:
+            print(f"[VAULT] Failed to sync .env storage key: {e}", file=sys.stderr)
+            return False
 
     def _load_state(self) -> Dict[str, Any]:
         """Loads vault configuration state from disk."""
