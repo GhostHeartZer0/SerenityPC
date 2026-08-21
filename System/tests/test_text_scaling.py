@@ -54,23 +54,23 @@ class TestTextScaling(unittest.TestCase):
     def test_default_100_percent_scale(self):
         """Verify base font sizes at default 100% scale."""
         self.app.apply_text_scale(100, persist=False)
-        self.assertEqual(self.app.fonts["small"].cget("size"), 11)
+        self.assertEqual(self.app.fonts["small"].cget("size"), 12)
         self.assertEqual(self.app.fonts["main"].cget("size"), 13)
         self.assertEqual(self.app.fonts["bold"].cget("size"), 13)
-        self.assertEqual(self.app.fonts["large"].cget("size"), 15)
-        self.assertEqual(self.app.fonts["ui_button"].cget("size"), 12)
+        self.assertEqual(self.app.fonts["large"].cget("size"), 14)
+        self.assertEqual(self.app.fonts["ui_button"].cget("size"), 13)
         self.assertEqual(self.app.fonts["stats"].cget("size"), 8)
-        self.assertEqual(self.app.fonts["log"].cget("size"), 9)
+        self.assertEqual(self.app.fonts["log"].cget("size"), 8)
 
     def test_scaled_up_150_percent(self):
         """Verify font sizes scale proportionally at 150%."""
         self.app.apply_text_scale(150, persist=True)
         self.assertEqual(self.app.config.get("text_scale"), 150)
-        self.assertEqual(self.app.fonts["small"].cget("size"), int(round(11 * 1.5)))
+        self.assertEqual(self.app.fonts["small"].cget("size"), int(round(12 * 1.5)))
         self.assertEqual(self.app.fonts["main"].cget("size"), int(round(13 * 1.5)))
         self.assertEqual(self.app.fonts["bold"].cget("size"), int(round(13 * 1.5)))
-        self.assertEqual(self.app.fonts["large"].cget("size"), int(round(15 * 1.5)))
-        self.assertEqual(self.app.fonts["ui_button"].cget("size"), int(round(12 * 1.5)))
+        self.assertEqual(self.app.fonts["large"].cget("size"), int(round(14 * 1.5)))
+        self.assertEqual(self.app.fonts["ui_button"].cget("size"), int(round(13 * 1.5)))
 
     def test_font_hierarchy_across_all_scales(self):
         """Verify small <= main <= bold <= large holds true across various scale factors."""

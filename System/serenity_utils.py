@@ -147,7 +147,7 @@ def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_ar
             # Determine target architecture
             orig_arch_lower = orig_arch.lower()
             if "muse" in orig_arch_lower or "glimmer" in orig_arch_lower:
-                target_arch = "qwen2"
+                target_arch = orig_arch
             elif "gemma" in orig_arch_lower:
                 # Ensure gemma-4 stays gemma-4 (prevent misrouting to llama)
                 target_arch = orig_arch
@@ -1363,6 +1363,18 @@ class DynamicStatusWidget(tk.Frame):
         self._update_fallback_info()
 
 
+    def destroy(self):
+        if self._idle_timer_job:
+            try: self.after_cancel(self._idle_timer_job)
+            except Exception: pass
+            self._idle_timer_job = None
+        if self._anim_job:
+            try: self.after_cancel(self._anim_job)
+            except Exception: pass
+            self._anim_job = None
+        super().destroy()
+
+
 class ThinkingDisplay(DynamicStatusWidget):
     def __init__(self, parent, app=None, *args, **kwargs):
         super().__init__(parent, app=app, *args, **kwargs)
@@ -1503,8 +1515,8 @@ TUTORIAL_SCREENS = [
             "• [Settings] & [Begin!]: Access configuration and instantly load or swap the active model tier.\n"
             "• Multimodal Controls: [🎥 Video] for video frame analysis, [🧠 Pulse] for idle observation, and [Clear] for staging.\n"
             "• Active Chat / History Archive Tabs: Switch between live chat and searchable past conversation archives.\n"
-            "• Dynamic Status Area: Displays real-time phase tracking ([Loading Model], [Prefill], [Reasoning], [Generating]), tokens/sec speed, TTFT, and DMN idle timer.\n"
-            "• Hardware & Security Badges: Indicates hardware execution mode ([APEX i7] / [LEGACY i5]) and offline network guard status."
+            "• Dynamic Status Area: Displays real-time phase tracking, tokens/sec speed, TTFT, and DMN idle timer.\n"
+            "• Hardware & Security Badges: Indicates hardware execution mode and offline network guard status."
         ),
         "hint": "Click [Settings] in the top bar to customize hardware allocations, themes, and KV formats."
     },
@@ -1531,7 +1543,7 @@ TUTORIAL_SCREENS = [
         "subtitle": "Direct Text, Audio Dictation, and Media Multimodal Attachments",
         "desc": (
             "Engage with Serenity using multiple native input modalities:\n\n"
-            "• [🎙️ Mic]: Click to record speech offline using local speech recognition.\n"
+            "• [🎙️]: Click to record speech offline using local speech recognition.\n"
             "• [+] Attachments: Drag-and-drop or click '+' to attach images, documents, and video slices.\n"
             "• [👻 Ghost Mode]: Temporarily stops session logging for private, non-persisted chats.\n"
             "• [📚 History]: Toggles history lookup across past conversations."
@@ -1562,7 +1574,7 @@ TUTORIAL_SCREENS = [
             "Manage and safeguard all conversational archives:\n\n"
             "• History Archive Tab: Unified search with Level filters, Date filters, and deep text query.\n"
             "• User Profiles: Switch profiles in Settings to keep separate workspaces and DMN reflections.\n"
-            "• AES-256-GCM Vault: Encrypt all histories with a Master Password and inactivity auto-lock."
+            "• Secure Vault: Encrypt all histories with a Master Password and inactivity auto-lock."
         ),
         "hint": "Switch between 'Active Chat' and 'History Archive' at the top of the chat area."
     },

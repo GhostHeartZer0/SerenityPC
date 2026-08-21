@@ -211,5 +211,59 @@ class TestUserProfilesAndStatusBar(unittest.TestCase):
         widget.stop()
         root.destroy()
 
+    def test_default_and_public_profiles_handling(self):
+        from main import ChatbotApp
+        from System.vault_manager import VaultManager
+
+        class MockApp:
+            def __init__(self, script_dir):
+                self.script_dir = script_dir
+                self.dirs = {d: os.path.join(self.script_dir, d) for d in ["Media", "History", "Models", "Logs", "System", "Users"]}
+                for d in self.dirs.values(): os.makedirs(d, exist_ok=True)
+                self.config = {"username": "Default"}
+                self.state = {"dmn_backbone": {}}
+                self.model_path = os.path.join(self.dirs["Models"], "test_model.gguf")
+                self.active_persona_level = 1
+                self.messages = []
+                self.vault_manager = VaultManager(history_dir=self.dirs["History"], state_dir=self.dirs["System"])
+
+            get_active_username = ChatbotApp.get_active_username
+            get_user_history_dir = ChatbotApp.get_user_history_dir
+            get_user_dir = ChatbotApp.get_user_dir
+            list_user_profiles = ChatbotApp.list_user_profiles
+            switch_user = ChatbotApp.switch_user
+            get_history_path = ChatbotApp.get_history_path
+            _load_dmn_backbone = ChatbotApp._load_dmn_backbone
+            _save_dmn_backbone = ChatbotApp._save_dmn_backbone
+            save_config = lambda self: None
+            _log_and_display = lambda self, msg: None
+
+        app = MockApp(self.root_dir)
+
+        # 1. Verify Default profile uses .jsonz extension
+        app.switch_user("Default")
+        def_path = app.get_history_path()
+        self.assertTrue(def_path.endswith(".jsonz"))
+        self.assertIn(os.path.join("History", "Default"), def_path)
+
+        # 2. Verify Public profile uses .jsonz extension
+        app.switch_user("Public")
+        pub_path = app.get_history_path()
+        self.assertTrue(pub_path.endswith(".jsonz"))
+        self.assertIn(os.path.join("History", "Public"), pub_path)
+
+        # 3. Verify Private profile uses .encz when vault lock is enabled
+        app.vault_manager.set_password("Secret1234")
+        app.switch_user("PrivateUser")
+        priv_path = app.get_history_path()
+        self.assertTrue(priv_path.endswith(".encz"))
+        self.assertIn(os.path.join("History", "PrivateUser"), priv_path)
+
+        # 4. Profile listing includes Default and Public
+        profiles = app.list_user_profiles()
+        self.assertIn("Default", profiles)
+        self.assertIn("Public", profiles)
+        self.assertIn("PrivateUser", profiles)
+
 if __name__ == "__main__":
     unittest.main()
