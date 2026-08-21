@@ -4,14 +4,22 @@ This document establishes the official versioning specification for SerenityPC a
 
 ---
 
-## 1. Notable Historical Releases:
-- **Version 1.0.0**: Internal Unstable Private release.
-- **Version 1.4.0**: Initial stable public release.
-- **Version 1.5.0**: Major fixes release (Deep thoughts, tool calling, cache, Chat)
-- **Version 1.5.3**: Stable pre-llama-upgrade release - setup & .venv handling, MTP, RLHF, regex, overflow handling
-- **Version 1.6.0**: cpp backend overhaul
-- **Version 1.6.2**: llama.cpp updated & stabilized, released, Legacy build added.
-- **Version 1.6.4**: added offline mode & themes, fixed history
+## 1. SemVer 2.0 Historical Version Mapping & Evolution:
+- **Version 1.0.0**: Initial 5-level prototype release for local AI inference.
+- **Version 1.1.0** *(formerly v1.4.0)*: Initial stable public release (System monitoring, grounding, avatar states).
+- **Version 1.2.0** *(formerly v1.6.0)*: Nemotron model family support & C++ backend enhancements.
+- **Version 1.3.0** *(formerly v1.5.3)*: Markdown engine optimization, RLHF, setup & .venv handling, MTP.
+- **Version 1.4.0** *(formerly v1.6.2)*: History Archive usability, Legacy branch creation for older hardware, backend/setup fixes.
+- **Version 1.5.0** *(formerly v1.6.9)*: Local CUDA 13.3+ MSVC toolchain optimization, global text scaling, UI controls.
+- **Version 1.6.0**: Muse Glimmer architecture fix & official C++ forward graph backend support.
+
+---
+
+## 2. Near-Term Release Roadmap (Leading to v2.0.0)
+- **Version 1.7.0**: Multi-Agent Delegation & Subagents Update.
+- **Version 1.8.0**: Stability upgrade & Deep Cook vision pipeline validation.
+- **Version 1.9.0**: Verifications complete, test suite passing, and settings reorganization.
+- **Version 2.0.0**: Major milestone release (Full stability, validated verifications, complete modernized architecture).
 
 ---
 
