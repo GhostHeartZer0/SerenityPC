@@ -1,7 +1,7 @@
 {
-  "lock_enabled": false,
-  "salt_hex": "",
-  "verifier_hash": "",
+  "lock_enabled": true,
+  "salt_hex": "8040251a46582802073cd981617d9f56",
+  "verifier_hash": "3b308a2db645ae8787ff4ccf5dc43bad6bbeaa91a45f629cd948976432780a07",
   "auto_lock_seconds": 0,
-  "last_migration": null
+  "last_migration": "2026-08-20T19:01:23.036483"
 }

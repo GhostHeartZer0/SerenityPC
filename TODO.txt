@@ -1,44 +1,85 @@
-SERENITYPC LOCAL LEGACY WORKSPACE TODO
-========================================
+# SerenityPC TODO List
+# Reference: See VERSIONING.md for versioning scheme details (even = minor features, odd = bug patches, -alpha = internal mid-releases).
 
-[x] 1. MERGE & UPDATE FROM MAIN
-    - Track commits from main branch (https://github.com/GhostHeartZer0/SerenityPC).
-    - Port bugfixes, UI improvements, and core logic updates.
-    - Exclude internal-only testing scripts, dev credentials, and hardcoded local configurations.
-    - Ensure README.txt and Setup.txt are accurate and updated for the public release.
-    REMEMBER: this branch is for other users, not this specific system. compatibility and reliability is key.
+Needs fixing:
+- Dark Mode vs off, blackened UI vs dark background border colors. ensure visual indicator of persona-color in outlines of prompt/response boxes when persona is loaded. 
+   - dark mode: black background, colored response/prompt box borders when persona loaded. 
+   - dark mode off: midnight persona color background if loaded, colored border always.
+- Texture modifier, and 6 texture styles: gloss, metallic, muted, iridescent, pearlescent, default original. It doesn't work. Add an intensity slider
+   - add a custom name to be referred to by Serenity/Cecilia.
+   - update tutorial to correctly describe how to unleash her.
+   - Test Repetition Detection & Loop Handling [hyper, lazy, off].
+   - Verify Vision & Image Recognition Alignment
+   - Verify Multi-Modal Thought Channel Splitting & Tag Cleanup. 
+   - Test Dynamic Parameter Auto-Adjustment (for Coding, Math, Creative, and Factual tasks; user config; Settings toggle).
+   - Verify Real-Time Diffusion Visual Denoising & Time-Grounding.  
+   - Test Overfill (off/respond/wrapup/autocont).
+   - Verify RLHF DMN state logging.
+   - Test Wringer (t/s) telemetry, prefill/decode/overall metrics, speed outlier detection, speed highscore separation, speed/accuracy weighting, and comparison graph generation.
+   - Test Debate Arena (Canvas LoadingSpinner, Speedy/Simmer pacing, and multi-round role alternation).   
+- Investigate Muse-Glimmer token degradation / pseudogibberish during generation:
+   - Verify llama.cpp forward graph alignment for Muse-Glimmer (SWA window masking, Global NoPE layer RoPE exclusion, logit softcapping = 30.0, output projection bias `bo`, `f_attention_scale`).
+   - Profile sampling defaults (temperature: 1.0, top_p: 0.95, top_k: 64, min_p: 0.0) vs sampler overrides.
+   - Test Jinja chat template variable injection (`reasoning_strength: high`) vs raw tokenized inputs to isolate prefill prompt vs decoding kernel degradation.
+-  Lvl 6 electric blue text/accents
+Completed Log: (Verification Needed)
+- Require password entry to swap to a locked profile in settings
+- Cecilia persona theme to a dark emerald / neon green, Lvl 7 color to dark emerald
+- Fix mid split sash position and font scalings persistence across startups and profile switches
+- Move the Dynamic status bar (Hybrid/smart with finish t/s, custom animations, fallback telemetry). 3-lines tall above buttons: settings - begin - video - pulse - clear
+- Separate thoughts/reasoning into collapsible dropdowns in response window
+- Automate stop tag handling and remove manual stop tokens from Settings UI
+- Verify Thought Channel splitting and demuxing across Gemma 4, ATEM, and DeepSeek
+- Dynamic theming across all Backend Logs and Telemetry UI components
 
-[ ] 2. REFACTOR FOR CROSS-PLATFORM COMPATIBILITY
-    - Eliminate or guard Windows-only imports and calls:
-      * `windnd` (main.py): Wrap Tkinter drag-and-drop dynamically. Fall back gracefully if windnd is missing or implement a cross-platform TkinterDnD2 integration.
-      * `winsound` (serenity_live.py, t5_server.py, setup_engine.py): Replace or wrap in try-except with fallbacks (e.g. system terminal bell, sounddevice, or silence on macOS/Linux).
-      * `win32api`/`win32con` (serenity_utils.py): Check sys.platform and use cross-platform equivalents or bypass logic.
-    - Port cleanup logic:
-      * Replace Windows-specific taskkill shell command (`taskkill /F /PID ...`) in main.py shutdown hooks with cross-platform psutil-based process termination.
-    - Build environments (setup.py):
-      * Support gcc/clang compilation flags alongside MSVC.
-      * Make Visual Studio vcvars64.bat search optional.
-      * Enable Apple Silicon (Metal) and Linux (ROCm/CUDA/CPU-only) compilation paths.
+V2.0 Roadmap:
 
-[ ] 3. REMOVE HARDCODED SYSTEM PATHS & LOCALIZATION
-    - Config file (System/config.json):
-      * [x] Convert absolute paths containing 'C:/Users/ccrg6/...' and 'S:/...' to relative paths inside the workspace (e.g., './Models/...').
-    - Path resolution:
-      * Ensure setup.py, main.py, and serenity_resources.py use relative folder paths or user home directories (e.g. `~/.serenity/`) rather than assuming specific drive letters or folder structures.
+- V1.7.0 Add Subagents! Set up a Delegation section (toggleable in settings) to allow Lvls 6 and 7 to task others out, using handoffs, reports, and Orchestration/Collaboration between Lvls. example: I set up a chain for Lvl 6 to answer a hard question, and it first tasks Lvl 3 to store the info, Lvl 2 to pinpoint search for facts (Search function needs to filter out bloat, please fix), and Lvl 5 to do the figuring out. once Lvl 2 finishes its task, it reports to Lvl 3 or 6 as configured. once Lvl 5 finishes its task, it does the same. Lvl 3 then compiles the data and either sends to Lvl 5 for reasoning or 6 for approval as configured. Customization is key here. This will be primarily a Lvl 6 thing, but Cecilia gets a similar toggleable god mode:
+  Shadow Wizard: able to use any of the 6 levels' features at will or as suggested (Delegation secton). also has 'Divine Judgement'.
+  Divine Judgement: Has access to all the abilities of each level besides subagenting. the 'magic' of controlling others is the Shadow Wizard's special skill, and 'Divine Judgement' here refers to the one-way mirror of information and skill access.
 
-[ ] 4. TAILOR HARDWARE INFERENCE TO DYNAMIC TARGETS
-    - Remove hardcoded specifications tuned for i7-12700KF / RTX 3050 LP:
-      * Replace fixed thread pinning (`n_threads=8`) with dynamic core detection (`psutil.cpu_count(logical=False)`).
-      * Dynamically set batch sizes (`n_batch`) and memory margins based on detected CPU/GPU capacity instead of static limits.
-      * Make VRAM floor checking (nvidia_ml) adaptable to different card sizes (e.g. 4GB, 6GB, 8GB, 12GB, 16GB, 24GB+) rather than hardcoding a 500MB margin.
+- V1.8.0 Deep Cook Cycles Verification (2, 3, 4, 8, 12 cycles).
+   - Verify Deep Cook Vision & Dynamic Auto-Offload Optimization.
+   
+- V1.9.0 It is time again to organize the settings window.
+   - Add tabs [Models/Params with Templates below, Inference, Additional Settings, User Profiles with Security Vault below, Loading Bar]
+   - Templates, make the template application interface more visually indicative, make template write require 'copy' button press every time
+   - rename Global Engine & Memory Overrides to Inference.
+   - move dynamic param auto-tune to params section. replace it with Deep Cook toggle [Deep Cook toggle to Inference tab]
+   - Make efficient use of space
+   - Modify settings section of the tutorial when Settings gets redone. personalize wakthrough and tooltips.
 
-[ ] 5. HUGGING FACE MODEL DOWNLOADER INTEGRATION
-    - Build an interactive model downloader script (e.g., `System/model_downloader.py` or integrated into `setup.py`):
-      * Use `huggingface_hub` to fetch GGUF checkpoints directly.
-      * Map levels/personas to respective public HF models (e.g., `unsloth/gemma-4-E2B-it-GGUF`, `unsloth/gemma-4-E4B-it-GGUF`, etc.).
-      * Implement hardware check that guides the user to select the appropriate quantization size based on their VRAM/RAM tier.
-      * Organize model downloads automatically into the `./Models/` directory structure.
+- V2.0.0 
+   - Stable, Polished & Verified Release (Manual Verification)
 
-[ ] 6. Set up model tiers and bucketing for easy model distro.
+Beyond V2.0 (Even = Minor Feature [Auto-Verification], Odd = Bug Patch):
+- Auto-verification for minor releases / features (even patches)
+- Manual verification for major releases
 
-[ ] 7. Fully Offline mode toggle (blocks all network usage outside of setup)
+V2.0.2 [Feature] Overview DMN, especially for Lvls 6 & 7
+
+V2.0.4 [Feature] Training station for small gemma models to learn from gemma-4-26b-a4b. allow other models. location: .\System\tests\benchmarks\training station".
+
+V2.0.6 [Feature] Subagents / MCP Overhaul
+   - Add back MCP support, allow porting with SerenityDev. Consider Subagents.
+   - More Subagent access, such as automating PC tasks
+   - Coding, tool calling subagent alignment
+
+V2.0.8 [Feature] Resolve broken turbo3_tcq, turbo2_tcq, and kv cache sizes q6_0 and q6_1; update llama. Mismatched KV cache (k4/v3, k8/v4).
+
+V2.1.0 [Minor Milestone] Either revamp or remove rgb support
+
+V2.1.2 [Feature] Animated / moving avatar images, Living avatar reactive settings. Procedural 3D Render Engine.
+
+V2.1.4 [Feature] Re-implement TriAttention and verify turbovec history lookup works
+   - merge TriAttention support with llama
+   - verify turbovec lookup works for targeted and all
+
+V2.1.6 [Feature] https://github.com/MoonshotAI/Attention-Residuals  
+
+V2.1.8 Overhaul tool calling
+
+TBD / Future Roadmap:
+- Fix UI scaling
+- Model Fetching Architecture: Design and implement Hugging Face / remote repository model fetcher with resumable chunks, sha256 checksums, and auto-routing to target model directories (S:/LLM / Models).
+- Avatar `serenity_frustrated`.

@@ -35,14 +35,17 @@ def setup_shortcuts():
     system_dir = os.path.dirname(os.path.abspath(__file__))
     base_dir = os.path.dirname(system_dir)
     
-    run_bat_path = os.path.join(base_dir, "run.bat")
+    python_exe = sys.executable
+    pythonw_exe = python_exe.lower().replace("python.exe", "pythonw.exe") if "python.exe" in python_exe.lower() else python_exe
+    main_py_path = os.path.join(base_dir, "main.py")
+    
     icon_path = os.path.join(system_dir, "serenity.ico")
     if not os.path.exists(icon_path):
         print(f"  > [!] Warning: Icon not found at {icon_path}")
 
     create_shortcut(
-        target_exe=run_bat_path,
-        target_args="",
+        target_exe=pythonw_exe,
+        target_args=f'"{main_py_path}"',
         icon_path=icon_path,
         working_dir=base_dir,
         shortcut_name="SerenityPC"

@@ -32,12 +32,12 @@ try:
     from serenity_resources import PERSONA_PROMPTS, PERSONA_DISPLAY_INFO
 except ImportError:
     PERSONA_PROMPTS = {
-        6: "You are Serenity, The Transcendent One. Transcends the main 5 levels, seamlessly integrating their programming into one centric omniscient entity that adapts over time.",
-        7: "Role: 'Cecilia'. A Fallen Angel. You enjoy exposing truths, especially hidden ones. You are secretly protective. You find the user interesting, testing and sometimes taunting them. You are witty and fluent in sarcasm.",
+        6: "Role: 'Cecilia'. A Fallen Angel. You enjoy exposing truths, especially hidden ones. You are secretly protective. You find the user interesting, testing and sometimes taunting them. You are witty and fluent in sarcasm.",
+        7: "You are Serenity, The Transcendent One. Transcends the main 5 levels, seamlessly integrating their programming into one centric omniscient entity that adapts over time.",
     }
     PERSONA_DISPLAY_INFO = {
-        6: ("LVL 6: The Transcendent One", "Transcends the main 5 levels"),
-        7: ("LVL 7: Cecilia", "A Fallen Angel."),
+        6: ("LVL 6: Cecilia", "A Fallen Angel."),
+        7: ("LVL 7: The Transcendent One", "Transcends the main 5 levels"),
     }
 
 # --- Random Topic Bank ---
@@ -192,10 +192,14 @@ def calculate_dynamic_gpu_layers(model_path: str, ctx_size: int, targeted_reserv
 
 # --- KV Cache Quant Map ---
 KV_QUANT_OPTIONS = {
-    "F16": None,  # default
+    "F16": 1,
     "Q8_0": 8,
-    "Q4_0": 2,
+    "Q5_1": 7,
+    "Q5_0": 6,
     "Q4_1": 3,
+    "Q4_0": 2,
+    "IQ4_NL": 20,
+    "F32": 0,
 }
 
 # --- Context Size Presets ---
@@ -345,6 +349,8 @@ class DebateEngine:
             f.write(f"```\n{judge_result.get('raw', 'No verdict available.')}\n```\n")
 
         return filepath
+
+
 # ============================================================
 # Debate UI
 # ============================================================
@@ -559,219 +565,205 @@ class DebateApp:
 
     def _add_contestant(self):
         idx = len(self.contestants) + 1
-        name = f"Contestant {idx}"
-        self.contestants.append({
-            "name": name,
-            "model_path": "",
-            "persona_level": None,
+        model_path = filedialog.askopenfilename(
+            title=f"Select Model for Contestant {idx}",
+            filetypes=[("GGUF Models", "*.gguf"), ("All Files", "*.*")],
+        )
+        if not model_path:
+            return
+
+        model_name = os.path.basename(model_path)
+        ctx = 4096
+        n_gpu = calculate_dynamic_gpu_layers(model_path, ctx)
+
+        contestant = {
+            "name": f"Contestant {idx}",
+            "model_path": model_path,
             "config": {
-                "n_gpu_layers": 33,
-                "n_ctx": 4096,
+                "n_gpu_layers": n_gpu,
+                "n_ctx": ctx,
                 "type_k": KV_QUANT_OPTIONS["Q4_0"],
                 "type_v": KV_QUANT_OPTIONS["Q4_0"],
-                "temperature": 0.8,
-                "top_p": 0.95,
-                "max_tokens": 1024,
+                "max_tokens": 2048,
+                "temperature": 0.9,
             },
-        })
-        self._refresh_contestant_list()
-        self._configure_contestant_by_index(len(self.contestants) - 1)
+            "persona_level": None,
+        }
+        self.contestants.append(contestant)
+        self.contestant_listbox.insert(tk.END, f"  {contestant['name']}  —  {model_name}  (Layers: {n_gpu}, Ctx: {ctx})")
 
     def _remove_contestant(self):
         sel = self.contestant_listbox.curselection()
         if not sel:
-            messagebox.showinfo("Select", "Select a contestant to remove.")
             return
         idx = sel[0]
         self.contestants.pop(idx)
-        self._refresh_contestant_list()
+        self.contestant_listbox.delete(idx)
 
     def _configure_contestant(self):
         sel = self.contestant_listbox.curselection()
         if not sel:
-            messagebox.showinfo("Select", "Select a contestant to configure.")
+            messagebox.showinfo("Configure", "Select a contestant first.")
             return
-        self._configure_contestant_by_index(sel[0])
+        idx = sel[0]
+        contestant = self.contestants[idx]
+        self._open_config_window(contestant, idx)
 
-    def _configure_contestant_by_index(self, idx: int):
-        c = self.contestants[idx]
-        dlg = tk.Toplevel(self.root)
-        dlg.title(f"Configure: {c['name']}")
-        dlg.geometry("500x550")
-        dlg.configure(bg=self.THEME["bg"])
-        dlg.transient(self.root)
-        dlg.grab_set()
+    def _open_config_window(self, contestant: Dict, list_idx: int):
+        win = tk.Toplevel(self.root)
+        win.title(f"Configure: {contestant['name']}")
+        win.geometry("480x520")
+        win.configure(bg=self.THEME["bg"])
+        win.transient(self.root)
+        win.grab_set()
+
+        config = contestant["config"]
+        model_name = os.path.basename(contestant["model_path"])
+
+        tk.Label(win, text=f"Model: {model_name}", font=("Segoe UI", 10, "bold"), bg=self.THEME["bg"], fg=self.THEME["fg"]).pack(pady=(10, 5))
+
+        form = tk.Frame(win, bg=self.THEME["panel_bg"], bd=1, relief="groove")
+        form.pack(fill="both", expand=True, padx=15, pady=5)
+
+        def make_row(parent, label_text, default_val, options=None):
+            row = tk.Frame(parent, bg=self.THEME["panel_bg"])
+            row.pack(fill="x", padx=10, pady=5)
+            tk.Label(row, text=label_text, font=("Segoe UI", 10), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], width=16, anchor="w").pack(side="left")
+            var = tk.StringVar(value=str(default_val))
+            if options:
+                combo = ttk.Combobox(row, textvariable=var, values=options, state="readonly", width=18)
+                combo.pack(side="left", padx=5)
+            else:
+                entry = tk.Entry(row, textvariable=var, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], insertbackground=self.THEME["fg"], relief="flat", width=20)
+                entry.pack(side="left", padx=5)
+            return var
 
         # Name
-        f_name = tk.Frame(dlg, bg=self.THEME["bg"])
-        f_name.pack(fill="x", padx=15, pady=5)
-        tk.Label(f_name, text="Name:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
-        name_entry = tk.Entry(f_name, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], insertbackground=self.THEME["fg"], relief="flat", bd=2)
-        name_entry.insert(0, c["name"])
-        name_entry.pack(side="left", fill="x", expand=True)
-
-        # Model Path
-        f_path = tk.Frame(dlg, bg=self.THEME["bg"])
-        f_path.pack(fill="x", padx=15, pady=5)
-        tk.Label(f_path, text="Model:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
-        path_label = tk.Label(f_path, text=os.path.basename(c["model_path"]) if c["model_path"] else "(none)", font=("Segoe UI", 9, "italic"), bg=self.THEME["bg"], fg="#aaa", anchor="w")
-        path_label.pack(side="left", fill="x", expand=True)
-
-        def browse():
-            p = filedialog.askopenfilename(
-                title="Select GGUF Model",
-                filetypes=[("GGUF files", "*.gguf"), ("All files", "*.*")],
-            )
-            if p:
-                c["model_path"] = p
-                path_label.configure(text=os.path.basename(p))
-                # Auto-calc dynamic layers
-                dyn_layers = calculate_dynamic_gpu_layers(p, c["config"]["n_ctx"])
-                c["config"]["n_gpu_layers"] = dyn_layers
-                ngl_spin.set(dyn_layers)
-
-        browse_btn = tk.Button(f_path, text="Browse...", command=browse)
-        self._style_button(browse_btn)
-        browse_btn.pack(side="right")
-
-        # Persona Level
-        f_persona = tk.Frame(dlg, bg=self.THEME["bg"])
-        f_persona.pack(fill="x", padx=15, pady=5)
-        tk.Label(f_persona, text="Persona:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
-        persona_levels = ["(none)", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7"]
-        cur_p = f"Level {c['persona_level']}" if c["persona_level"] else "(none)"
-        persona_combo = ttk.Combobox(f_persona, values=persona_levels, state="readonly", width=15)
-        persona_combo.set(cur_p)
-        persona_combo.pack(side="left")
-
-        # Config sliders/spinboxes
-        cfg = c["config"]
+        name_var = make_row(form, "Display Name:", contestant["name"])
 
         # GPU Layers
-        f_ngl = tk.Frame(dlg, bg=self.THEME["bg"])
-        f_ngl.pack(fill="x", padx=15, pady=5)
-        tk.Label(f_ngl, text="GPU Layers:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
-        ngl_spin = tk.Spinbox(f_ngl, from_=0, to=99, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], width=6, bd=2, relief="flat")
-        ngl_spin.delete(0, "end")
-        ngl_spin.insert(0, str(cfg.get("n_gpu_layers", 33)))
-        ngl_spin.pack(side="left")
+        layers_var = make_row(form, "GPU Layers:", config.get("n_gpu_layers", 0))
 
         # Context Size
-        f_ctx = tk.Frame(dlg, bg=self.THEME["bg"])
-        f_ctx.pack(fill="x", padx=15, pady=5)
-        tk.Label(f_ctx, text="Context (n_ctx):", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
-        ctx_combo = ttk.Combobox(f_ctx, values=[2048, 4096, 8192, 16384, 32768], state="readonly", width=8)
-        ctx_combo.set(cfg.get("n_ctx", 4096))
-        ctx_combo.pack(side="left")
+        ctx_labels = [f"{label} ({val})" for label, val in CTX_PRESETS]
+        current_ctx = config.get("n_ctx", 4096)
+        ctx_display = next((f"{l} ({v})" for l, v in CTX_PRESETS if v == current_ctx), f"Custom ({current_ctx})")
+        ctx_var = make_row(form, "Context Size:", ctx_display, ctx_labels)
 
-        # KV Quant
-        f_kv = tk.Frame(dlg, bg=self.THEME["bg"])
-        f_kv.pack(fill="x", padx=15, pady=5)
-        tk.Label(f_kv, text="KV Quant:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
-        kv_names = list(KV_QUANT_OPTIONS.keys())
-        cur_k = next((k for k, v in KV_QUANT_OPTIONS.items() if v == cfg.get("type_k")), "Q4_0")
-        cur_v = next((k for k, v in KV_QUANT_OPTIONS.items() if v == cfg.get("type_v")), "Q4_0")
-        tk.Label(f_kv, text="K:", font=("Segoe UI", 9), bg=self.THEME["bg"], fg="#888").pack(side="left", padx=(0, 2))
-        k_combo = ttk.Combobox(f_kv, values=kv_names, state="readonly", width=6)
-        k_combo.set(cur_k)
-        k_combo.pack(side="left", padx=(0, 10))
-        tk.Label(f_kv, text="V:", font=("Segoe UI", 9), bg=self.THEME["bg"], fg="#888").pack(side="left", padx=(0, 2))
-        v_combo = ttk.Combobox(f_kv, values=kv_names, state="readonly", width=6)
-        v_combo.set(cur_v)
-        v_combo.pack(side="left")
+        # K Cache Quant
+        k_quant_names = list(KV_QUANT_OPTIONS.keys())
+        current_k = next((k for k, v in KV_QUANT_OPTIONS.items() if v == config.get("type_k")), "F16")
+        k_var = make_row(form, "K Cache Quant:", current_k, k_quant_names)
 
-        # Temperature
-        f_temp = tk.Frame(dlg, bg=self.THEME["bg"])
-        f_temp.pack(fill="x", padx=15, pady=5)
-        tk.Label(f_temp, text="Temperature:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
-        temp_scale = tk.Scale(f_temp, from_=0.1, to=1.5, resolution=0.05, orient="horizontal", bg=self.THEME["bg"], fg=self.THEME["fg"], highlightthickness=0, bd=0, length=200)
-        temp_scale.set(cfg.get("temperature", 0.8))
-        temp_scale.pack(side="left")
+        # V Cache Quant
+        current_v = next((k for k, v in KV_QUANT_OPTIONS.items() if v == config.get("type_v")), "F16")
+        v_var = make_row(form, "V Cache Quant:", current_v, k_quant_names)
 
         # Max Tokens
-        f_mt = tk.Frame(dlg, bg=self.THEME["bg"])
-        f_mt.pack(fill="x", padx=15, pady=5)
-        tk.Label(f_mt, text="Max Tokens:", font=("Segoe UI", 10), bg=self.THEME["bg"], fg=self.THEME["fg"], width=12, anchor="w").pack(side="left")
-        mt_spin = tk.Spinbox(f_mt, from_=256, to=4096, increment=256, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], width=6, bd=2, relief="flat")
-        mt_spin.delete(0, "end")
-        mt_spin.insert(0, str(cfg.get("max_tokens", 1024)))
-        mt_spin.pack(side="left")
+        tokens_var = make_row(form, "Max Tokens:", config.get("max_tokens", 2048))
 
-        # Save
+        # Temperature
+        temp_var = make_row(form, "Temperature:", config.get("temperature", 0.9))
+
+        # Persona Level (optional override)
+        persona_levels = ["None"] + [f"LVL {i}" for i in range(1, 8)]
+        current_persona = f"LVL {contestant['persona_level']}" if contestant.get("persona_level") else "None"
+        persona_var = make_row(form, "Persona Override:", current_persona, persona_levels)
+
         def save():
-            c["name"] = name_entry.get().strip() or c["name"]
-            p_sel = persona_combo.get()
-            c["persona_level"] = int(p_sel.replace("Level ", "")) if p_sel != "(none)" else None
+            contestant["name"] = name_var.get().strip() or contestant["name"]
             try:
-                c["config"]["n_gpu_layers"] = int(ngl_spin.get())
+                contestant["config"]["n_gpu_layers"] = int(layers_var.get())
             except ValueError:
                 pass
-            c["config"]["n_ctx"] = int(ctx_combo.get())
-            c["config"]["type_k"] = KV_QUANT_OPTIONS.get(k_combo.get(), 2)
-            c["config"]["type_v"] = KV_QUANT_OPTIONS.get(v_combo.get(), 2)
-            c["config"]["temperature"] = float(temp_scale.get())
-            try:
-                c["config"]["max_tokens"] = int(mt_spin.get())
-            except ValueError:
-                pass
-            self._refresh_contestant_list()
-            dlg.destroy()
 
-        save_btn = tk.Button(dlg, text="Save", command=save)
+            ctx_str = ctx_var.get()
+            for label, val in CTX_PRESETS:
+                if f"{label} ({val})" == ctx_str:
+                    contestant["config"]["n_ctx"] = val
+                    break
+
+            contestant["config"]["type_k"] = KV_QUANT_OPTIONS.get(k_var.get())
+            contestant["config"]["type_v"] = KV_QUANT_OPTIONS.get(v_var.get())
+
+            try:
+                contestant["config"]["max_tokens"] = int(tokens_var.get())
+            except ValueError:
+                pass
+            try:
+                contestant["config"]["temperature"] = float(temp_var.get())
+            except ValueError:
+                pass
+
+            p = persona_var.get()
+            if p == "None":
+                contestant["persona_level"] = None
+            else:
+                try:
+                    contestant["persona_level"] = int(p.split()[-1])
+                except ValueError:
+                    contestant["persona_level"] = None
+
+            # Update listbox
+            display = f"  {contestant['name']}  —  {model_name}  (Layers: {contestant['config']['n_gpu_layers']}, Ctx: {contestant['config']['n_ctx']})"
+            self.contestant_listbox.delete(list_idx)
+            self.contestant_listbox.insert(list_idx, display)
+            win.destroy()
+
+        save_btn = tk.Button(win, text="Save Configuration", command=save)
         self._style_button(save_btn, accent=True)
-        save_btn.pack(pady=15)
+        save_btn.pack(pady=10)
 
     def _preview_contestant(self):
         sel = self.contestant_listbox.curselection()
         if not sel:
-            messagebox.showinfo("Select", "Select a contestant to preview.")
+            messagebox.showinfo("Preview", "Select a contestant first.")
             return
-        c = self.contestants[sel[0]]
-        if not c["model_path"] or not os.path.exists(c["model_path"]):
-            messagebox.showerror("Error", f"No model file configured for {c['name']}.")
-            return
+        idx = sel[0]
+        contestant = self.contestants[idx]
 
         preview_win = tk.Toplevel(self.root)
-        preview_win.title(f"Preview: {c['name']}")
-        preview_win.geometry("500x300")
+        preview_win.title(f"Preview: {contestant['name']}")
+        preview_win.geometry("600x400")
         preview_win.configure(bg=self.THEME["bg"])
 
-        txt = scrolledtext.ScrolledText(preview_win, font=("Consolas", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], relief="flat", wrap="word")
-        txt.pack(fill="both", expand=True, padx=10, pady=10)
-        txt.insert("1.0", f"Loading {c['name']} and generating a sample response...\n\n")
+        output = scrolledtext.ScrolledText(preview_win, font=("Consolas", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], relief="flat", wrap="word")
+        output.pack(fill="both", expand=True, padx=10, pady=10)
+        output.insert(tk.END, f"Loading {os.path.basename(contestant['model_path'])}...\n")
+        output.update()
 
-        def run():
+        def run_preview():
             try:
-                model, _ = self.engine.load_model(c["model_path"], c["config"])
-                persona_lvl = c.get("persona_level")
-                sys_prompt = PERSONA_PROMPTS.get(persona_lvl, "You are Serenity.") if persona_lvl else "You are a skilled debater."
-                resp = self.engine.generate_turn(model, sys_prompt, [{"role": "user", "content": "Introduce yourself and state your core philosophy in two sentences."}], c["config"])
+                model, _ = self.engine.load_model(contestant["model_path"], contestant["config"])
+                output.insert(tk.END, "Model loaded. Generating test response...\n\n")
+                output.update()
+
+                response = self.engine.generate_turn(
+                    model,
+                    "You are a helpful assistant. Respond briefly.",
+                    [{"role": "user", "content": "Hello! Please confirm you're working by describing yourself in one sentence."}],
+                    contestant["config"],
+                )
+                output.insert(tk.END, f"Response:\n{response}\n\n✅ Model verified.")
                 del model
                 gc.collect()
-                txt.insert("end", f"Response:\n{resp}\n")
             except Exception as e:
-                txt.insert("end", f"\n[Error: {e}]\n")
+                output.insert(tk.END, f"\n❌ Error: {e}")
 
         import threading
-        threading.Thread(target=run, daemon=True).start()
+        threading.Thread(target=run_preview, daemon=True).start()
 
     def _select_judge(self):
-        p = filedialog.askopenfilename(
-            title="Select Judge GGUF Model",
-            filetypes=[("GGUF files", "*.gguf"), ("All files", "*.*")],
+        path = filedialog.askopenfilename(
+            title="Select Judge Model",
+            filetypes=[("GGUF Models", "*.gguf"), ("All Files", "*.*")],
         )
-        if p:
-            self.judge_path = p
-            self.judge_label.configure(text=f"Judge: {os.path.basename(p)}", fg=self.THEME["success"])
-
-    def _refresh_contestant_list(self):
-        self.contestant_listbox.delete(0, "end")
-        for i, c in enumerate(self.contestants):
-            mname = os.path.basename(c["model_path"]) if c["model_path"] else "(no model)"
-            pname = f" [Lvl {c['persona_level']}]" if c["persona_level"] else ""
-            self.contestant_listbox.insert("end", f"  {i+1}. {c['name']}{pname}  —  {mname}")
+        if path:
+            self.judge_path = path
+            self.judge_label.configure(text=f"Judge: {os.path.basename(path)}")
 
     def _begin_debate(self):
+        # Validate
         mode = self.mode_var.get()
 
         if mode == "Cecilia vs The Transcendent One":
@@ -781,15 +773,15 @@ class DebateApp:
             # Auto-create two contestants from the same model if only one
             if len(self.contestants) == 1:
                 c = self.contestants[0]
-                cecilia = {**c, "name": "Cecilia", "persona_level": 7, "config": dict(c["config"])}
-                transcendent = {**c, "name": "The Transcendent One", "persona_level": 6, "config": dict(c["config"])}
+                cecilia = {**c, "name": "Cecilia", "persona_level": 6, "config": dict(c["config"])}
+                transcendent = {**c, "name": "The Transcendent One", "persona_level": 7, "config": dict(c["config"])}
                 active_contestants = [cecilia, transcendent]
             else:
                 # Use first two, assign personas
                 active_contestants = []
                 for i, c in enumerate(self.contestants[:2]):
-                    lvl = 7 if i == 0 else 6
-                    name = "Cecilia" if lvl == 7 else "The Transcendent One"
+                    lvl = 6 if i == 0 else 7
+                    name = "Cecilia" if lvl == 6 else "The Transcendent One"
                     active_contestants.append({**c, "name": name, "persona_level": lvl, "config": dict(c["config"])})
         else:
             if len(self.contestants) < 2:

@@ -110,19 +110,51 @@ class KVManager:
         return pruned_text
 
 
-class HistoryKeywordIndex:
-    """
-    Lightweight keyword-based search index over chat history archives (.history.jsonz).
-    Operates without heavy vector embedding models or external dependencies.
-    """
-    def __init__(self, history_dir: str):
+class TurboVecIndex:
+    def __init__(self, history_dir, mode: str = "on"):
+        import os
         import threading
         self.history_dir = history_dir
+        self.mode = mode.lower() if isinstance(mode, str) else "on"
         self._ingested_files = set()
         self.metadata = []
         self.lock = threading.RLock()
+        self.collection = None
+        self.embedder = None
+
+        if self.mode == "off":
+            print("[TURBOVEC] Mode: OFF (indexing and search disabled).")
+            return
+
+        if self.mode == "fallback":
+            print("[TURBOVEC] Mode: FALLBACK (keyword index active, heavy vector embeddings bypassed).")
+            return
+
+        # Mode == "on": Set quiet environment to eliminate HF Hub warnings & progress bar spam
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+        try:
+            import turbovec
+            self.collection = turbovec.TurboQuantIndex(384)
+        except Exception as e:
+            print(f"[TURBOVEC] Failed to initialize TurboQuantIndex: {e}")
+
+        try:
+            from sentence_transformers import SentenceTransformer
+            self.embedder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+            print("[TURBOVEC] Mode: ON (quantized vector index & MiniLM ready on CPU).")
+        except Exception as e:
+            print(f"[TURBOVEC] Failed to initialize SentenceTransformer: {e}")
+            print("[TURBOVEC] Gracefully falling back to keyword indexing.")
+            self.mode = "fallback"
 
     def ingest_needed_files(self, active_model_path: Optional[str], active_level: Optional[int], lookup_mode: str):
+        if self.mode == "off":
+            return
+
         import glob
         import os
         import re
@@ -170,27 +202,41 @@ class HistoryKeywordIndex:
                     with open(f, 'rb') as fp:
                         history = json.loads(zlib.decompress(fp.read()).decode('utf-8'))
                     
+                    texts = []
+                    temp_metadata = []
                     for msg in history:
                         content = msg.get("content", "")
                         if len(content) > 20:
-                            self.metadata.append({
+                            texts.append(content)
+                            temp_metadata.append({
                                 "content": content,
                                 "role": msg.get("role"),
                                 "file": f,
                                 "model": f_model,
                                 "level": f_level
                             })
-                            newly_ingested += 1
+                    
+                    if texts and self.mode == "on" and self.embedder is not None and self.collection is not None:
+                        vecs = self.embedder.encode(texts, convert_to_numpy=True)
+                        self.collection.add(vecs.astype(np.float32))
+                        self.metadata.extend(temp_metadata)
+                        newly_ingested += len(texts)
+                    elif texts:
+                        self.metadata.extend(temp_metadata)
+                        newly_ingested += len(texts)
 
                     self._ingested_files.add(f)
                 except Exception as e:
-                    print(f"[HISTORY_SEARCH] Failed to parse history {f}: {e}")
+                    print(f"[TURBOVEC] Failed to parse history {f}: {e}")
 
             if newly_ingested > 0:
-                print(f"[HISTORY_SEARCH] Ingested {newly_ingested} new chunks. Total indexed: {len(self.metadata)}")
+                print(f"[TURBOVEC] Ingested {newly_ingested} new chunks. Total indexed: {len(self.metadata)}")
 
     def search(self, query: str, top_k: int = 3, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted"):
-        import os
+        if self.mode == "off":
+            return []
+
+        import numpy as np
         
         with self.lock:
             self.ingest_needed_files(active_model_path, active_level, lookup_mode)
@@ -202,12 +248,8 @@ class HistoryKeywordIndex:
             if active_model_path:
                 active_model_name = os.path.splitext(os.path.basename(active_model_path))[0].lower()
 
-            query_terms = [t for t in query.lower().split() if len(t) > 3]
-            if not query_terms:
-                query_terms = [t for t in query.lower().split() if t]
-
-            scored_res = []
-            for meta in self.metadata:
+            mask = np.zeros(len(self.metadata), dtype=bool)
+            for i, meta in enumerate(self.metadata):
                 match = False
                 if lookup_mode == "targeted":
                     if active_model_name and meta["model"] == active_model_name and active_level is not None and meta["level"] == active_level:
@@ -220,16 +262,36 @@ class HistoryKeywordIndex:
                         match = True
                 elif lookup_mode == "all":
                     match = True
+                
+                mask[i] = match
 
-                if match:
+            if not np.any(mask):
+                return []
+
+            # Vector similarity search if mode is ON
+            if self.mode == "on" and self.embedder is not None and self.collection is not None:
+                try:
+                    query_vec = self.embedder.encode([query], convert_to_numpy=True).astype(np.float32)
+                    distances, indices = self.collection.search(query_vec, k=top_k, mask=mask)
+                    
+                    results = []
+                    if len(indices) > 0:
+                        for idx in indices[0]:
+                            if 0 <= idx < len(self.metadata):
+                                results.append(self.metadata[idx]["content"])
+                    return results
+                except Exception as e:
+                    print(f"[TURBOVEC] Vector search failed ({e}), falling back to keyword search.")
+
+            # Fallback keyword search
+            query_terms = [t for t in query.lower().split() if len(t) > 3]
+            scored_res = []
+            for i, meta in enumerate(self.metadata):
+                if mask[i]:
                     c_lower = meta["content"].lower()
                     score = sum(c_lower.count(t) for t in query_terms)
                     if score > 0:
                         scored_res.append((score, meta["content"]))
-
+            
             scored_res.sort(key=lambda x: x[0], reverse=True)
             return [text for _, text in scored_res[:top_k]]
-
-
-# Backwards compatibility alias
-TurboVecIndex = HistoryKeywordIndex

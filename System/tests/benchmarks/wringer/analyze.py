@@ -6,8 +6,8 @@ for f in os.listdir(report_dir):
     if not f.endswith('.md'): continue
     model = f.replace('_report.md', '')
     
-    # Filter out 'assistant', 'MTP', and 'mmproj' models
-    if "assistant" in model.lower() or "mtp" in model.lower() or "mmproj" in model.lower():
+    # Filter out 'assistant', 'MTP', 'dflash', and 'mmproj' models
+    if any(k in model.lower() for k in ["assistant", "mtp", "dflash", "drafter", "mmproj"]):
         continue
         
     path = os.path.join(report_dir, f)
@@ -57,20 +57,25 @@ if chart_data:
         sorted_items = sorted(chart_data.items(), key=lambda x: x[1].get("Overall", 0), reverse=True)
         models = [k for k, v in sorted_items]
         
+        def level_sort_key(lvl_name: str):
+            if lvl_name == "Overall":
+                return (-1, 0, "")
+            match = re.match(r"^lvl(\d+)", str(lvl_name), re.IGNORECASE)
+            if match:
+                return (0, int(match.group(1)), str(lvl_name))
+            return (1, 0, str(lvl_name))
+
         levels = []
         for k, v in sorted_items:
             for lvl in v.keys():
                 if lvl not in levels:
                     levels.append(lvl)
         
-        if "Overall" in levels:
-            levels.remove("Overall")
-            levels.insert(0, "Overall")
-            
+        other_levels = sorted([lvl for lvl in levels if lvl != "Overall"], key=level_sort_key)
+        
         import math
         import matplotlib.gridspec as gridspec
 
-        other_levels = [lvl for lvl in levels if lvl != "Overall"]
         cols = 2
         rows = math.ceil(len(other_levels) / cols) if other_levels else 0
         
