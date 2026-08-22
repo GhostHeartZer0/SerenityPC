@@ -1,6 +1,6 @@
 {
     "username": "GhostHeartZer0",
-    "main_window": "960x600+21+294",
+    "main_window": "960x600+15+298",
     "model_paths": {
         "fast": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
@@ -16,7 +16,7 @@
         "vision_multimodal": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "vision_multimodal_projector": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/gemma-4-12b/mmproj-F16.gguf",
         "mid": "S:/SerenityPC/Models/gemma-4-26B MoE/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-        "transcendent": "S:/LLM/META ASI (Muse Glimmer)/Muse-Glimmer-30B-UD-Q4_K_XL.gguf"
+        "transcendent": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     },
     "gpu_layer_config": {
         "fast": 99,
@@ -30,7 +30,7 @@
         "vision_video_deep": 14,
         "vision_multimodal": 99,
         "mid": 99,
-        "transcendent": 5
+        "transcendent": 99
     },
     "context_size_config": {
         "fast": 32768,
@@ -44,7 +44,7 @@
         "vision_video_deep": 4096,
         "vision_multimodal": 32768,
         "mid": 32768,
-        "transcendent": 65536
+        "transcendent": 32768
     },
     "temp_config": {
         "fast": 0.8,
@@ -58,7 +58,7 @@
         "vision_video_deep": 0.1,
         "vision_multimodal": 1.0,
         "mid": 0.8,
-        "transcendent": 1.0
+        "transcendent": 0.8
     },
     "top_p_config": {
         "fast": 0.95,
@@ -100,7 +100,7 @@
         "vision_video_deep": 1.0,
         "vision_multimodal": 1.0,
         "mid": 1.1,
-        "transcendent": 1.05
+        "transcendent": 1.1
     },
     "frequency_penalty_config": {
         "fast": 0.0,
@@ -170,10 +170,10 @@
         "mid": 64,
         "transcendent": 64
     },
-    "sash_pos": 566,
+    "sash_pos": 482,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 1,
+    "active_persona_level": 6,
     "max_persona_level": 6.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
@@ -419,7 +419,6 @@
         },
         "T18": {
             "name": "Muse Glimmer",
-            "stop": "<|end_of_text|>, <|eot|>",
             "temp": 1.0,
             "top_p": 0.95,
             "min_p": 0.05,
@@ -479,8 +478,8 @@
     "auto_vram_offload": false,
     "speculative_drafting": false,
     "history_lookup_mode": "targeted",
-    "k_cache_type": "q8_0",
-    "v_cache_type": "q5_1",
+    "k_cache_type": "fp16",
+    "v_cache_type": "fp16",
     "hao_preset": "exps=CPU",
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
@@ -489,7 +488,7 @@
     "dynamic_params_enabled": true,
     "startup_count": 1,
     "offline_mode": false,
-    "theme": "matrix",
+    "theme": "yellow_blacket",
     "texture_style": "default",
     "frosted_glass": false,
     "repeat_detection_mode": "lazy",
@@ -507,9 +506,9 @@
     "thinking_checkbox": true,
     "show_tooltips": true,
     "image_handling": "auto",
-    "muse_reasoning_strength": "off",
+    "muse_reasoning_strength": "medium",
     "dmn_timeout": "05:00",
-    "stt_device_index": 0,
+    "stt_device_index": 1,
     "stt_language": "en-US",
     "text_scale": 100,
     "ui_font": "Segoe UI",
