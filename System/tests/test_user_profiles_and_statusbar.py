@@ -265,5 +265,21 @@ class TestUserProfilesAndStatusBar(unittest.TestCase):
         self.assertIn("Public", profiles)
         self.assertIn("PrivateUser", profiles)
 
+    def test_settings_locked_profile_swap_verification(self):
+        from System.vault_manager import VaultManager
+        v_dir = os.path.join(self.root_dir, "SettingsVault")
+        os.makedirs(v_dir, exist_ok=True)
+        vm = VaultManager(history_dir=v_dir, state_dir=v_dir)
+        vm.set_password("MyPass123!")
+        vm.lock()
+        self.assertTrue(vm.is_lock_enabled())
+        self.assertTrue(vm.is_locked())
+
+        # Verify correct vs incorrect password unlock
+        self.assertFalse(vm.unlock("wrong"))
+        self.assertTrue(vm.is_locked())
+        self.assertTrue(vm.unlock("MyPass123!"))
+        self.assertFalse(vm.is_locked())
+
 if __name__ == "__main__":
     unittest.main()
