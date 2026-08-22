@@ -92,13 +92,14 @@ def get_short_path(path):
     """Convert Windows path to 8.3 short path format to prevent space-splitting in CMake arguments."""
     if not path or not os.path.exists(path):
         return path
-    try:
-        buf = ctypes.create_unicode_buffer(500)
-        res = ctypes.windll.kernel32.GetShortPathNameW(path, buf, 500)
-        if res > 0:
-            return buf.value
-    except Exception:
-        pass
+    if os.name == "nt" and hasattr(ctypes, "windll"):
+        try:
+            buf = ctypes.create_unicode_buffer(500)
+            res = ctypes.windll.kernel32.GetShortPathNameW(path, buf, 500)
+            if res > 0:
+                return buf.value
+        except Exception:
+            pass
     return path
 
 def get_cuda_path():
@@ -235,7 +236,21 @@ def capture_vcvars_env(vcvars_path):
     return {}
 
 def setup_msvc_env():
-    """Detect and inject MSVC build environment into os.environ."""
+    """Detect and inject MSVC build environment on Windows, or configure GCC/Clang on POSIX."""
+    if os.name != "nt":
+        if shutil.which("gcc"):
+            os.environ.setdefault("CC", "gcc")
+            os.environ.setdefault("CXX", "g++")
+            print("[V] GCC Compiler Environment configured.")
+            return True
+        elif shutil.which("clang"):
+            os.environ.setdefault("CC", "clang")
+            os.environ.setdefault("CXX", "clang++")
+            print("[V] Clang Compiler Environment configured.")
+            return True
+        print("[X] Neither GCC nor Clang found in system PATH.")
+        return False
+
     vcvars = find_vcvars()
     if vcvars:
         vc_env = capture_vcvars_env(vcvars)
@@ -254,9 +269,16 @@ def setup_msvc_env():
 def check_build_environment():
     """Pre-flight check to identify why builds usually fail."""
     print("\n--- [ Pre-flight Build Environment Check ] ---")
+    if os.name == "nt":
+        compiler_name = "MSVC (cl.exe)"
+        compiler_path = shutil.which("cl")
+    else:
+        compiler_name = "GCC / Clang"
+        compiler_path = shutil.which("gcc") or shutil.which("clang") or shutil.which("cc")
+
     checks = {
         "CMake": shutil.which("cmake"),
-        "MSVC (cl.exe)": shutil.which("cl"),
+        compiler_name: compiler_path,
         "CUDA Compiler (nvcc)": shutil.which("nvcc"),
         "Git": shutil.which("git"),
         "Ninja": shutil.which("ninja")
@@ -272,7 +294,10 @@ def check_build_environment():
     
     if not all_passed:
         print("\n[!] WARNING: Some build tools are missing. llama-cpp-python build WILL fail.")
-        print("Ensure Visual Studio (C++ Desktop Dev), CMake, and CUDA Toolkit are installed.")
+        if os.name == "nt":
+            print("Ensure Visual Studio (C++ Desktop Dev), CMake, and CUDA Toolkit are installed.")
+        else:
+            print("Ensure build-essential / Xcode CLI tools, CMake, and CUDA/Metal are installed.")
         print("--------------------------------------------------\n")
     else:
         print("[V] All critical build tools detected.\n")

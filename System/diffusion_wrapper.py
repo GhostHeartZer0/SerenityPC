@@ -167,7 +167,9 @@ class DiffusionCLIWrapper:
         try: os.remove(temp_path)
         except: pass
 
+        elapsed_total = time.time() - start_time
         if last_clean_frame:
+            self._push_event("diag_log_update", f"[DIFFUSION] Denoising finished in {elapsed_total:.2f}s ({len(step_times)} steps).")
             self._push_event("streaming_replace", "")
             yield {"choices": [{"text": last_clean_frame}]}
         else:

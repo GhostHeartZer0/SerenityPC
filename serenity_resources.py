@@ -14,25 +14,271 @@ DOCS_DIR = os.path.join(BASE_DIR, "Docs")
 APP_ICON = os.path.join(SYSTEM_DIR, "serenity.ico")
 LIVE_ICON = os.path.join(MEDIA_DIR, "transcendent_serenity_ws_hq2.png")
 
-# Logic & Scripts
-LIVE_AGENT_SCRIPT = os.path.join(LIVE_DIR, "serenity_live.py")
-LIVE_ENGINE_SCRIPT = os.path.join(LIVE_DIR, "Engine", "t5_server.py")
-
-# --- LIVE ENGINE CONFIG ---
-SERENITY_LIVE_URL = "http://127.0.0.1:8001/analyze"
-SERENITY_LIVE_KEY = "REVOKED"
-
-# --- UI THEME ---
-THEME = {
-    "bg_color": "#000000",           # Pure Black Background
-    "fg_color": "#ffffff",           # White Text
-    "widget_bg_color": "#121212",    # Very Dark Grey
-    "button_bg_color": "#202020",    # Dark Grey for buttons
-    "button_active_color": "#404040",
-    "trim_color": "#333333",         # Border color
-    "electric_blue": "#007acc",      # Accent
-    "midnight_blue": "#101020"       # Slider Trough / Deep Dark
+# --- THEME PRESETS & TEXTURE STYLES ---
+THEMES = {
+    "apex": {
+        "name": "Apex",
+        "bg_color": "#121214",
+        "fg_color": "#ffaa44",
+        "widget_bg_color": "#18181c",
+        "button_bg_color": "#24201c",
+        "button_active_color": "#382e24",
+        "trim_color": "#4a3520",
+        "electric_blue": "#ff7700",
+        "midnight_blue": "#0e0d10",
+        "accent_highlight": "#ff8800",
+        "accent_secondary": "#ffaa00",
+        "chat_bg_color": "#141418",
+        "chat_fg_color": "#ffb359"
+    },
+    "goth": {
+        "name": "Goth / Obsidian",
+        "bg_color": "#000000",
+        "fg_color": "#ff1a40",
+        "widget_bg_color": "#000000",
+        "button_bg_color": "#0a0002",
+        "button_active_color": "#1c0006",
+        "trim_color": "#3d000c",
+        "electric_blue": "#ff0033",
+        "midnight_blue": "#000000",
+        "accent_highlight": "#ff2255",
+        "accent_secondary": "#cc0022",
+        "chat_bg_color": "#000000",
+        "chat_fg_color": "#ff2a4b"
+    },
+    "crystal_cavern": {
+        "name": "Crystal Cavern",
+        "bg_color": "#04020a",
+        "fg_color": "#00e5ff",
+        "widget_bg_color": "#0b0616",
+        "button_bg_color": "#1a082c",
+        "button_active_color": "#2e0d4a",
+        "trim_color": "#d0006f",
+        "electric_blue": "#00e5ff",
+        "midnight_blue": "#04010a",
+        "accent_highlight": "#ff007f",
+        "accent_secondary": "#ffe600",
+        "crystal_indigo": "#4b0082",
+        "crystal_green": "#00ff88",
+        "chat_bg_color": "#080412",
+        "chat_fg_color": "#5ce1e6"
+    },
+    "yellow_blacket": {
+        "name": "Yellow Blacket",
+        "bg_color": "#000000",
+        "fg_color": "#ffee00",
+        "widget_bg_color": "#000000",
+        "button_bg_color": "#0a0a00",
+        "button_active_color": "#1c1c00",
+        "trim_color": "#383800",
+        "electric_blue": "#ffff00",
+        "midnight_blue": "#000000",
+        "accent_highlight": "#ffee00",
+        "accent_secondary": "#ffcc00",
+        "chat_bg_color": "#000000",
+        "chat_fg_color": "#fff033"
+    },
+    "natural": {
+        "name": "Natural",
+        "bg_color": "#120c06",
+        "fg_color": "#55ee77",
+        "widget_bg_color": "#1c140c",
+        "button_bg_color": "#2a1e12",
+        "button_active_color": "#3d2d1b",
+        "trim_color": "#4e3b26",
+        "electric_blue": "#44dd66",
+        "midnight_blue": "#0c0804",
+        "accent_highlight": "#66ff88",
+        "accent_secondary": "#d2b48c",
+        "chat_bg_color": "#160f08",
+        "chat_fg_color": "#66ff88"
+    },
+    "matrix": {
+        "name": "Matrix",
+        "bg_color": "#000000",
+        "fg_color": "#00ff41",
+        "widget_bg_color": "#000000",
+        "button_bg_color": "#000d00",
+        "button_active_color": "#001f00",
+        "trim_color": "#003800",
+        "electric_blue": "#00ff41",
+        "midnight_blue": "#000000",
+        "accent_highlight": "#00ff66",
+        "accent_secondary": "#00cc33",
+        "chat_bg_color": "#000000",
+        "chat_fg_color": "#00ff41"
+    },
+    "persona": {
+        "name": "Persona",
+        "bg_color": "#0a0a0f",
+        "fg_color": "#00ffcc",
+        "widget_bg_color": "#101018",
+        "button_bg_color": "#1c1c28",
+        "button_active_color": "#2c2c3e",
+        "trim_color": "#383850",
+        "electric_blue": "#007acc",
+        "midnight_blue": "#06060a",
+        "accent_highlight": "#00ffcc",
+        "accent_secondary": "#FFD700",
+        "chat_bg_color": "#0d0d14",
+        "chat_fg_color": "#00ffcc",
+        "is_persona": True
+    },
+    "cecilia": {
+        "name": "Cecilia",
+        "bg_color": "#02140e",
+        "fg_color": "#00ff66",
+        "widget_bg_color": "#062218",
+        "button_bg_color": "#0a2e21",
+        "button_active_color": "#0f4230",
+        "trim_color": "#005a36",
+        "electric_blue": "#00ff66",
+        "midnight_blue": "#010d09",
+        "accent_highlight": "#00ff66",
+        "accent_secondary": "#005a36",
+        "chat_bg_color": "#031710",
+        "chat_fg_color": "#00ff66"
+    }
 }
+
+# Alias for backwards compatibility
+THEMES["default"] = THEMES["apex"]
+THEMES["apex_dark"] = THEMES["apex"]
+THEMES["fractal_logic"] = THEMES["matrix"]
+
+TEXTURE_STYLES = {
+    "default": {
+        "name": "Default Original",
+        "border_width": 1,
+        "relief": "flat",
+        "trim_tint": "#333333",
+        "highlight_tint": None,
+        "alpha_soft": False
+    },
+    "frosted_glass": {
+        "name": "Frosted Glass",
+        "border_width": 1,
+        "relief": "groove",
+        "trim_tint": None,
+        "highlight_tint": None,
+        "alpha_soft": True,
+        "is_frosted": True
+    },
+    "gloss": {
+        "name": "Gloss",
+        "border_width": 2,
+        "relief": "raised",
+        "trim_tint": "#555555",
+        "highlight_tint": "#ffffff",
+        "alpha_soft": False
+    },
+    "metallic": {
+        "name": "Metallic",
+        "border_width": 2,
+        "relief": "groove",
+        "trim_tint": "#4f5d68",
+        "highlight_tint": "#9cb3c9",
+        "alpha_soft": False
+    },
+    "muted": {
+        "name": "Muted",
+        "border_width": 1,
+        "relief": "flat",
+        "trim_tint": "#222222",
+        "highlight_tint": "#444444",
+        "alpha_soft": True
+    },
+    "iridescent": {
+        "name": "Iridescent",
+        "border_width": 2,
+        "relief": "ridge",
+        "trim_tint": "#7b2cbf",
+        "highlight_tint": "#00f0ff",
+        "alpha_soft": False
+    },
+    "pearlescent": {
+        "name": "Pearlescent",
+        "border_width": 2,
+        "relief": "solid",
+        "trim_tint": "#cce3de",
+        "highlight_tint": "#e8dff5",
+        "alpha_soft": True
+    }
+}
+
+# --- ACTIVE UI THEME (Runtime in-place mutable dict) ---
+THEME = dict(THEMES["apex"])
+
+def apply_theme_to_global(theme_name: str = "apex", texture_style: str = "default", dark_mode: bool = False, active_level: int = 3, model_loaded: bool = False):
+    """Dynamically applies selected palette, texture style, and dark mode blackout modifiers in-place."""
+    t_key = theme_name if theme_name in THEMES else "apex"
+    tex_key = texture_style if texture_style in TEXTURE_STYLES else "default"
+    
+    base_theme = THEMES[t_key].copy()
+    tex = TEXTURE_STYLES[tex_key]
+    is_frosted = (tex_key == "frosted_glass" or tex.get("is_frosted", False))
+
+    if t_key == "persona":
+        lvl_color = THERMO_COLORS.get(active_level, "#00ffcc")
+        if active_level == 7:
+            base_theme["bg_color"] = "#02140e"
+            base_theme["widget_bg_color"] = "#062218"
+            base_theme["chat_bg_color"] = "#031710"
+            base_theme["button_bg_color"] = "#0a2e21"
+            base_theme["button_active_color"] = "#0f4230"
+            base_theme["trim_color"] = "#005a36"
+            base_theme["accent_highlight"] = "#00ff66"
+            base_theme["electric_blue"] = "#00ff66"
+            base_theme["fg_color"] = "#00ff66" if model_loaded else "#cccccc"
+            base_theme["chat_fg_color"] = "#00ff66" if model_loaded else "#dddddd"
+        else:
+            base_theme["accent_highlight"] = lvl_color
+            base_theme["electric_blue"] = lvl_color
+            base_theme["fg_color"] = lvl_color if model_loaded else "#cccccc"
+            base_theme["chat_fg_color"] = lvl_color if model_loaded else "#dddddd"
+            if model_loaded:
+                base_theme["trim_color"] = lvl_color
+    
+    if is_frosted:
+        # Diffuse borders, slight translucent lift on widget backgrounds
+        if t_key == "goth":
+            base_theme["widget_bg_color"] = "#080002"
+            base_theme["trim_color"] = "#5a0016"
+        elif t_key == "crystal_cavern":
+            base_theme["widget_bg_color"] = "#140a24"
+            base_theme["trim_color"] = "#e00078"
+        elif t_key == "yellow_blacket":
+            base_theme["widget_bg_color"] = "#080800"
+            base_theme["trim_color"] = "#555000"
+        elif t_key == "natural":
+            base_theme["widget_bg_color"] = "#221910"
+            base_theme["trim_color"] = "#5e4730"
+        elif t_key == "matrix":
+            base_theme["widget_bg_color"] = "#001000"
+            base_theme["trim_color"] = "#006600"
+        elif t_key in ("persona", "cecilia"):
+            base_theme["widget_bg_color"] = "#0a281e" if (t_key == "cecilia" or active_level == 7) else "#161622"
+            base_theme["trim_color"] = base_theme.get("accent_highlight", "#00ff66" if (t_key == "cecilia" or active_level == 7) else "#00ffcc")
+        else: # apex
+            base_theme["widget_bg_color"] = "#202026"
+            base_theme["trim_color"] = "#5c4228"
+    elif tex.get("trim_tint") and tex_key != "default":
+        base_theme["trim_color"] = tex["trim_tint"]
+
+    if dark_mode:
+        # Blackout power-saving mode
+        base_theme["bg_color"] = "#000000"
+        base_theme["widget_bg_color"] = "#000000"
+        base_theme["chat_bg_color"] = "#000000"
+        base_theme["midnight_blue"] = "#000000"
+        base_theme["button_bg_color"] = "#080808"
+        
+    THEME.clear()
+    THEME.update(base_theme)
+    THEME["_theme_name"] = t_key
+    THEME["_texture_style"] = tex_key
+    THEME["_dark_mode"] = dark_mode
+    return THEME
 
 # --- DYNAMIC COLORS (Vibrant / Input Box) ---
 THERMO_COLORS = {
@@ -42,8 +288,8 @@ THERMO_COLORS = {
     3: "#7D0000", # Lvl 3: Deep Red
     4: "#9B30FF", # Lvl 4: Lighter Violet
     5: "#00A000", # Lvl 5: Green
-    6: "#4A148C", # Lvl 6: Void Purple
-    7: "#007acc", # Lvl 7: Electric Blue (Live)
+    6: "#4A148C", # Lvl 6: Void Purple TBD electric blue text/accents
+    7: "#005a36", # Lvl 7: Dark Emerald (Cecilia)
 }
 
 # --- CHAT BACKGROUND COLORS ---
@@ -55,7 +301,7 @@ CHAT_BG_COLORS = {
     4: "#1A102E", 
     5: "#102E10", 
     6: "#15051f", 
-    7: "#001a33", 
+    7: "#021a12", 
 }
 
 # --- CHAT FOREGROUND COLORS ---
@@ -67,7 +313,7 @@ CHAT_FG_COLORS = {
     4: "#AFEEEE", 
     5: "#FFFFFF",
     6: "#E0F7FA",
-    7: "#FFFFFF",
+    7: "#00ff66", 
 }
 
 # --- INPUT TEXT COLORS ---
@@ -76,10 +322,10 @@ INPUT_FG_COLORS = {
     1: "#000000", 
     2: "#FFFFFF",
     3: "#FFFFFF",
-    4: "#AFEEEE",
+    4: "#AFEEEE", 
     5: "#FFFFFF",
     6: "#E0F7FA",
-    7: "#FFFFFF",
+    7: "#00ff66", 
 }
 
 # --- HARDWARE SPECS ---
@@ -95,7 +341,7 @@ CONTEXT_SIZE_MAP = {
     4: 32768,  # Extended for Companion
     5: 65536, # Massive context for Sage
     6: 131072, # 128k for Transcendent One
-    7: 65536  # Massive context for Cecilia
+    7: 131072 # 128k for Cecilia
 }
 
 TRI_ATTENTION_ENABLED = True
@@ -107,10 +353,10 @@ VERIFY_CUDA_ON_START = True
 PERSONA_DISPLAY_INFO = {
     1: ("LVL 1: The Speedy", "Speed without compromise. Minimal response time."),
     2: ("LVL 2: The Helper", "Helper/Searcher. Focus on assistance and search."),
-    3: ("LVL 3: The Collaborator", "Projects, collaboration, and debate."),
+    3: ("LVL 3: Collaborator", "Projects, collaboration, and debate."),
     4: ("LVL 4: The Confidant", "Emotional help and analyzation. More than a friend."),
     5: ("LVL 5: The Brains", "Intellectual, street and book smart. Maximum accuracy."),
-    6: ("LVL 6: The Transcendent One", "Transcends the main 5 levels"),
+    6: ("LVL 6: Transcendent", "The Transcendent One, combining the main 5 levels"),
     7: ("LVL 7: Cecilia", "A Fallen Angel. Protective, enlightening, teasing"),
     0: ("LVL 0: ERROR", "Model failed to load.")
 }
@@ -119,7 +365,7 @@ PERSONA_IDLE_MAP = {
     1: "idle_lvl1", 2: "idle_lvl2", 
     3: "idle_lvl3", 4: "idle_lvl4", 
     5: "idle_lvl5", 6: "transcendent",
-    7: "idle_lvl7",
+    7: "idle_lvl6",
 }
 
 # --- SYSTEM PROMPTS ---
@@ -180,7 +426,7 @@ AVATAR_FILENAMES = {
     "idle_lvl3": "lvl3_serenity_hug.png",
     "idle_lvl4": "lvl4_serenity_smart.png",
     "idle_lvl5": "lvl5_serenity_the_wise.png",
-    "idle_lvl6": "transcendent_serenity.png",
+    "idle_lvl6": "Serene_Serenity.jpg",
     "transcendent": "transcendent_serenity.png",
     "ecstatic": "serenity_ecstatic.png",
     "explain_direct": "explain_direct.png",
@@ -192,8 +438,8 @@ AVATAR_FILENAMES = {
     "dmn_lvl5": "lvl5_galaxy.jpg",
     "dmn_lvl6": "lvl6_galaxy.jpg",
     "meditating": "Meditating_Serenity.png",
-    "idle_lvl7": "Cecilia_01.png",
-    "cecilia_alt": "Cecilia_02.png"
+    "idle_lvl7": "transcendent_serenity.png",
+    "cecilia_alt": "Cecilia_01.png"
 }
 
 # Base names (without extension) for the LoadingScreen animator

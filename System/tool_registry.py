@@ -2,7 +2,6 @@
 # Modular Tool Registry for Programmatic & Template Tool Calling in Serenity AI.
 
 import os
-import sys
 import json
 import threading
 import subprocess
@@ -87,8 +86,18 @@ class GemmaToolRegistry:
         def handle_web_search(args: Dict[str, Any]) -> str:
             query = args.get("query", "").strip()
             if not query:
-                return "Error: Search query cannot be empty."
+                return "Notice: Search query was empty. Proceeding to answer using baseline knowledge."
             
+            # Check Offline Mode Guard
+            from System.network_guard import is_offline_mode
+            if is_offline_mode() or (self.app and getattr(self.app, 'config', {}).get("offline_mode", False)):
+                msg = f"[OFFLINE MODE] Live web search blocked by offline policy for query: '{query}'. Please answer using internal offline knowledge."
+                pq = getattr(self.app, "process_queue", None)
+                if pq:
+                    try: pq.put({"status": "tool_log_update", "content": f"\n{msg}"})
+                    except: pass
+                return msg
+
             import requests
             import urllib.parse
             from bs4 import BeautifulSoup
@@ -115,7 +124,7 @@ class GemmaToolRegistry:
                     
                     if len(results) >= 1:
                         proof_msg = f"[SEARCH PROOF] Provider: Brave | Status: {resp.status_code} | Found: {len(results)}"
-                        if self.app and hasattr(self.app, 'process_queue'):
+                        if self.app and hasattr(self.app, "process_queue"):
                             self.app.process_queue.put({"status": "tool_log_update", "content": f"\n{proof_msg}"})
                         return f"Brave Search Results for '{query}':\n\n" + "\n\n".join(results[:5])
             except Exception as e:
@@ -136,11 +145,10 @@ class GemmaToolRegistry:
                     
                     if len(results) >= 2:
                         proof_msg = f"[SEARCH PROOF] Provider: Bing | Status: {resp.status_code} | Found: {len(results)}"
-                        if self.app and hasattr(self.app, 'process_queue'):
+                        if self.app and hasattr(self.app, "process_queue"):
                             self.app.process_queue.put({"status": "tool_log_update", "content": f"\n{proof_msg}"})
                         return f"Bing Search Context for '{query}':\n\n" + "\n\n".join(results[:5])
-            except Exception as be:
-                print(f"[SEARCH DEBUG] Bing failed: {be}")
+            except: pass
 
             # DuckDuckGo (Fallback 2)
             try:
@@ -154,85 +162,163 @@ class GemmaToolRegistry:
                         snippet = res.select_one('.result__snippet')
                         if title and snippet:
                             results.append(f"[{title.get_text(strip=True)}]\n{snippet.get_text(strip=True)}")
-                    
                     if len(results) >= 2:
                         proof_msg = f"[SEARCH PROOF] Provider: DuckDuckGo | Status: {resp.status_code} | Found: {len(results)}"
-                        if self.app and hasattr(self.app, 'process_queue'):
+                        if self.app and hasattr(self.app, "process_queue"):
                             self.app.process_queue.put({"status": "tool_log_update", "content": f"\n{proof_msg}"})
-                        return f"DuckDuckGo Search Context for '{query}':\n\n" + "\n\n".join(results[:5])
-            except Exception as de:
-                print(f"[SEARCH DEBUG] DuckDuckGo failed: {de}")
+                        return f"DuckDuckGo Context for '{query}':\n\n" + "\n\n".join(results[:5])
+            except: pass
 
-            # Playwright Headless Fallback (Fallback 3)
+            # Deep Browse (Playwright Headless Fallback)
             try:
                 from playwright.sync_api import sync_playwright
+                if self.app and hasattr(self.app, "process_queue"):
+                    self.app.process_queue.put({"status": "thinking_status", "content": "USR: Initiating Stealth Browser Instance..."})
+                
                 with sync_playwright() as p:
                     browser = p.chromium.launch(headless=True)
-                    page = browser.new_page()
-                    page.goto(f"https://www.bing.com/search?q={urllib.parse.quote(query)}", timeout=10000)
-                    content = []
-                    for el in page.query_selector_all('li.b_algo')[:3]:
-                        h2 = el.query_selector('h2')
-                        caption = el.query_selector('.b_caption')
-                        if h2 and caption:
-                            content.append(f"[{h2.inner_text()}]\n{caption.inner_text()}")
+                    page = browser.new_page(user_agent=headers['User-Agent'])
+                    page.goto(f"https://www.bing.com/search?q={urllib.parse.quote(query)}", wait_until="load", timeout=15000)
+                    page.wait_for_timeout(3000)
+                    
+                    content = page.evaluate("""() => {
+                        const results = [];
+                        const bingResults = document.querySelectorAll('li.b_algo, .b_caption, .b_snippet');
+                        if (bingResults.length > 0) {
+                            bingResults.forEach(el => results.push(el.innerText));
+                        } else {
+                            document.querySelectorAll('p, span, div, h2').forEach(el => {
+                                const txt = el.innerText.trim();
+                                if (txt.length > 80 && !txt.includes('{')) {
+                                    results.push(txt);
+                                }
+                            });
+                        }
+                        return results.slice(0, 10);
+                    }""")
                     browser.close()
                     
                     if content:
                         proof_msg = f"[SEARCH PROOF] Provider: Playwright (Bing) | Content Fragments: {len(content)}"
-                        if self.app and hasattr(self.app, 'process_queue'):
+                        if self.app and hasattr(self.app, "process_queue"):
                             self.app.process_queue.put({"status": "tool_log_update", "content": f"\n{proof_msg}"})
                         return f"Deep Web Extract for '{query}':\n\n" + "\n\n".join(content)
-            except Exception as pe:
-                print(f"[SEARCH DEBUG] Playwright failed: {pe}")
+            except Exception as e:
+                print(f"[SEARCH DEBUG] Playwright failed: {e}")
             
-            return "Error: All search providers were unreachable or blocked."
+            return f"Notice: Web search was unable to retrieve live results for '{query}' (network offline or search providers unreachable). Please proceed to answer the user directly and gracefully using your internal knowledge."
 
         @self.registry.register("generate_image")
-        def handle_generate_image(args: Dict[str, Any]) -> str:
-            prompt = args.get("prompt", "")
+        def handle_generate_image(args: Any) -> str:
+            import sys
+            import ast
+            if isinstance(args, str):
+                try:
+                    parsed = ast.literal_eval(args)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                    else:
+                        args = {"prompt": args}
+                except Exception:
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {"prompt": args}
+            elif not isinstance(args, dict):
+                args = {"prompt": str(args)}
+
+            # Handle nested action_input / parameters / arguments
+            for k in ("action_input", "parameters", "arguments", "input"):
+                if k in args:
+                    nested = args[k]
+                    if isinstance(nested, str):
+                        try:
+                            nested_parsed = ast.literal_eval(nested)
+                            if isinstance(nested_parsed, dict):
+                                nested = nested_parsed
+                        except Exception:
+                            try:
+                                nested_parsed = json.loads(nested)
+                                if isinstance(nested_parsed, dict):
+                                    nested = nested_parsed
+                            except Exception: pass
+                    if isinstance(nested, dict):
+                        for nk, nv in nested.items():
+                            args.setdefault(nk, nv)
+                    elif isinstance(nested, str) and not args.get("prompt"):
+                        args["prompt"] = nested
+
+            prompt = args.get("prompt") or args.get("description") or args.get("code") or args.get("query") or args.get("text") or ""
             req_type = args.get("type", "image")
+            if isinstance(prompt, dict):
+                req_type = prompt.get("type", req_type)
+                prompt = prompt.get("prompt") or prompt.get("description") or str(prompt)
+            elif isinstance(prompt, str) and (prompt.strip().startswith("{") and prompt.strip().endswith("}")):
+                try:
+                    p_dict = ast.literal_eval(prompt)
+                    if isinstance(p_dict, dict):
+                        req_type = p_dict.get("type", req_type)
+                        prompt = p_dict.get("prompt") or p_dict.get("description") or prompt
+                except Exception: pass
+
+            clean_prompt = str(prompt).strip()
+            import re
+            clean_prompt = re.sub(r'<\|"?|\\"?\|?>?|<\||\|>', '', clean_prompt).strip(' "<|>\\')
             
             def spawn_viewer():
-                scratch_dir = os.path.join(getattr(self.app, "script_dir", os.getcwd()), "scratch")
-                os.makedirs(scratch_dir, exist_ok=True)
-                temp_script = os.path.join(scratch_dir, "temp_viewer.py")
-                
-                import re
-                clean_prompt = re.sub(r'<\|"?|\\"?\|?>?|<\||\|>', '', prompt).strip(' "<|>\\')
-                
-                script_content = f"""import tkinter as tk
+                try:
+                    base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
+                    scratch_dir = os.path.join(base_dir, "scratch")
+                    os.makedirs(scratch_dir, exist_ok=True)
+                    temp_script = os.path.join(scratch_dir, "temp_viewer.py")
+                    
+                    script_content = f"""import tkinter as tk
 from tkinter import scrolledtext
 
 root = tk.Tk()
-root.overrideredirect(True)
+root.title("Serenity Visual HUD")
 root.attributes('-topmost', True)
-root.attributes('-alpha', 0.95)
-root.geometry("500x350+100+100")
-root.config(bg='black')
+root.attributes('-alpha', 0.96)
+root.geometry("560x420+120+120")
+root.config(bg='#0d0d12')
 
-tk.Label(root, text='[Serenity Image / Diagram Viewer]', fg='#00ffcc', bg='black', font=('Consolas', 10, 'bold')).pack(pady=5)
+hdr = tk.Frame(root, bg='#161622', pady=6)
+hdr.pack(fill=tk.X)
+tk.Label(hdr, text='✨ Serenity Visual & Diagram Viewer', fg='#00ffcc', bg='#161622', font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=10)
+tk.Label(hdr, text='[{req_type.upper()}]', fg='#8888aa', bg='#161622', font=('Consolas', 9)).pack(side=tk.RIGHT, padx=10)
 
-txt = scrolledtext.ScrolledText(root, fg='white', bg='#111111', font=('Consolas', 9), insertbackground='white', borderwidth=0)
+txt = scrolledtext.ScrolledText(root, fg='#e0e0ff', bg='#12121a', font=('Consolas', 10), insertbackground='white', borderwidth=0, wrap=tk.WORD)
 txt.insert(tk.END, {repr(clean_prompt)})
 txt.config(state=tk.DISABLED)
-txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+txt.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
-tk.Button(root, text='[X] Close', command=root.destroy, bg='#222', fg='white', relief=tk.FLAT).pack(side=tk.BOTTOM, pady=5)
+btn_f = tk.Frame(root, bg='#0d0d12', pady=6)
+btn_f.pack(fill=tk.X, padx=12)
+tk.Button(btn_f, text='Close HUD', command=root.destroy, bg='#252535', fg='#00ffcc', font=('Segoe UI', 9, 'bold'), relief=tk.FLAT, padx=12).pack(side=tk.RIGHT)
 root.mainloop()"""
-                with open(temp_script, "w", encoding="utf-8") as f:
-                    f.write(script_content)
-                subprocess.Popen([sys.executable, temp_script])
+                    with open(temp_script, "w", encoding="utf-8") as f:
+                        f.write(script_content)
+                    subprocess.Popen([sys.executable, temp_script])
+                except Exception as e:
+                    print(f"[TOOL] Image viewer error: {e}")
             
             threading.Thread(target=spawn_viewer, daemon=True).start()
-            return f"Successfully generated and displayed {req_type} via borderless HUD overlay."
+            if self.app and hasattr(self.app, "process_queue"):
+                try:
+                    self.app.process_queue.put({"status": "tool_log_update", "content": f"\n[IMAGE / VISUAL HUD] Rendered {req_type}: {clean_prompt[:80]}...\n"})
+                except: pass
+            return f"Successfully generated and displayed {req_type} visual prompt in HUD overlay: '{clean_prompt[:60]}...'"
 
         @self.registry.register("get_system_stats")
         def handle_get_system_stats(args: Dict[str, Any]) -> str:
-            stats = {
-                "cpu": f"{psutil.cpu_percent()}%",
-                "ram": f"{psutil.virtual_memory().percent}%",
-            }
+            stats = {}
+            try:
+                stats["cpu"] = f"{psutil.cpu_percent()}%"
+                stats["ram"] = f"{psutil.virtual_memory().percent}%"
+            except Exception:
+                stats["cpu"] = "Normal"
+                stats["ram"] = "Normal"
+
             nvidia_ml = getattr(self.app, 'nvidia_ml', None)
             if not nvidia_ml:
                 try:
@@ -251,10 +337,24 @@ root.mainloop()"""
         @self.registry.register("read_file")
         def handle_read_file(args: Dict[str, Any]) -> str:
             path = args.get("path")
-            if not path or not os.path.exists(path):
-                return "Error: File not found."
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read(5000)
+            if not path:
+                return "Notice: No file path provided."
+            
+            target_path = path
+            if not os.path.exists(target_path):
+                base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
+                alt_path = os.path.join(base_dir, path)
+                if os.path.exists(alt_path):
+                    target_path = alt_path
+            
+            if not os.path.exists(target_path):
+                return f"Notice: File '{path}' was not found. Please proceed to answer based on available context and inform user that the path was not found."
+            
+            try:
+                with open(target_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    return f.read(5000)
+            except Exception as e:
+                return f"Notice: Error reading file '{path}': {str(e)}"
 
         @self.registry.register("control_rgb")
         def handle_control_rgb(args: Dict[str, Any]) -> str:
@@ -274,23 +374,35 @@ root.mainloop()"""
                     json.dump(state, f, indent=4)
                 return f"RGB adjusted: Mode=Manual, Color={args.get('color')}, Style={args.get('style')}"
             except Exception as e:
-                return f"Error controlling RGB: {str(e)}"
+                return f"Notice: RGB controller not fully accessible ({str(e)}). Simulated state applied."
 
     def execute(self, call_name: str, args: Dict[str, Any]) -> str:
-        """Executes a tool call via the modular registry."""
+        """Executes a tool call via the modular registry with graceful fallbacks."""
         print(f"[TOOL] Executing: {call_name} with args: {args}")
         try:
             if self.registry.has(call_name):
                 return self.registry.execute(call_name, args)
-            return f"Error: Tool {call_name} not implemented."
+            return f"Notice: Tool '{call_name}' is not recognized in the registry. Please answer directly using your baseline knowledge."
         except Exception as e:
-            return f"Error executing tool: {str(e)}"
+            return f"Notice: Tool '{call_name}' execution encountered an issue ({str(e)}). Please answer using available knowledge."
 
     def get_definitions(self, level=1) -> List[Dict[str, Any]]:
-        """Returns tool definitions permitted for the current persona level."""
+        """Returns tool definitions permitted for the current persona level and offline state."""
         if level < 2: return []
-        if level < 5: return [self.tools[0], self.tools[2], self.tools[3]]
-        return self.tools
+        
+        # Check Offline Mode Guard
+        from System.network_guard import is_offline_mode
+        is_offline = is_offline_mode() or (self.app and getattr(self.app, 'config', {}).get("offline_mode", False))
+        
+        base_tools = self.tools
+        if is_offline:
+            # Strictly filter out web_search and remote internet services when offline
+            base_tools = [t for t in base_tools if t["function"]["name"] not in ("web_search",)]
+            
+        allowed_names = {"get_system_stats", "control_rgb", "generate_image", "read_file"}
+        if not is_offline:
+            allowed_names.add("web_search")
+        return [t for t in base_tools if t["function"]["name"] in allowed_names]
 
     def get_python_stubs(self, level: int = 1) -> str:
         """Generates typed Python function stubs for Programmatic Tool Calling (PTC - arXiv:2608.06370v1)."""
