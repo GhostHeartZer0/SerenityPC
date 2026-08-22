@@ -3,20 +3,31 @@ import os
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 datas = [
+<<<<<<< HEAD
     ('System', 'System'),
     ('Users', 'Users'),
     ('Media', 'Media'),
     ('Docs', 'Docs'),
     ('Tools', 'Tools'),
+=======
+    ('System/Media', 'System/Media'),
+    ('Media', 'Media'),
+    ('Docs', 'Docs'),
+>>>>>>> da0182876f884706ef7b69e1b2b90b4d81e566b6
     ('serenity_resources.py', '.'),
 ]
+datas += collect_data_files('llama_cpp')
+binaries = collect_dynamic_libs('llama_cpp')
 
+<<<<<<< HEAD
 if os.path.exists('Models/For More Models....txt'):
     datas.append(('Models/For More Models....txt', 'Models'))
 
 datas += collect_data_files('llama_cpp')
 binaries = collect_dynamic_libs('llama_cpp')
 
+=======
+>>>>>>> da0182876f884706ef7b69e1b2b90b4d81e566b6
 # Add CUDA 12 toolkit DLL search paths if present
 cuda_bin = r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin'
 if os.path.exists(cuda_bin):
@@ -27,7 +38,11 @@ if os.path.exists(cuda_bin):
 
 a = Analysis(
     ['main.py'],
+<<<<<<< HEAD
     pathex=['.', 'System', 'Tools'],
+=======
+    pathex=['.', 'System'],
+>>>>>>> da0182876f884706ef7b69e1b2b90b4d81e566b6
     binaries=binaries,
     datas=datas,
     hiddenimports=[
@@ -35,7 +50,10 @@ a = Analysis(
         'psutil',
         'pynvml',
         'PIL',
+<<<<<<< HEAD
         'PIL.Image',
+=======
+>>>>>>> da0182876f884706ef7b69e1b2b90b4d81e566b6
         'PIL.ImageTk',
         'numpy',
         'requests',
@@ -47,6 +65,7 @@ a = Analysis(
         'pystray',
         'uvicorn',
         'fastapi',
+<<<<<<< HEAD
         'windnd',
         'cv2',
         'speech_recognition',
@@ -75,6 +94,8 @@ a = Analysis(
         'System.gguf_draft_model',
         'System.tri_attention_core',
         'serenity_resources',
+=======
+>>>>>>> da0182876f884706ef7b69e1b2b90b4d81e566b6
     ],
     hookspath=[],
     hooksconfig={},
@@ -107,5 +128,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+<<<<<<< HEAD
     icon=icon_path,
+=======
+>>>>>>> da0182876f884706ef7b69e1b2b90b4d81e566b6
 )
