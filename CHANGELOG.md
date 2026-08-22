@@ -24,7 +24,9 @@
 ### Version 1.6.0
 - Muse Glimmer support
 
-## Version 1.5.3 (1.6.12-alpha)
+## Current & Historic Versions:
+
+### Version 1.5.3
 
 - **Persona Dynamic Theme**:
   - Added "Persona (Level Dynamic)" theme palette in `serenity_resources.py` that colorizes the entire UI dynamically based on the active persona level (Level 1 Gold, Level 2 Orange, Level 3 Deep Red, Level 4 Violet, Level 5 Green, Level 6 Void Purple, Level 7 Cecilia Cyan/Blue).
@@ -60,7 +62,7 @@
 
 ---
 
-## Version 1.5.2 (1.6.11-alpha)
+### Version 1.5.2
 
 - **Muse-Glimmer `llama.cpp` Architecture Correction & Recompilation**:
   - Gated RoPE to Sliding Window Attention (SWA) layers only (`use_rope = is_swa || swa_type == LLAMA_SWA_TYPE_NONE`) while keeping Global layers NoPE in `muse-glimmer.cpp`.
@@ -83,7 +85,7 @@
 
 ---
 
-## Version 1.5.1 (1.6.10-alpha)
+### Version 1.5.1
 
 - **Global Text Scaling & Typography Consistency Fix**:
   - Bound explicit named fonts (`self.fonts["ui_button"]`, `self.fonts["ui_label"]`, `self.fonts["ui_small"]`, `self.fonts["stats"]`, `self.fonts["main"]`) to previously unscaled widgets across main application, navigation tabs, control footers, dialogs, and settings windows.
@@ -103,7 +105,7 @@
 
 ---
 
-## Version 1.5.0 (1.6.9)
+### Version 1.5.0 [Stable]
 
 - **Llama Local Source Recompilation & Build Toolchain Optimization**:
   - Recompiled local `llama-cpp-python` with CUDA 13.3 (`sm_86`) and MSVC 14.51 (VS 18 BuildTools) with full CUDA offloading enabled.
@@ -140,7 +142,7 @@
 
 ---
 
-## Version 1.4.6 (1.6.8-alpha)
+### Version 1.4.6
 
 - **Loading Bar & Status Area Verification**:
   - Verified hybrid status tracking, TTFT calculation, active task gauges, and Serenity Prayer animation transitions.
@@ -149,7 +151,7 @@
 
 ---
 
-## Version 1.4.5 (1.6.7-alpha)
+## Version 1.4.5
 
 - **Tutorial & Tooltip Enhancements**:
   - Updated Tutorial Step 2 with focused spotlight bounding box wrapping the Top Action Bar (`top_bar_frame`, `tab_bar_frame`, controls, and telemetry badges).
@@ -217,7 +219,7 @@
 
 ---
 
-## Version 1.4.4 (1.6.6)
+### Version 1.4.4
 
 - **Loading Bar & Status Area Overhaul**:
   - Replaced static indeterminate ping-pong progress bar with `DynamicStatusWidget` in `System/serenity_utils.py` and `main.py`.
@@ -237,7 +239,7 @@
 
 ---
 
-## Version 1.4.3 (1.6.5-alpha)
+### Version 1.4.3
 
 - **Wringer Speed Telemetry & Graph Popup Overhaul**:
   - **Streaming Tokens/Sec (`t/s`) Telemetry**: Added per-prompt streaming token measurement in `System/tests/benchmarks/wringer/Wringer.py` calculating precise prefill (`t/s`), decode (`t/s`), and overall generation speed (`t/s`).
@@ -257,7 +259,7 @@
 
 ---
 
-## Version 1.4.2 (1.6.4)
+### Version 1.4.2
 
 - **nvidia-ml-py Official Migration**:
   - Replaced deprecated `pynvml` package in `requirements.txt` with official `nvidia-ml-py>=13.610.0`.
@@ -296,7 +298,7 @@
 
 ---
 
-## Version 1.4.1 (1.6.3-alpha)
+### Version 1.4.1
 
 - **Thought Channel Isolation & Dropdown Fix**:
   - Added missing `<thought>` / `</thought>`, `</|think|>`, `<|im_start|>thought`, and `<|im_end|>` delimiters to inference scout & split logic (`closers`, opener detection, `tag_clean_pattern`) in `main.py` and `_sanitize_synthesis_output`.
@@ -318,7 +320,7 @@
 
 ---
 
-## Version 1.4.0 (1.6.2)
+### Version 1.4.0 [Stable] [1.6.2]
 
 - **History Archive Usability**:
   - Rebuilt the History Archive into a unified search and filter interface in `main.py`.
@@ -368,7 +370,7 @@
 
 ---
 
-## Version 1.3.5 (1.6.1)
+### Version 1.3.5
 
 - **Engine Tier & Level Mapping Realignment**:
   - Swapped **Secret** and **Live** engine tier slots:
@@ -393,7 +395,7 @@
 
 ---
 
-## Version 1.3.4 (1.6.0)
+### Version 1.3.4
 
 - **Gemma-4 C++ Kernel & RoPE Alignment**:
   - Reclassified `LLM_TENSOR_ROPE_FREQS` as `LLM_TENSOR_LAYER_INPUT` in `llama-arch.cpp` and updated `gemma4.cpp` to load global `rope_freqs.weight` across all non-SWA layers, restoring correct positional embeddings.
@@ -417,7 +419,7 @@
 
 ---
 
-## Version 1.3.3 (1.5.6)
+### Version 1.3.3
 
 - **DRY Sampler Ctypes ABI Fix**:
   - Fixed memory alignment corruption in sampler chain by adding `n_ctx_train` (`ctypes.c_int32`) to `llama_sampler_init_dry` signature in `llama_cpp.py` and passing `llama_model_n_ctx_train(model.model)` in `_internals.py`.
@@ -431,7 +433,7 @@
 
 ---
 
-## Version 1.3.2 (1.5.5)
+### Version 1.3.2
 
 - **Gemma-4 Thought Channel & Clean Answer Delivery**:
   - Verified thought channel extraction and separation (`<|channel>thought...<channel|>`) routing reasoning steps into the UI Thought Log and final answers (`final_answer`) directly to the active Chat tab with zero tag bleed.
@@ -458,7 +460,7 @@
 
 ---
 
-## Version 1.3.1 (1.5.4)
+### Version 1.3.1
 
 - **CUDA 13.3+ MSVC Toolchain Auto-Discovery**:
   - Integrated `get_msvc_env()` to auto-discover and load Visual Studio MSVC environment (`vcvarsall.bat x64`) across `setup.py` and `SETUPfile.py`.
@@ -476,7 +478,7 @@
 
 ---
 
-## Version 1.3.0 (v1.5.3)
+### Version 1.3.0 [Stable] [1.5.3]
 
 - **Markdown Engine Optimization**:
   - Refactored `_apply_markdown` to run formatting steps iteratively instead of recursively, optimizing table parsing and math tag rendering to eliminate UI thread pauses.
@@ -493,7 +495,7 @@
 
 ---
 
-## Version 1.1.3 (1.5.2)
+### Version 1.1.3
 
 - **MTP Assistant Search**: Added `MTP` keyword matching to MTP assistant model auto-detection.
 - **Avatar Aspect Ratio Scaling**: Preserved image aspect ratios when resizing avatar icons (`_fit_image_aspect`).
@@ -508,14 +510,14 @@
 
 ---
 
-## Version 1.1.2 (1.5.1)
+### Version 1.1.2
 
 - **Avatar Visual States & Transitions**: Mapped pre-UI startup splash to `The_Wise_Listener`, generation error states to `sorry_serenity` (`apologetic`), prefill phase to `Meditating_Serenity`, response generation to `explain_wise`, and Level 7 persona to `transcendent_serenity`. Configured 3-second transition from `serenity_greeting` to persona idle images, added DMN Timeout setting (`min:sec` format in UI), and fixed model load `pending_task` timer override edge cases.
 - **Verified MTP works**: Loaded lvl 7 with gemma-4-26b-a4b and saw a response roughly 5t/s faster.
 
 ---
 
-## Version 1.1.1 (1.5.0)
+### Version 1.1.1
 
 - **GGUF KV Cache Benchmark**: Integrated live KV cache memory benchmark on model load (calculates FP16 baseline vs active quantized bit-width memory, tokens/sec speedup ratio, and MB saved).
 - **Deep Cook Vision Pipeline**: Wired image routing to `vision_multimodal` and added `vision_deep` pending task execution post-model swap.
@@ -526,7 +528,7 @@
 
 ---
 
-## Version 1.1.0 (1.4.0)
+### Version 1.1.0
 
 - **System Monitoring**: Fixed Shared VRAM to show `[usage / total GB]`. Added CPU Temp and CPU Power usage. Replaced disk usage with total VRAM use (Dedicated + Shared) and aligned items evenly. Added a setting to toggle between graph vs line for each system monitor item.
 - **Grounding & Relevancy**: Added filename imports for image and document grounding. Included time grounding in relevancy.
@@ -538,13 +540,13 @@
 - **Models**: Mapped MOE router sizes.
 - **Fixes**: Resolved licensing issues and added credits.
 
-## [1.0.0-alpha.1] - 2026-03-10
-### Added
+### Version 1.0.0-alpha.1 - 2026-03-10
+**Added**:
 - Initial 5-level prototype release for local AI inference.
 - GPU offload layer slider for CUDA-enabled hardware.
 - Standalone Tkinter chat user interface.
 
-## Legacy Release (v0.0.1 - ye_olde_serenity)
+### Legacy Release (v1.0.0 - ye_olde_serenity)
 
 - **Tkinter Control Panel**: Simple desktop GUI for local chatbot operation.
 - **Persona Levels**: Introduced five levels of response complexity and formatting.
