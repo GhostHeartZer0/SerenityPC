@@ -26,6 +26,12 @@
 
 ## Current & Historic Versions:
 
+### Version 1.5.5
+- **Standalone Packaging (PyInstaller)**:
+  - Created `SerenityPC.spec` targeting `onedir` distribution, no-console windowed mode, and automated package data/hidden import discovery (`chromadb`, `onnxruntime`, `pystray`, `pyttsx3`, `uvicorn`).
+  - Added `build_exe.bat` for one-click clean PyInstaller builds.
+  - Kept runtime `Models/` and `System/` folders modular for dynamic runtime access.
+
 ### Version 1.5.4
 - **Live Reasoning Stream to Chat Dropdown**:
   - Wired streaming reasoning tokens (`thought_stream`) directly to an interactive, live-updating collapsible dropdown in `chat_history` during inference.

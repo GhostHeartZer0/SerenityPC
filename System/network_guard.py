@@ -1,5 +1,5 @@
 # System/network_guard.py
-# Offline Mode Network Interceptor & Traffic Guard for Serenity AI.
+# Offline Mode Network Interceptor & Traffic Guard for SerenityPC.
 
 import socket
 import sys

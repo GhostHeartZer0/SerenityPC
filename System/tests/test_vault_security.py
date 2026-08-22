@@ -58,7 +58,7 @@ class TestVaultManager(unittest.TestCase):
 
     def test_encryption_and_tamper_detection(self):
         self.vault.set_password("StrongPassword123#")
-        sample_data = b"Confidential user conversation with Serenity AI"
+        sample_data = b"Confidential user conversation with SerenityPC"
 
         # Encrypt
         encrypted = self.vault.encrypt_data(sample_data)

@@ -1,5 +1,5 @@
 # System/tool_registry.py
-# Modular Tool Registry for Programmatic & Template Tool Calling in Serenity AI.
+# Modular Tool Registry for Programmatic & Template Tool Calling in SerenityPC.
 
 import os
 import json

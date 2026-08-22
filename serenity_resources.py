@@ -1,17 +1,39 @@
 # serenity_resources.py
-# Stores static configurations, themes, and persona data for Serenity AI.
+# Stores static configurations, themes, and persona data for SerenityPC.
 
 import os
+import sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+    # PyInstaller internal bundle directory (for bundled static assets)
+    BUNDLE_DIR = getattr(sys, '_MEIPASS', BASE_DIR)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    BUNDLE_DIR = BASE_DIR
+
 SYSTEM_DIR = os.path.join(BASE_DIR, "System")
-MEDIA_DIR = os.path.join(SYSTEM_DIR, "Media")
+# Try root/Media, then System/Media, then bundled Media
+_candidates = [
+    os.path.join(BASE_DIR, "Media"),
+    os.path.join(SYSTEM_DIR, "Media"),
+    os.path.join(BUNDLE_DIR, "Media"),
+    os.path.join(BUNDLE_DIR, "System", "Media"),
+]
+MEDIA_DIR = next((p for p in _candidates if os.path.isdir(p)), os.path.join(BASE_DIR, "Media"))
+
 LIVE_DIR = os.path.join(BASE_DIR, "Live")
 TOOLS_DIR = os.path.join(BASE_DIR, "Tools")
 DOCS_DIR = os.path.join(BASE_DIR, "Docs")
 
 # Core App Assets
-APP_ICON = os.path.join(SYSTEM_DIR, "serenity.ico")
+_icon_candidates = [
+    os.path.join(SYSTEM_DIR, "serenity.ico"),
+    os.path.join(BUNDLE_DIR, "System", "serenity.ico"),
+    os.path.join(BASE_DIR, "serenity.ico"),
+    os.path.join(BUNDLE_DIR, "serenity.ico"),
+]
+APP_ICON = next((p for p in _icon_candidates if os.path.exists(p)), os.path.join(SYSTEM_DIR, "serenity.ico"))
 LIVE_ICON = os.path.join(MEDIA_DIR, "transcendent_serenity_ws_hq2.png")
 
 # --- THEME PRESETS & TEXTURE STYLES ---

@@ -42,9 +42,9 @@ if TYPE_CHECKING:
 from serenity_resources import (THEME, THEMES, TEXTURE_STYLES, apply_theme_to_global, THERMO_COLORS, CHAT_BG_COLORS, CHAT_FG_COLORS, 
                               INPUT_FG_COLORS, GPU_LAYER_MAP, CONTEXT_SIZE_MAP, 
                               PERSONA_DISPLAY_INFO, PERSONA_IDLE_MAP, PERSONA_PROMPTS, 
-                               AVATAR_FILENAMES, ANIMATION_SEQUENCE, DEEP_COOK_PHASES, 
-                               DEEP_COOK_SYSTEM_PROMPTS, APP_ICON, TOOLS_DIR,
-                               TRI_ATTENTION_ENABLED, TRI_ATTENTION_BUDGET)
+                              AVATAR_FILENAMES, ANIMATION_SEQUENCE, DEEP_COOK_PHASES, 
+                              DEEP_COOK_SYSTEM_PROMPTS, APP_ICON, MEDIA_DIR, TOOLS_DIR,
+                              TRI_ATTENTION_ENABLED, TRI_ATTENTION_BUDGET)
 from System.serenity_utils import (WidgetLogger, FileAndWidgetLogger, LoadingScreen, 
                             log_uncaught_exception, HardwareProfile, MediaProcessor, SystemMonitor,
                             enable_fault_debugging, ThreadSafeDict, ThreadSafeList, ThinkingDisplay,
@@ -333,7 +333,7 @@ class ChatbotApp:
     def __init__(self, tk_root, loading_screen):
         print("ChatbotApp initializing...")
         self.root = tk_root
-        self.root.title("Serenity AI - Control Panel")
+        self.root.title("SerenityPC - Control Panel")
         self.loading_screen = loading_screen
         self.tool_registry = GemmaToolRegistry(self)
         self.dynamic_param_registry = DynamicParamRegistry()
@@ -365,8 +365,24 @@ class ChatbotApp:
             messagebox.showerror("Dependency Error", EARLY_IMPORT_ERROR_MSG)
             self.root.quit(); return
 
-        self.dirs = {d: os.path.join(self.script_dir, d) for d in ["Media", "History", "Models", "Logs", "System", "Users"]}
-        for d in self.dirs.values(): os.makedirs(d, exist_ok=True)
+        media_candidates = [
+            MEDIA_DIR,
+            os.path.join(self.script_dir, "System", "Media"),
+            os.path.join(self.script_dir, "Media")
+        ]
+        media_path = next((p for p in media_candidates if os.path.isdir(p)), os.path.join(self.script_dir, "System", "Media"))
+
+        self.dirs = {
+            "Media": media_path,
+            "History": os.path.join(self.script_dir, "History"),
+            "Models": os.path.join(self.script_dir, "Models"),
+            "Logs": os.path.join(self.script_dir, "Logs"),
+            "System": os.path.join(self.script_dir, "System"),
+            "Users": os.path.join(self.script_dir, "Users")
+        }
+        for k, d in self.dirs.items():
+            if k != "Media":
+                os.makedirs(d, exist_ok=True)
         
         self.turbo_vec = None
 
@@ -7030,14 +7046,22 @@ class ChatbotApp:
             if self.right_panel.winfo_width() > 1: w, h = self.right_panel.winfo_width(), self.right_panel.winfo_height() // 2
         except: pass
 
-        if not os.path.isdir(self.dirs['Media']):
-             messagebox.showwarning("Missing Assets", f"Media folder not found at:\n{self.dirs['Media']}\nAvatar will not display.")
-             return
+        media_dirs_to_check = [
+            self.dirs.get('Media', ''),
+            os.path.join(self.dirs.get('System', ''), 'Media'),
+            os.path.join(getattr(sys, '_MEIPASS', self.script_dir), 'Media'),
+            os.path.join(getattr(sys, '_MEIPASS', self.script_dir), 'System', 'Media'),
+        ]
 
         for state, fname in AVATAR_FILENAMES.items():
             try:
-                p = os.path.join(self.dirs["Media"], fname)
-                if os.path.exists(p):
+                p = None
+                for m_dir in media_dirs_to_check:
+                    cand = os.path.join(m_dir, fname)
+                    if os.path.exists(cand):
+                        p = cand
+                        break
+                if p and os.path.exists(p):
                     img = self._fit_image_aspect(Image.open(p), w, h)
                     self.avatar_states[state] = ImageTk.PhotoImage(img)
                     #print(f"Loaded: {fname}")
@@ -8123,6 +8147,8 @@ class ChatbotApp:
 sys.excepthook = log_uncaught_exception
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     try:
         enable_high_dpi_awareness()
         print("Starting SerenityPC...")

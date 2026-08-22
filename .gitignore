@@ -8,6 +8,8 @@ __pycache__/
 .tmp/
 Logs/
 History/
+build/
+dist/
 
 # Large binaries & model weights
 Models/*.gguf

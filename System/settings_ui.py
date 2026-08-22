@@ -1691,7 +1691,7 @@ def open_text_scaling_center(app, parent_win=None):
             prev_text.insert(tk.END, "You: ", ("user_lead",))
             prev_text.insert(tk.END, "Can you show me a sample code and status readout?\n\n", ("user",))
             prev_text.insert(tk.END, "Serenity: ", ("ai_lead",))
-            prev_text.insert(tk.END, "# Serenity AI System Ready\n", ("md_header_1",))
+            prev_text.insert(tk.END, "# SerenityPC System Ready\n", ("md_header_1",))
             prev_text.insert(tk.END, "Thinking: Scanning active context and evaluating optimal tensor layers...\n", ("md_thought",))
             prev_text.insert(tk.END, "Typography scaling is active across all widgets and markdown tags.\n", ("md_bold",))
             prev_text.insert(tk.END, "def run_inference():\n    return 'Optimal speed: 42.5 t/s'\n", ("md_code",))

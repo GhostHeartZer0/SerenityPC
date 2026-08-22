@@ -333,7 +333,7 @@ class ChatbotApp:
     def __init__(self, tk_root, loading_screen):
         print("ChatbotApp initializing...")
         self.root = tk_root
-        self.root.title("Serenity AI - Control Panel")
+        self.root.title("SerenityPC - Control Panel")
         self.loading_screen = loading_screen
         self.tool_registry = GemmaToolRegistry(self)
         self.dynamic_param_registry = DynamicParamRegistry()
