@@ -29,6 +29,9 @@
 ### Version 1.5.5
 - **Standalone Packaging (PyInstaller)**:
   - Created `SerenityPC.spec` targeting `onedir` distribution, no-console windowed mode, and automated package data/hidden import discovery (`chromadb`, `onnxruntime`, `pystray`, `pyttsx3`, `uvicorn`).
+  - Added missing `hiddenimports` in `SerenityPC.spec` (`psutil`, `pynvml`, `PIL`, `numpy`, `requests`, `cryptography`, `torch`, `sounddevice`, `pyttsx3`, `pystray`, `uvicorn`, `fastapi`).
+  - Installed `nvidia-ml-py` and added to `requirements.txt` for hardware telemetry.
+  - Removed `unittest` from `excludes` in `SerenityPC.spec` to prevent `torch_python` C++ abort / crash on startup.
   - Added `build_exe.bat` for one-click clean PyInstaller builds.
   - Kept runtime `Models/` and `System/` folders modular for dynamic runtime access.
 
