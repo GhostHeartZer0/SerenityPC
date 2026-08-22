@@ -551,6 +551,7 @@ class ChatbotApp:
         self.sub_chunk_size = 8 # Default to 8 frames per slice for 6GB stability
 
         self.log_update_buffer = ""
+        self.thought_stream_buffer = ""
         self.last_log_dispatch = 0
         self.log_update_limit = 100 # Max messages per queue tick to prevent UI freeze
 
@@ -559,7 +560,10 @@ class ChatbotApp:
             "load_success": lambda msg: self._handle_load_success(msg),
             "load_error": lambda msg: self._handle_load_error(msg),
             "stats_update": lambda msg: self._update_stats_display(msg.get("stats", {})) if self.stats_labels else None,
-            "log_update": lambda msg: self._buffer_log(msg.get("content", "")),
+            "log_update": lambda msg: self._buffer_thought_log(msg.get("content", "")),
+            "thought_log_update": lambda msg: self._buffer_thought_log(msg.get("content", "")),
+            "thought_stream": lambda msg: self._buffer_thought_stream(msg.get("content", "")),
+            "error_log_update": lambda msg: self._buffer_log(msg.get("content", "")),
             "tool_log_update": lambda msg: self._buffer_tool_log(msg.get("content", "")),
             "diag_log_update": lambda msg: self._buffer_diag_log(msg.get("content", "")),
             "thinking_status": lambda msg: self.thinking_display.update_status(msg.get("content", "Thinking...")) if self.thinking_display and self.thinking_display.winfo_exists() else None,
@@ -672,7 +676,7 @@ class ChatbotApp:
                 self.config.get("texture_style", "default"),
                 self.config.get("dark_mode", False),
                 getattr(self, "active_persona_level", 3),
-                (self.model is not None)
+                (getattr(self, 'model', None) is not None)
             )
             if hasattr(self, "apply_current_theme"):
                 self.apply_current_theme()
@@ -680,6 +684,9 @@ class ChatbotApp:
                 self.apply_text_scale(self.config["text_scale"], persist=False)
             if hasattr(self, "apply_font_family") and "ui_font" in self.config:
                 self.apply_font_family(self.config.get("ui_font", "Segoe UI"), self.config.get("mono_font", "Consolas"), persist=False)
+            saved_sash = self.config.get('sash_pos', -1)
+            if isinstance(saved_sash, (int, float)) and saved_sash > 50:
+                self.root.after(100, lambda: self._apply_sash_pos(int(saved_sash)))
         except Exception as e:
             print(f"[USER] Failed to apply user theme settings: {e}")
 
@@ -739,6 +746,16 @@ class ChatbotApp:
         set_apex_affinity()
         HardwareProfile.set_priority("above_normal")
         self.root.update_idletasks()
+
+        # Apply persisted font family, text scale, and sash position
+        if hasattr(self, "apply_font_family") and "ui_font" in self.config:
+            self.apply_font_family(self.config.get("ui_font", "Segoe UI"), self.config.get("mono_font", "Consolas"), persist=False)
+        if hasattr(self, "apply_text_scale") and "text_scale" in self.config:
+            self.apply_text_scale(self.config.get("text_scale", 100), persist=False)
+        
+        saved_sash = self.config.get('sash_pos', -1)
+        if isinstance(saved_sash, (int, float)) and saved_sash > 50:
+            self.root.after(350, lambda: self._apply_sash_pos(int(saved_sash)))
         
         # Start UI Watchdog to detect freezes
         #self.ui_watchdog = UIWatchdog(self.root)
@@ -1347,6 +1364,7 @@ class ChatbotApp:
         
         # Bind sash movement & release events for automatic mid resize persistence
         self.paned.bind("<ButtonRelease-1>", self._on_sash_released, add="+")
+        self.root.bind("<ButtonRelease-1>", self._on_sash_released, add="+")
 
         # Restore Sash Position
         saved_sash = self.config.get('sash_pos', -1)
@@ -1358,33 +1376,43 @@ class ChatbotApp:
             
         self.root.after(250, lambda *args: self._position_canvas_elements())
 
+    def _get_current_sash_pos(self):
+        try:
+            if hasattr(self, 'paned') and self.paned:
+                coord = self.paned.sash_coord(0)
+                if coord and coord[0] > 50:
+                    return coord[0]
+        except Exception:
+            pass
+        return self.config.get('sash_pos', -1) if hasattr(self, 'config') and self.config else -1
+
     def _apply_sash_pos(self, pos):
         try:
             if hasattr(self, 'paned') and self.paned:
                 max_w = self.root.winfo_width()
                 target_x = max(100, min(max_w - 100, pos)) if max_w > 200 else pos
                 self.paned.sash_place(0, target_x, 0)
+                if hasattr(self, 'config') and self.config is not None:
+                    self.config['sash_pos'] = target_x
                 self._position_canvas_elements()
         except Exception:
             pass
 
     def _on_sash_released(self, event=None):
         try:
-            if hasattr(self, 'paned') and self.paned:
-                coord = self.paned.sash_coord(0)
-                if coord and coord[0] > 50:
-                    self.config['sash_pos'] = coord[0]
-                    self.save_config()
-                    self._position_canvas_elements()
+            pos = self._get_current_sash_pos()
+            if pos and pos > 50:
+                self.config['sash_pos'] = pos
+                self.save_config()
+                self._position_canvas_elements()
         except Exception:
             pass
 
     def on_closing(self):
         try:
-            if hasattr(self, 'paned') and self.paned:
-                coord = self.paned.sash_coord(0)
-                if coord and coord[0] > 50:
-                    self.config['sash_pos'] = coord[0]
+            pos = self._get_current_sash_pos()
+            if pos and pos > 50:
+                self.config['sash_pos'] = pos
             self.save_config()
         except Exception:
             pass
@@ -3438,12 +3466,20 @@ class ChatbotApp:
             
             is_kv_quantized = (t_k != getattr(lcpp, "GGML_TYPE_F16", 1)) or (t_v != getattr(lcpp, "GGML_TYPE_F16", 1))
             is_gemma_family = "gemma" in (self.model_path.lower() if self.model_path else "")
+            is_muse_model = any(k in (self.model_path.lower() if self.model_path else "") for k in ["muse", "glimmer", "onyx", "atem"])
             
             # Flash Attention Logic:
+            # - Muse-Glimmer SWA/NoPE hybrid attention requires flash_attn=False on f16 KV to prevent logit corruption.
             # - Quantized KV cache (q8_0, q4_0) strictly requires Flash Attention in llama.cpp to initialize context.
-            if is_kv_quantized:
+            if is_muse_model and not is_kv_quantized:
+                print("[ENGINE] Muse-Glimmer hybrid SWA detected. Disabling Flash Attention for attention logit stability.")
+                use_flash = False
+            elif is_kv_quantized:
                 print("[SYSTEM Note] Quantized KV cache detected. Enforcing Flash Attention ON to ensure context initialization.")
                 use_flash = True
+
+            extra["flash_attn"] = use_flash
+            print(f"[ENGINE] Final Attention Configuration: Flash Attention = {use_flash} | KV: K={k_fmt}, V={v_fmt}")
 
             
             hao_preset = self.config.get("hao_preset", "exps=CPU")
@@ -3807,6 +3843,7 @@ class ChatbotApp:
             is_nemotron = "nemotron" in model_name_lower
             is_qwen = "qwen" in model_name_lower
             is_deepseek = any(k in model_name_lower for k in ["deepseek", "r1", "qwq"])
+            is_muse = any(k in model_name_lower for k in ["muse", "glimmer", "onyx", "atem"])
 
             if not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
                 if is_gemma:
@@ -3815,6 +3852,8 @@ class ChatbotApp:
                     sys_clean += "\n[REASONING]: Provide clear, direct, and rigorous answers without conversational meta-commentary."
                 elif is_qwen or is_deepseek:
                     sys_clean += "\n[REASONING]: Analyze the query thoroughly and provide a direct, precise answer."
+                elif is_muse:
+                    pass # Native ATEM Jinja template handles reasoning_strength
                 else:
                     sys_clean += "\n[REASONING]: Think step by step before answering and provide a clear, accurate response."
             elif self.active_persona_level == 2:
@@ -3841,6 +3880,9 @@ class ChatbotApp:
                     content = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', content, flags=re.IGNORECASE)
                     content = re.sub(r'<\|think\|>.*?(?:<\/\|think\|>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
                     content = re.sub(r'<thought(?:>|\b).*?(?:<\/thought>|$)', '', content, flags=re.IGNORECASE | re.DOTALL)
+                    content = re.sub(r'(?s)(?:<\|start\|>assistant\s+)?to=self<\|message\|>.*?(?:<\|eom\|>|$)', '', content, flags=re.IGNORECASE)
+                    content = re.sub(r'(?s)<\|start\|>assistant\s+to=user(?:<\|message\|>)?', '', content, flags=re.IGNORECASE)
+                    content = re.sub(r'<\|eot\|>|<\|end_of_text\|>', '', content, flags=re.IGNORECASE)
                     content = content.strip()
                 cleaned_msgs.append({"role": role, "content": content})
             processed_msgs = cleaned_msgs
@@ -3863,9 +3905,25 @@ class ChatbotApp:
             stream_lead_buffer = ""
             streamed_draft_to_ui = False
             streamed_answer_chars = 0
-            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\])'
-            openers = ["<think>", "<|channel>thought", "<thought>", "<|think|>", "<|im_start|>thought", "[draft]"]
-            closers = ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "<|channel>text", "<|channel>assistant"]
+            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|<\|eom\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
+            openers_exact = (
+                "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
+                "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self<|message|>",
+                "<|start|>assistant to=self", "to=self"
+            )
+            closers = ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "<|channel>text", "<|channel>assistant", "<|eom|>", "<|start|>assistant to=user", "to=user<|message|>"]
+
+            def _is_thought_opening(text):
+                if not text: return False
+                t_lower = text.lower().strip()
+                t_raw_lower = text.lower().lstrip()
+                if any(op in t_lower for op in openers_exact):
+                    return True
+                if t_raw_lower.startswith("thought\n") or t_raw_lower.startswith("thought\r\n") or t_raw_lower.startswith("thought ") or t_raw_lower.startswith("thought:"):
+                    return True
+                if t_raw_lower.startswith("thought") and len(t_raw_lower) <= 12 and ("\n" in text or len(text.strip()) == len("thought")):
+                    return True
+                return False
 
             t_gen_start = time.time()
             ttft_recorded = False
@@ -3896,15 +3954,15 @@ class ChatbotApp:
                         })
                     
                     if not thought_detected:
-                        if any(tag in lower_resp for tag in openers):
+                        if _is_thought_opening(full_resp):
                             thought_detected = True
                             in_thought_channel = True
                             if streamed_draft_to_ui:
                                 self.process_queue.put({"status": "streaming_replace", "content": ""})
                                 streamed_draft_to_ui = False
                             stream_lead_buffer = ""
-                            self.process_queue.put({"status": "log_update", "content": txt})
-                        elif full_resp.strip().startswith("<") and len(full_resp.strip()) < 30:
+                            self.process_queue.put({"status": "thought_stream", "content": txt})
+                        elif (full_resp.strip().startswith("<") or full_resp.strip().startswith("to=") or full_resp.strip().lower().startswith("thought") or full_resp.strip().startswith("[")) and len(full_resp.strip()) < 40:
                             stream_lead_buffer += txt
                         else:
                             if stream_lead_buffer:
@@ -3915,8 +3973,8 @@ class ChatbotApp:
                             streamed_draft_to_ui = True
                     else:
                         if in_thought_channel:
-                            self.process_queue.put({"status": "log_update", "content": txt})
-                            if any(c in lower_resp for c in closers):
+                            self.process_queue.put({"status": "thought_stream", "content": txt})
+                            if any(c in lower_resp for c in closers) or re.search(closers_regex, full_resp, flags=re.IGNORECASE):
                                 in_thought_channel = False
                                 parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
                                 if len(parts) > 1 and parts[-1]:
@@ -3971,17 +4029,21 @@ class ChatbotApp:
                 except Exception: pass
 
             # Advanced Scout & Split
-            closers = [
+            closers_patterns = [
                 r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
                 r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+                r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
                 r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
             ]
             all_splits = []
-            for tag_pattern in closers:
+            for tag_pattern in closers_patterns:
                 for m in re.finditer(tag_pattern, final_answer, re.IGNORECASE):
                     all_splits.append(m.end())
             
-            if not all_splits and any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<|im_start|>thought", "<|im_start>thought", "[draft]"]):
+            if not all_splits and (
+                any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self", "<|start|>assistant to=self"])
+                or _is_thought_opening(final_answer)
+            ):
                 all_splits.append(len(final_answer))
             
             all_splits.sort()
@@ -3989,7 +4051,7 @@ class ChatbotApp:
             if all_splits:
                 for split in all_splits:
                     remaining = final_answer[split:].strip()
-                    if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought', remaining, re.IGNORECASE):
+                    if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self', remaining, re.IGNORECASE):
                         continue
                     best_split = split
                     break
@@ -4000,19 +4062,30 @@ class ChatbotApp:
                 think_log = final_answer[:best_split].strip()
                 final_answer = final_answer[best_split:].strip()
             else:
-                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<\|think\|>|<\|im_start\|?>thought', final_answer, re.IGNORECASE))
-                if has_thought_openers:
+                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+', final_answer, re.IGNORECASE))
+                if has_thought_openers or _is_thought_opening(final_answer):
                     think_log = final_answer
                     final_answer = ""
-                    if len(think_log) > 200:
-                        self.process_queue.put({"status": "thinking_status", "content": "[PROCESS] Synthesizing Final Answer..."})
-                        synthesized = self._perform_final_synthesis(user_message, think_log)
-                        if synthesized:
-                            final_answer = synthesized.strip()
                 else:
                     # Model produced direct response without thought tags: keep as final answer
                     think_log = ""
                     final_answer = full_resp.strip()
+
+            # Strip wrapper tags and residual tool markers
+            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>'
+            think_log = re.sub(tag_clean_pattern, '', think_log).strip()
+            think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
+            final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+            final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
+
+            # Synthesis fallback: if thoughts exist but model did not output final answer
+            if think_log and not final_answer:
+                self.process_queue.put({"status": "thinking_status", "content": "[PROCESS] Synthesizing Final Answer..."})
+                synthesized = self._perform_final_synthesis(user_message, think_log)
+                if synthesized:
+                    final_answer = synthesized.strip()
+                    final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+                    final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
 
             # Tool Execution Check in Standard Generation
             if tools and self.active_persona_level >= 2:
@@ -4022,14 +4095,11 @@ class ChatbotApp:
                 if has_py_tool or has_tag_tool or has_json_tool:
                     self.process_queue.put({"status": "thinking_status", "content": "Executing tool..."})
                     final_answer = self._run_tool_loop(final_answer, msgs, params)
+                    final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
 
-            # Strip wrapper tags and residual tool markers
-            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>'
-            think_log = re.sub(tag_clean_pattern, '', think_log).strip()
-            final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
-
-            if not final_answer and full_resp:
+            if not final_answer and full_resp and not think_log:
                 final_answer = re.sub(tag_clean_pattern, '', full_resp).strip()
+                final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
             
             self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
             print(f"[INFERENCE] Generation complete. Final response length: {len(final_answer)} chars.")
@@ -4437,6 +4507,9 @@ class ChatbotApp:
         """Ensures all buffers are flushed before calling _finalize_message."""
         print("[SYSTEM] Generation session finished. Finalizing buffers...")
         self._flush_log_buffer(force=True)
+        if self.thought_stream_buffer:
+            self._update_thought_dropdown(self.thought_stream_buffer)
+            self.thought_stream_buffer = ""
         if self.text_buffer:
             self._update_ai_message(self.text_buffer)
             self.text_buffer = ""
@@ -4448,7 +4521,103 @@ class ChatbotApp:
         
         self._finalize_message(user_msg, think_log, final_answer, is_error)
 
+    def _buffer_thought_stream(self, content):
+        """Buffers live reasoning/thought tokens into the thought stream."""
+        if not content: return
+        self.thought_stream_buffer += content
+
+    def _ensure_thought_dropdown(self):
+        """Creates the thought dropdown in the chat history if not already initialized."""
+        hist = self.chat_history
+        if hist is None: return
+        
+        if not self.state.get("response_started", False):
+            self.state["response_start_idx"] = hist.index(tk.END + "-1c")
+            self._append_to_chat(f"\n\n{self._get_persona_label()}: ", "ai_lead")
+            self.state["response_started"] = True
+            think = self.thinking_display
+            if think and think.winfo_exists():
+                think.set_phase("reasoning")
+        
+        if not self.state.get("current_think_tag"):
+            think_tag = f"think_block_{int(time.time() * 1000)}"
+            self.state["current_think_tag"] = think_tag
+            self.state["thought_streamed"] = True
+            
+            def toggle_thoughts(tag=think_tag, b=None):
+                is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
+                if is_elided:
+                    hist.tag_config(tag, elide=False)
+                    if b: b.config(text="[-] Hide Thinking")
+                else:
+                    hist.tag_config(tag, elide=True)
+                    if b: b.config(text="[+] View Thinking Process")
+            
+            btn_bg = THEME.get("button_bg_color", "#24201c")
+            accent = THEME.get("electric_blue", "#00bfff")
+            btn_active = THEME.get("button_active_color", "#382e24")
+            accent_hl = THEME.get("accent_highlight", "#ff8800")
+            
+            btn = tk.Button(hist, text="[-] Hide Thinking", bg=btn_bg, fg=accent, 
+                            activebackground=btn_active, activeforeground=accent_hl, 
+                            relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
+            btn.config(command=lambda t=think_tag, b=btn: toggle_thoughts(t, b))
+            if not hasattr(self, 'thought_dropdown_buttons'):
+                self.thought_dropdown_buttons = []
+            self.thought_dropdown_buttons.append(btn)
+            self.state["current_think_btn"] = btn
+            
+            hist.config(state='normal')
+            hist.insert(tk.END, "\n", ("ai",))
+            hist.window_create(tk.END, window=btn)
+            hist.insert(tk.END, "\n", ("ai",))
+            hist.tag_config(think_tag, elide=False, lmargin1=20, lmargin2=20)
+            hist.config(state='disabled')
+
+    def _update_thought_dropdown(self, chunk):
+        """Inserts streamed thought chunk into the chat dropdown."""
+        hist = self.chat_history
+        if hist is None or not chunk: return
+        self._ensure_thought_dropdown()
+        tag = self.state.get("current_think_tag")
+        if not tag: return
+        
+        clean_chunk = re.sub(
+            r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>',
+            '',
+            chunk
+        )
+        if not self.state.get("thought_stream_lead_cleaned"):
+            clean_lower = clean_chunk.lower()
+            if clean_lower.startswith("thought\r\n") or clean_lower.startswith("thought\n"):
+                clean_chunk = clean_chunk[9:] if clean_lower.startswith("thought\r\n") else clean_chunk[8:]
+                self.state["thought_stream_lead_cleaned"] = True
+            elif clean_lower.startswith("thought:") or clean_lower.startswith("thought "):
+                clean_chunk = clean_chunk[8:]
+                self.state["thought_stream_lead_cleaned"] = True
+            elif clean_lower.strip() == "thought":
+                clean_chunk = ""
+            elif clean_chunk.strip():
+                clean_chunk = re.sub(r'(?i)^thought\s*', '', clean_chunk)
+                self.state["thought_stream_lead_cleaned"] = True
+
+        if not clean_chunk: return
+        
+        is_at_bottom = hist.yview()[1] >= 0.98
+        hist.config(state='normal')
+        hist.insert(tk.END, clean_chunk, (tag, "md_thought"))
+        hist.config(state='disabled')
+        if is_at_bottom:
+            hist.yview_moveto(1.0)
+
+    def _buffer_thought_log(self, content):
+        """Buffers live reasoning/thought tokens and flushes them to thought_log."""
+        if not content: return
+        self.log_update_buffer += content
+        self._flush_log_buffer()
+
     def _buffer_tool_log(self, content):
+        if not content: return
         if self.tool_log and self.tool_log.winfo_exists():
             try:
                 self.tool_log.config(state='normal')
@@ -4459,6 +4628,7 @@ class ChatbotApp:
             except: pass
 
     def _buffer_diag_log(self, content):
+        if not content: return
         if self.diag_log and self.diag_log.winfo_exists():
             try:
                 self.diag_log.config(state='normal')
@@ -4470,6 +4640,7 @@ class ChatbotApp:
 
     def _buffer_log(self, content):
         """Update the System/Error log (⚠)."""
+        if not content: return
         if self.error_log and self.error_log.winfo_exists():
             try:
                 self.error_log.config(state='normal')
@@ -4478,12 +4649,6 @@ class ChatbotApp:
                     self.error_log.see(tk.END)
                 self.error_log.config(state='disabled')
             except: pass
-        
-        # Also mirror to terminal
-        try:
-            sys.__stdout__.write(content + "\n")
-            sys.__stdout__.flush()
-        except: pass
 
     def _flush_log_buffer(self, force=False):
         now = time.time()
@@ -4532,6 +4697,10 @@ class ChatbotApp:
 
             # 2. Batch Log/Text Updates (The Performance Secret)
             self._flush_log_buffer()
+
+            if self.thought_stream_buffer:
+                self._update_thought_dropdown(self.thought_stream_buffer)
+                self.thought_stream_buffer = ""
 
             should_update = False
             mode = self.state.get("streaming_mode", "Buffered")
@@ -5227,9 +5396,10 @@ class ChatbotApp:
             # 2. SEMI-STRUCTURED DRAFTS
             r'(?s)\[DRAFT\]\n?(.*?)(?:\[\/DRAFT\]|$)',
             
-            # 3. GENERIC TAGS (Fallback)
+            # 3. GENERIC & ATEM TAGS (Fallback)
+            r'(?s)<\|start\|>assistant to=self<\|message\|>(.*?)(?:<\|eom\|>|$)',
+            r'(?s)<\|channel>thought\n?(.*?)(?:<channel\|?>|<\/\|?channel\|?>|<\|channel>|(?=<start_of_turn>)|$)',
             r'(?s)<think>\n?(.*?)(?:<\/think>|$)',
-            r'(?s)(?:<\|channel>)+thought\n?(.*?)(?:<channel\|?>|<\/\|?channel\|?>|<\|channel>|(?=<start_of_turn>)|$)',
             r'(?s)<\|think\|>\n?(.*?)(?:<\/\|think\|>|$)',
             r'(?s)<thought>\n?(.*?)(?:<\/thought>|$)',
             r'(?s)<\|im_start|>thought\n?(.*?)(?:<\|im_end\|>|$)',
@@ -5932,7 +6102,11 @@ class ChatbotApp:
         if not raw_text: return ""
         
         # Split raw response at the end of the thinking tag and discard the thought prefix
-        closers = [r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<channel\|>', r'<\/channel\|>', r'<\|channel>text', r'<\|channel>assistant', r'\[\/DRAFT\]']
+        closers = [
+            r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<channel\|>', r'<\/channel\|>',
+            r'<\|channel>text', r'<\|channel>assistant', r'\[\/DRAFT\]',
+            r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>'
+        ]
         best_split = -1
         for pattern in closers:
             match = re.search(pattern, raw_text, re.IGNORECASE)
@@ -5946,7 +6120,9 @@ class ChatbotApp:
             
         tags = [
             "<think>", "</think>", "<thought>", "</thought>", "<|think|>", "</|think|>", "<|channel>thought", "<channel|>", "Final Response:", "Final Answer:",
-            "<|channel>text", "<|channel>assistant", "</channel|>", "###", "<|im_start|>", "<|im_end|>", "<|endoftext|>"
+            "<|channel>text", "<|channel>assistant", "</channel|>", "###", "<|im_start|>", "<|im_end|>", "<|endoftext|>",
+            "<|start|>assistant to=user<|message|>", "<|start|>assistant to=self<|message|>", "<|start|>assistant to=user", "<|start|>assistant to=self",
+            "to=self<|message|>", "to=user<|message|>", "<|eom|>", "<|eot|>", "<|end_of_text|>"
         ]
         for tag in tags:
             cleaned = re.sub(re.escape(tag), '', cleaned, flags=re.IGNORECASE)
@@ -6152,7 +6328,13 @@ class ChatbotApp:
                 except: pass
                 return
 
-            if think_log and not self.state.get("deep_cook"):
+            if self.state.get("thought_streamed") and not self.state.get("deep_cook"):
+                hist.config(state='normal')
+                curr_text = hist.get(start_idx, tk.END).strip()
+                if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                    self._append_to_chat(final_answer, "ai")
+                hist.config(state='disabled')
+            elif think_log and not self.state.get("deep_cook"):
                 # Atomic reset to prepend the expandable thought process block
                 hist.config(state='normal')
                 try:
@@ -6187,7 +6369,24 @@ class ChatbotApp:
         render_start = hist.index(tk.END + "-1c")
 
         # Suppress redundant generic thinking block if Deep Cook structure is already present
-        if think_log and not self.state.get("deep_cook"):
+        if self.state.get("thought_streamed") and not self.state.get("deep_cook"):
+            think_tag = self.state.get("current_think_tag")
+            btn = self.state.get("current_think_btn")
+            render_start = hist.index(tk.END + "-1c")
+            if think_tag:
+                hist.tag_config(think_tag, elide=True)
+                if btn and btn.winfo_exists():
+                    btn.config(text="[+] View Thinking Process")
+                ranges = hist.tag_ranges(think_tag)
+                if ranges and len(ranges) >= 2:
+                    if render_mode > 0:
+                        self._apply_markdown(ranges[0], ranges[-1], (think_tag, "md_thought"), is_thought=True)
+                    render_start = ranges[-1]
+                else:
+                    render_start = start_idx if start_idx else "1.0"
+            else:
+                render_start = start_idx if start_idx else "1.0"
+        elif think_log and not self.state.get("deep_cook"):
             think_tag = f"think_block_{int(time.time() * 1000)}"
             def toggle_thoughts(tag=think_tag, b=None):
                 is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
@@ -6288,6 +6487,10 @@ class ChatbotApp:
         except: pass
         
         self.state["response_started"] = False
+        self.state["thought_streamed"] = False
+        self.state["current_think_tag"] = None
+        self.state["thought_stream_lead_cleaned"] = False
+        self.thought_stream_buffer = ""
         self.root.after(1500, lambda *args: self.set_avatar_state("listening"))
 
     def _save_rlhf_log(self, prompt, answer, rating):
@@ -7409,7 +7612,7 @@ class ChatbotApp:
             'presence_penalty_config': self.presence_penalty_config,
             'stop_strings_config': self.stop_strings_config, 'n_batch_config': self.n_batch_config,
             'top_k_config': self.top_k_config,
-            'sash_pos': self.paned.sash_coord(0)[0] if hasattr(self, 'paned') else -1,
+            'sash_pos': self._get_current_sash_pos() if hasattr(self, '_get_current_sash_pos') else self.config.get('sash_pos', -1),
             'deep_thought_behavior': self.state["deep_cook_behavior"],
             'virtual_vram': self.state["virtual_vram"],
             'active_persona_level': self.active_persona_level,
@@ -7464,16 +7667,30 @@ class ChatbotApp:
         """Builds the parameter dictionary for llama-cpp-python inference."""
         print(f"[INFERENCE] Retrieving parameters for tier: {self.current_model_tier}")
         
-        # Sampler Refresh: Include mandatory stop sequences to prevent run-on outputs
-        stops = [s.strip() for s in self.stop_strings_config.get(self.current_model_tier, "").split(",") if s.strip()]
-        if "<turn|>" not in stops: stops.append("<turn|>")
-        if "<|end_of_turn|>" not in stops: stops.append("<|end_of_turn|>") # Fallback for old models
-        if "<|/>" not in stops: stops.append("<|/>")
-        if "<turn/>" not in stops: stops.append("<turn/>")
-        if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
+        # Automated Architecture-Aware Stop Sequences
+        stops = []
+        raw_cfg_stops = self.stop_strings_config.get(self.current_model_tier, "")
+        if raw_cfg_stops:
+            stops = [s.strip() for s in raw_cfg_stops.split(",") if s.strip()]
+
+        m_lower = (self.model_path or "").lower()
+        if "muse" in m_lower and "glimmer" in m_lower:
+            # Muse Glimmer / Onyx ATEM: Stop on <|end_of_text|> and <|eot|>; NEVER on <|eom|>
             for tok in ["<|end_of_text|>", "<|eot|>"]:
                 if tok not in stops: stops.append(tok)
             stops = [s for s in stops if s != "<|eom|>"]
+        elif "gemma" in m_lower:
+            # Gemma 2 / 4: Official turn closers
+            for tok in ["<turn|>", "<|turn>", "</turn>", "<eos>", "<|end_of_turn|>"]:
+                if tok not in stops: stops.append(tok)
+        elif any(k in m_lower for k in ["nemotron", "qwen", "deepseek"]):
+            # ChatML & Nemotron turn delimiters
+            for tok in ["<|im_end|>", "<|end_of_text|>", "<|endoftext|>", "<extra_id_1>"]:
+                if tok not in stops: stops.append(tok)
+        else:
+            # Standard fallback delimiters
+            for tok in ["<|eot_id|>", "<|end_of_text|>", "<|turn|>", "</s>", "<eos>"]:
+                if tok not in stops: stops.append(tok)
         
         # Baseline defaults
         inf_params = {
@@ -7510,6 +7727,10 @@ class ChatbotApp:
                 del override_params["stop"]
                 
             inf_params.update(override_params)
+
+        m_lower = (self.model_path or "").lower()
+        if "muse" in m_lower and "glimmer" in m_lower:
+            inf_params["stop"] = [s for s in inf_params.get("stop", []) if s != "<|eom|>"]
             
         # --- Sampler Hygiene: Filter unsupported params for llama-cpp-python stability ---
         supported_keys = {

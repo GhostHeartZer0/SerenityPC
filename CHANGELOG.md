@@ -22,9 +22,40 @@
 
 ---
 ### Version 1.6.0
-- Muse Glimmer support
+- **TBD**
 
 ## Current & Historic Versions:
+
+### Version 1.5.4
+- **Live Reasoning Stream to Chat Dropdown**:
+  - Wired streaming reasoning tokens (`thought_stream`) directly to an interactive, live-updating collapsible dropdown in `chat_history` during inference.
+  - Implemented `_ensure_thought_dropdown()` and `_update_thought_dropdown()` with tag stripping, real-time expanding/collapsing, and automatic markdown formatting upon completion.
+  - Mirrored live reasoning tokens to background `thought_log` buffer without blocking UI rendering.
+- **CUDA 12.6 Toolkit Prioritization & DLL Link Alignment**:
+  - Updated `HardwareProfile.initialize_gpu_acceleration()` in `System/serenity_utils.py` to prioritize CUDA `v12*` (12.6) over higher non-binary matching versions (`v13.3`), aligning DLL search paths with compiled `llama-cpp-python` CUDA 12 binaries (`cudart64_12.dll`, `cublas64_12.dll`).
+- **Thought Stream Demuxing & Terminal Leakage Isolation**:
+  - Fixed terminal stdout leak where streaming reasoning tokens were written to stdout with newline per token via `_buffer_log`; routed live reasoning chunks directly to `self.thought_log` via `_buffer_thought_log` without spamming the terminal console.
+  - Hardened streaming opener detection and post-generation scout & split logic in `main.py` to recognize bare `thought\n` / `thought\r\n` prefixes (occurring when Gemma 4 chat templates omit `<|channel>`), ensuring reasoning tokens are held in lead buffer and routed exclusively to `ThinkingDisplay` / collapsible thought buckets.
+  - Added test coverage in `System/tests/test_thought_isolation.py` (`test_bare_thought_channel_split`, `test_bare_thought_channel_only_thoughts`).
+- **Locked Profile Swap Verification in Settings**:
+  - Added password entry authentication barrier in `System/settings_ui.py` (`_verify_vault_unlock`): switching to any encrypted private profile in Settings now prompts for Master Password before switching workspaces.
+- **Cecilia & Level 7 Dark Emerald / Neon Green Theme Overhaul**:
+  - Updated Level 7 dynamic color `THERMO_COLORS[7]` to dark emerald (`#005a36`) in `serenity_resources.py`.
+  - Updated Level 7 chat background (`#021a12`), foreground (`#00ff66`), and input box text (`#00ff66`).
+  - Added dedicated `"cecilia"` theme preset and updated dynamic `"persona"` theme to adopt dark emerald (`#02140e`/`#062218`/`#005a36`) and neon green (`#00ff66`) highlights whenever Cecilia is active.
+- **Mid Split Sash & Font Scalings Persistence**:
+  - Resolved sash position loss by implementing safe coordinate extraction helper `_get_current_sash_pos()` in `main.py` and capturing sash release across `self.paned` and `self.root`.
+  - Added explicit restoration of persisted text scaling factor, UI/mono font families, and sash coordinates during `final_initial_setup()` and profile switching in `switch_user()`.
+- **Onyx / ATEM Thought Channel Streaming & Demuxing**:
+  - Integrated native ATEM delimiters (`to=self<|message|>`, `<|start|>assistant to=self`, `<|eom|>`, `<|start|>assistant to=user<|message|>`) into `_run_generation_worker`, scout/split logic, and `_sanitize_synthesis_output` in `main.py`.
+  - Routed Muse-Glimmer reasoning traces cleanly into `ThinkingDisplay` while ensuring user-facing output buffers receive only clean response text.
+  - Exempted Muse/ATEM models from manual system prompt reasoning injection, preserving native Jinja template variables (`reasoning_strength: high`).
+- **Muse-Glimmer SWA Flash Attention Gating**:
+  - Automatically disabled Flash Attention (`flash_attn = False`) for Muse-Glimmer models when using unquantized (`f16`/`fp16`) KV cache in `main.py` to prevent CUDA kernel sliding window masking conflicts.
+- **Automated Stop Sequence Resolution & Settings Cleanup**:
+  - Automated stop tag handling dynamically in `_get_inference_params` (`main.py`) by mapping stop tokens to loaded model architectures (Gemma 2/4 turn closers, Muse Glimmer ATEM `<|end_of_text|>` / `<|eot|>`, Nemotron/Qwen/DeepSeek ChatML delimiters) with protection preventing reasoning tokens (`<|eom|>`) from prematurely halting generation.
+  - Removed manual `"Stop Tokens (comma sep):"` input field from the Settings UI template editor window (`System/settings_ui.py`).
+  - Verified multi-format thought channel demuxing and dropdown isolation across Gemma 4 `<|channel>thought`, Muse Glimmer `<|start|>assistant to=self`, DeepSeek `<think>`, and Deep Cook reasoning passes.
 
 ### Version 1.5.3
 
@@ -495,7 +526,7 @@
 
 ---
 
-### Version 1.1.3
+### Version 1.2.2
 
 - **MTP Assistant Search**: Added `MTP` keyword matching to MTP assistant model auto-detection.
 - **Avatar Aspect Ratio Scaling**: Preserved image aspect ratios when resizing avatar icons (`_fit_image_aspect`).
@@ -510,14 +541,14 @@
 
 ---
 
-### Version 1.1.2
+### Version 1.2.1
 
 - **Avatar Visual States & Transitions**: Mapped pre-UI startup splash to `The_Wise_Listener`, generation error states to `sorry_serenity` (`apologetic`), prefill phase to `Meditating_Serenity`, response generation to `explain_wise`, and Level 7 persona to `transcendent_serenity`. Configured 3-second transition from `serenity_greeting` to persona idle images, added DMN Timeout setting (`min:sec` format in UI), and fixed model load `pending_task` timer override edge cases.
 - **Verified MTP works**: Loaded lvl 7 with gemma-4-26b-a4b and saw a response roughly 5t/s faster.
 
 ---
 
-### Version 1.1.1
+### Version 1.2.0
 
 - **GGUF KV Cache Benchmark**: Integrated live KV cache memory benchmark on model load (calculates FP16 baseline vs active quantized bit-width memory, tokens/sec speedup ratio, and MB saved).
 - **Deep Cook Vision Pipeline**: Wired image routing to `vision_multimodal` and added `vision_deep` pending task execution post-model swap.
@@ -542,7 +573,7 @@
 
 ### Version 1.0.0-alpha.1 - 2026-03-10
 **Added**:
-- Initial 5-level prototype release for local AI inference.
+- Initial 5-level prototype app for local AI inference.
 - GPU offload layer slider for CUDA-enabled hardware.
 - Standalone Tkinter chat user interface.
 

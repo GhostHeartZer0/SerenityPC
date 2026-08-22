@@ -2,7 +2,7 @@ import os
 import json
 import sys
 import tkinter as tk
-from tkinter import messagebox, filedialog, ttk
+from tkinter import messagebox, filedialog, ttk, simpledialog
 from serenity_resources import THEME
 try:
     from System.serenity_utils import ToolTip, TutorialOverlay
@@ -387,15 +387,8 @@ def open_settings_window(app):
                     e.insert(0, str(current.get(key, default)))
                     e.grid(row=r, column=c+1, padx=(0,10), pady=2)
                     fields[key] = e
-                tk.Label(t_win, text="Stop Tokens (comma sep):", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=10)
-                stop_ent = tk.Entry(t_win, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
-                stop_str = current.get("stop", "")
-                if isinstance(stop_str, list): stop_str = ", ".join(stop_str)
-                stop_ent.insert(0, stop_str)
-                stop_ent.pack(fill=tk.X, padx=10)
                 def _save_mod():
-                    stops = [s.strip() for s in stop_ent.get().split(',') if s.strip()]
-                    t_data = {"name": name_ent.get(), "stop": ", ".join(stops)}
+                    t_data = {"name": name_ent.get()}
                     for k, e in fields.items():
                         try: t_data[k] = float(e.get()) if '.' in e.get() else int(e.get())
                         except: t_data[k] = current.get(k, 0)
@@ -511,11 +504,6 @@ def open_settings_window(app):
                 tk.Label(r2b, text=f"{l}:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side=tk.LEFT, padx=(2, 0))
                 d[key] = tk.Entry(r2b, width=5); d[key].insert(0, f"{c.get(key, df):g}"); d[key].pack(side=tk.LEFT, padx=2)
 
-            r3 = tk.Frame(lf, bg=THEME["bg_color"]); r3.pack(fill=tk.X, padx=5)
-            tk.Label(r3, text="Stop:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side=tk.LEFT)
-            stop_ents[key] = tk.Entry(r3, font=app.fonts["ui_small"], bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=50)
-            stop_ents[key].insert(0, app.stop_strings_config.get(key, "")); stop_ents[key].pack(side=tk.LEFT, padx=5)
-            
             if is_vision:
                 pk = f"{key}_projector"
                 r4 = tk.Frame(lf, bg=THEME["bg_color"]); r4.pack(fill=tk.X, padx=5, pady=2)
@@ -900,9 +888,22 @@ def open_settings_window(app):
         user_combo.pack(side=tk.LEFT, padx=5)
         ToolTip(user_combo, "Select an existing profile or type a new name to create a workspace.", app=app)
 
+        def _verify_vault_unlock(target_un):
+            if target_un not in ("Default", "Public") and hasattr(app, 'vault_manager') and app.vault_manager and app.vault_manager.is_lock_enabled() and app.vault_manager.is_locked():
+                pwd = simpledialog.askstring("Vault Authentication", f"Profile '{target_un}' is locked with Vault Security.\nEnter Master Password:", show="*", parent=win)
+                if pwd is None:
+                    return False
+                if not app.vault_manager.unlock(pwd):
+                    messagebox.showerror("Access Denied", "Incorrect master password for locked profile.", parent=win)
+                    return False
+            return True
+
         def _apply_switch_user():
             target_un = username_var.get().strip()
-            if target_un and hasattr(app, 'switch_user'):
+            if not target_un: return
+            if not _verify_vault_unlock(target_un):
+                return
+            if hasattr(app, 'switch_user'):
                 app.switch_user(target_un)
                 user_profiles_list = app.list_user_profiles()
                 user_combo['values'] = user_profiles_list
@@ -1347,7 +1348,11 @@ def open_settings_window(app):
             # User Profile & Status Bar config
             new_un = username_var.get().strip() or "Default"
             if new_un != app.config.get("username", "Default") and hasattr(app, "switch_user"):
-                app.switch_user(new_un)
+                if not _verify_vault_unlock(new_un):
+                    new_un = app.config.get("username", "Default")
+                    username_var.set(new_un)
+                else:
+                    app.switch_user(new_un)
             else:
                 app.config["username"] = new_un
             

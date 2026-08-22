@@ -123,6 +123,21 @@ THEMES = {
         "chat_bg_color": "#0d0d14",
         "chat_fg_color": "#00ffcc",
         "is_persona": True
+    },
+    "cecilia": {
+        "name": "Cecilia",
+        "bg_color": "#02140e",
+        "fg_color": "#00ff66",
+        "widget_bg_color": "#062218",
+        "button_bg_color": "#0a2e21",
+        "button_active_color": "#0f4230",
+        "trim_color": "#005a36",
+        "electric_blue": "#00ff66",
+        "midnight_blue": "#010d09",
+        "accent_highlight": "#00ff66",
+        "accent_secondary": "#005a36",
+        "chat_bg_color": "#031710",
+        "chat_fg_color": "#00ff66"
     }
 }
 
@@ -205,12 +220,24 @@ def apply_theme_to_global(theme_name: str = "apex", texture_style: str = "defaul
 
     if t_key == "persona":
         lvl_color = THERMO_COLORS.get(active_level, "#00ffcc")
-        base_theme["accent_highlight"] = lvl_color
-        base_theme["electric_blue"] = lvl_color
-        base_theme["fg_color"] = lvl_color if model_loaded else "#cccccc"
-        base_theme["chat_fg_color"] = lvl_color if model_loaded else "#dddddd"
-        if model_loaded:
-            base_theme["trim_color"] = lvl_color
+        if active_level == 7:
+            base_theme["bg_color"] = "#02140e"
+            base_theme["widget_bg_color"] = "#062218"
+            base_theme["chat_bg_color"] = "#031710"
+            base_theme["button_bg_color"] = "#0a2e21"
+            base_theme["button_active_color"] = "#0f4230"
+            base_theme["trim_color"] = "#005a36"
+            base_theme["accent_highlight"] = "#00ff66"
+            base_theme["electric_blue"] = "#00ff66"
+            base_theme["fg_color"] = "#00ff66" if model_loaded else "#cccccc"
+            base_theme["chat_fg_color"] = "#00ff66" if model_loaded else "#dddddd"
+        else:
+            base_theme["accent_highlight"] = lvl_color
+            base_theme["electric_blue"] = lvl_color
+            base_theme["fg_color"] = lvl_color if model_loaded else "#cccccc"
+            base_theme["chat_fg_color"] = lvl_color if model_loaded else "#dddddd"
+            if model_loaded:
+                base_theme["trim_color"] = lvl_color
     
     if is_frosted:
         # Diffuse borders, slight translucent lift on widget backgrounds
@@ -229,9 +256,9 @@ def apply_theme_to_global(theme_name: str = "apex", texture_style: str = "defaul
         elif t_key == "matrix":
             base_theme["widget_bg_color"] = "#001000"
             base_theme["trim_color"] = "#006600"
-        elif t_key == "persona":
-            base_theme["widget_bg_color"] = "#161622"
-            base_theme["trim_color"] = base_theme.get("accent_highlight", "#00ffcc")
+        elif t_key in ("persona", "cecilia"):
+            base_theme["widget_bg_color"] = "#0a281e" if (t_key == "cecilia" or active_level == 7) else "#161622"
+            base_theme["trim_color"] = base_theme.get("accent_highlight", "#00ff66" if (t_key == "cecilia" or active_level == 7) else "#00ffcc")
         else: # apex
             base_theme["widget_bg_color"] = "#202026"
             base_theme["trim_color"] = "#5c4228"
@@ -261,8 +288,8 @@ THERMO_COLORS = {
     3: "#7D0000", # Lvl 3: Deep Red
     4: "#9B30FF", # Lvl 4: Lighter Violet
     5: "#00A000", # Lvl 5: Green
-    6: "#4A148C", # Lvl 6: Void Purple
-    7: "#007acc", # Lvl 7: Electric Blue (Live)
+    6: "#4A148C", # Lvl 6: Void Purple TBD electric blue text/accents
+    7: "#005a36", # Lvl 7: Dark Emerald (Cecilia)
 }
 
 # --- CHAT BACKGROUND COLORS ---
@@ -274,7 +301,7 @@ CHAT_BG_COLORS = {
     4: "#1A102E", 
     5: "#102E10", 
     6: "#15051f", 
-    7: "#001a33", 
+    7: "#021a12", 
 }
 
 # --- CHAT FOREGROUND COLORS ---
@@ -286,7 +313,7 @@ CHAT_FG_COLORS = {
     4: "#AFEEEE", 
     5: "#FFFFFF",
     6: "#E0F7FA",
-    7: "#FFFFFF",
+    7: "#00ff66", 
 }
 
 # --- INPUT TEXT COLORS ---
@@ -298,7 +325,7 @@ INPUT_FG_COLORS = {
     4: "#AFEEEE", 
     5: "#FFFFFF",
     6: "#E0F7FA",
-    7: "#FFFFFF",
+    7: "#00ff66", 
 }
 
 # --- HARDWARE SPECS ---
