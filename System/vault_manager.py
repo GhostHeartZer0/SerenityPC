@@ -121,8 +121,8 @@ class VaultManager:
             print(f"[VAULT] Note: .env key auto-unlock did not match: {e}", file=sys.stderr)
 
     @classmethod
-    def sync_env_storage_key(cls, key_or_password: str, env_path: Optional[str] = None) -> bool:
-        """Safely updates or appends the SERENITY_ENCRYPTED_STORAGE_KEY in .env."""
+    def sync_env_storage_key(cls, storage_key: str, env_path: Optional[str] = None) -> bool:
+        """Safely updates or appends the derived SERENITY_ENCRYPTED_STORAGE_KEY in .env."""
         target = env_path or os.path.join(os.getcwd(), ".env")
         lines = []
         key_found = False
@@ -139,8 +139,8 @@ class VaultManager:
             stripped = line.strip()
             if not stripped.startswith("#") and "=" in stripped:
                 k = stripped.split("=", 1)[0].strip()
-                if k in (key_name, "SERENITY_STORAGE_KEY", "SERENITY_VAULT_KEY", "SERENITY_VAULT_PASSWORD"):
-                    new_lines.append(f"{key_name}={key_or_password}\n")
+                if k in (key_name, "SERENITY_STORAGE_KEY", "SERENITY_VAULT_KEY"):
+                    new_lines.append(f"{key_name}={storage_key}\n")
                     key_found = True
                     continue
             new_lines.append(line)
@@ -148,7 +148,7 @@ class VaultManager:
         if not key_found:
             if new_lines and not new_lines[-1].endswith("\n"):
                 new_lines[-1] += "\n"
-            new_lines.append(f"{key_name}={key_or_password}\n")
+            new_lines.append(f"{key_name}={storage_key}\n")
 
         try:
             with open(target, "w", encoding="utf-8") as fp:

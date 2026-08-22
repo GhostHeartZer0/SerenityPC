@@ -63,6 +63,7 @@ crash_*.txt
 /Live/t5gemma-2-1b-1b
 /Live/t5gemma-2-270m-270m
 Models/
+dist/
 
 # Model weight and binary formats
 *.gguf
@@ -88,3 +89,4 @@ System/config.json
 Docs/Test Prompts.txt
 System/rgb_state.json
 /setup.py
+dist/llama_cpp_python-0.3.23-py3-none-win_amd64.whl
