@@ -1,6 +1,6 @@
 {
     "username": "Default",
-    "main_window": "960x600+21+284",
+    "main_window": "960x600+15+298",
     "model_paths": {
         "fast": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
@@ -16,7 +16,7 @@
         "vision_multimodal": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "vision_multimodal_projector": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/gemma-4-12b/mmproj-F16.gguf",
         "mid": "S:/SerenityPC/Models/gemma-4-26B MoE/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-        "transcendent": "S:/LLM/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+        "transcendent": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     },
     "gpu_layer_config": {
         "fast": 99,
@@ -30,7 +30,7 @@
         "vision_video_deep": 14,
         "vision_multimodal": 99,
         "mid": 99,
-        "transcendent": 5
+        "transcendent": 99
     },
     "context_size_config": {
         "fast": 32768,
@@ -44,7 +44,7 @@
         "vision_video_deep": 4096,
         "vision_multimodal": 32768,
         "mid": 32768,
-        "transcendent": 98304
+        "transcendent": 32768
     },
     "temp_config": {
         "fast": 0.8,
@@ -58,7 +58,7 @@
         "vision_video_deep": 0.1,
         "vision_multimodal": 1.0,
         "mid": 0.8,
-        "transcendent": 0.7
+        "transcendent": 0.8
     },
     "top_p_config": {
         "fast": 0.95,
@@ -100,7 +100,7 @@
         "vision_video_deep": 1.0,
         "vision_multimodal": 1.0,
         "mid": 1.1,
-        "transcendent": 1.0
+        "transcendent": 1.1
     },
     "frequency_penalty_config": {
         "fast": 0.0,
@@ -168,12 +168,12 @@
         "vision_video_deep": 64,
         "vision_multimodal": 64,
         "mid": 64,
-        "transcendent": 45
+        "transcendent": 64
     },
     "sash_pos": 572,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 3,
+    "active_persona_level": 6,
     "max_persona_level": 6.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,

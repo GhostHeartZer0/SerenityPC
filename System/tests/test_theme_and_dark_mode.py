@@ -56,6 +56,16 @@ class TestThemeAndDarkMode(unittest.TestCase):
         self.assertEqual(THEME["accent_highlight"], THERMO_COLORS[4])
         self.assertEqual(THEME["electric_blue"], THERMO_COLORS[4])
 
+        # Level 7 Cecilia Dark Emerald / Neon Green
+        apply_theme_to_global(theme_name="persona", texture_style="default", dark_mode=False, active_level=7, model_loaded=True)
+        self.assertEqual(THEME["accent_highlight"], "#00ff66")
+        self.assertEqual(THEME["trim_color"], "#005a36")
+        self.assertEqual(THEME["bg_color"], "#02140e")
+
+        apply_theme_to_global(theme_name="cecilia", texture_style="default", dark_mode=False)
+        self.assertEqual(THEME["fg_color"], "#00ff66")
+        self.assertEqual(THEME["trim_color"], "#005a36")
+
     def test_user_profile_config_persistence(self):
         from main import ChatbotApp
         
