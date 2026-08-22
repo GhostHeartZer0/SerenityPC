@@ -1,123 +1,111 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
 import os
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 datas = [
-    ('Media', 'Media'),
-    ('System/Media', 'System/Media'),
-    ('Docs', 'Docs'),
-    ('serenity_resources.py', '.'),
     ('System', 'System'),
+    ('Users', 'Users'),
+    ('Media', 'Media'),
+    ('Docs', 'Docs'),
+    ('Tools', 'Tools'),
+    ('serenity_resources.py', '.'),
 ]
 
-# Hidden imports for packages that rely on dynamic dispatch or background threads
-hiddenimports = [
-    'tkinter',
-    'tkinter.filedialog',
-    'tkinter.messagebox',
-    'tkinter.scrolledtext',
-    'tkinter.simpledialog',
-    'tkinter.ttk',
-    'tkinter.font',
-    'uvicorn',
-    'uvicorn.logging',
-    'uvicorn.loops',
-    'uvicorn.loops.auto',
-    'uvicorn.protocols',
-    'uvicorn.protocols.http',
-    'uvicorn.protocols.http.auto',
-    'uvicorn.protocols.websockets',
-    'uvicorn.protocols.websockets.auto',
-    'uvicorn.lifespan',
-    'uvicorn.lifespan.on',
-    'fastapi',
-    'pystray',
-    'comtypes',
-    'comtypes.client',
-    'pyttsx3',
-    'pyttsx3.drivers',
-    'pyttsx3.drivers.sapi5',
-    'sounddevice',
-    'speech_recognition',
-    'chromadb',
-    'engineio.async_drivers.asgi',
-    'PIL',
-    'PIL.Image',
-    'PIL.ImageTk',
-    'cv2',
-    'psutil',
-    'torch',
-    'transformers',
-    'accelerate',
-    'requests',
-    'bs4',
-    'cryptography',
-]
+if os.path.exists('Models/For More Models....txt'):
+    datas.append(('Models/For More Models....txt', 'Models'))
 
-# Collect dynamic data / binaries for heavy packages
-packages_to_collect = [
-    'chromadb', 
-    'onnxruntime', 
-    'pystray', 
-    'pyttsx3', 
-    'sounddevice', 
-    'speech_recognition', 
-    'transformers', 
-    'accelerate', 
-    'torch', 
-    'cv2', 
-    'PIL', 
-    'llama_cpp'
-]
+datas += collect_data_files('llama_cpp')
+binaries = collect_dynamic_libs('llama_cpp')
 
-for pkg in packages_to_collect:
-    try:
-        pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
-        datas += pkg_datas
-        hiddenimports += pkg_hidden
-    except Exception as e:
-        print(f"PyInstaller collect_all warning for {pkg}: {e}")
+# Add CUDA 12 toolkit DLL search paths if present
+cuda_bin = r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin'
+if os.path.exists(cuda_bin):
+    for dll in ['cudart64_12.dll', 'cublas64_12.dll', 'cublasLt64_12.dll']:
+        dll_path = os.path.join(cuda_bin, dll)
+        if os.path.exists(dll_path):
+            binaries.append((dll_path, '.'))
 
 a = Analysis(
     ['main.py'],
-    pathex=['.', 'System'],
-    binaries=[],
+    pathex=['.', 'System', 'Tools'],
+    binaries=binaries,
     datas=datas,
-    hiddenimports=hiddenimports,
+    hiddenimports=[
+        'llama_cpp',
+        'psutil',
+        'pynvml',
+        'PIL',
+        'PIL.Image',
+        'PIL.ImageTk',
+        'numpy',
+        'requests',
+        'cryptography',
+        'torch',
+        'torch.autograd',
+        'sounddevice',
+        'pyttsx3',
+        'pystray',
+        'uvicorn',
+        'fastapi',
+        'windnd',
+        'cv2',
+        'speech_recognition',
+        'standard_aifc',
+        'tkinter',
+        'tkinter.ttk',
+        'tkinter.filedialog',
+        'tkinter.messagebox',
+        'tkinter.scrolledtext',
+        'tkinter.font',
+        'tkinter.simpledialog',
+        'System',
+        'System.serenity_utils',
+        'System.kv_manager',
+        'System.tool_registry',
+        'System.modular_registry',
+        'System.markdown_engine',
+        'System.settings_ui',
+        'System.vault_manager',
+        'System.network_guard',
+        'System.stt_manager',
+        'System.vision_handler',
+        'System.synthesis_handler',
+        'System.settings_manager',
+        'System.diffusion_wrapper',
+        'System.gguf_draft_model',
+        'System.tri_attention_core',
+        'serenity_resources',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['unittest', 'test'],
+    excludes=[],
     noarchive=False,
     optimize=0,
 )
 
 pyz = PYZ(a.pure)
 
+icon_path = 'System/serenity.ico' if os.path.exists('System/serenity.ico') else None
+
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='SerenityPC',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name='SerenityPC',
+    icon=icon_path,
 )

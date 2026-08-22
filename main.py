@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 # --- Smart App Control & Localized Cache Paths ---
 def setup_localized_environment():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'SerenityPC')
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
     tmp_dir = os.path.join(base_dir, ".tmp")
     cache_dir = os.path.join(base_dir, ".cache")
     cuda_cache = os.path.join(cache_dir, "cuda")
@@ -35,7 +38,6 @@ if TYPE_CHECKING:
     from tkinter.scrolledtext import ScrolledText
     from typing import cast
     import torch
-    from turboquant import TurboQuantCache
     import psutil
 
 # --- Import Custom Modules ---
@@ -346,11 +348,21 @@ class ChatbotApp:
         self.placeholder_img = None
         
         # --- Configuration & Paths ---
-        self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.BASE_DIR = self.script_dir
-        self.live_dir = os.path.join(self.script_dir, "Live")
+        if getattr(sys, 'frozen', False):
+            self.exe_dir = os.path.dirname(sys.executable)
+            self.script_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+            self.BASE_DIR = self.exe_dir
+            self.data_dir = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'SerenityPC')
+        else:
+            self.exe_dir = os.path.dirname(os.path.abspath(__file__))
+            self.script_dir = self.exe_dir
+            self.BASE_DIR = self.script_dir
+            self.data_dir = self.script_dir
+        self.live_dir = os.path.join(self.BASE_DIR, "Live")
         
-        # Determine icon path
+        # Ensure data directory exists
+        os.makedirs(self.data_dir, exist_ok=True)
+        
         # Determine icon path (Prioritize serenity_resources.APP_ICON)
         self.icon_path = APP_ICON
         if not os.path.exists(self.icon_path):
@@ -367,36 +379,85 @@ class ChatbotApp:
 
         media_candidates = [
             MEDIA_DIR,
+            os.path.join(self.exe_dir, "Media"),
+            os.path.join(self.exe_dir, "System", "Media"),
+            os.path.join(self.data_dir, "Media"),
+            os.path.join(self.data_dir, "System", "Media"),
             os.path.join(self.script_dir, "System", "Media"),
             os.path.join(self.script_dir, "Media")
         ]
         media_path = next((p for p in media_candidates if os.path.isdir(p)), os.path.join(self.script_dir, "System", "Media"))
 
+        models_candidates = [
+            os.path.join(self.exe_dir, "Models"),
+            os.path.join(self.data_dir, "Models"),
+            os.path.join(self.script_dir, "Models")
+        ]
+        models_dir = next((p for p in models_candidates if os.path.isdir(p)), os.path.join(self.exe_dir, "Models"))
+
+        if getattr(sys, 'frozen', False):
+            system_dir = os.path.join(self.exe_dir, "System") if os.path.isdir(os.path.join(self.exe_dir, "System")) else os.path.join(self.data_dir, "System")
+        else:
+            system_dir = os.path.join(self.script_dir, "System")
+
         self.dirs = {
             "Media": media_path,
-            "History": os.path.join(self.script_dir, "History"),
-            "Models": os.path.join(self.script_dir, "Models"),
-            "Logs": os.path.join(self.script_dir, "Logs"),
-            "System": os.path.join(self.script_dir, "System"),
-            "Users": os.path.join(self.script_dir, "Users")
+            "History": os.path.join(self.data_dir, "History"),
+            "Models": models_dir,
+            "Logs": os.path.join(self.data_dir, "Logs"),
+            "System": system_dir,
+            "Users": os.path.join(self.data_dir, "Users")  # Persistent user profiles
         }
         for k, d in self.dirs.items():
             if k != "Media":
                 os.makedirs(d, exist_ok=True)
+
+        # Seed default templates & json files from bundled assets if missing in persistent dirs
+        if getattr(sys, 'frozen', False):
+            bundled_system = os.path.join(self.script_dir, "System")
+            if os.path.isdir(bundled_system) and os.path.abspath(system_dir) != os.path.abspath(bundled_system):
+                for f in os.listdir(bundled_system):
+                    src_f = os.path.join(bundled_system, f)
+                    dst_f = os.path.join(system_dir, f)
+                    if os.path.isfile(src_f) and not os.path.exists(dst_f):
+                        try: shutil.copy2(src_f, dst_f)
+                        except Exception: pass
+            
+            bundled_users = os.path.join(self.script_dir, "Users")
+            users_dir = self.dirs["Users"]
+            if os.path.isdir(bundled_users) and os.path.abspath(users_dir) != os.path.abspath(bundled_users):
+                for prof in ["Default", "Public"]:
+                    src_prof = os.path.join(bundled_users, prof)
+                    dst_prof = os.path.join(users_dir, prof)
+                    if os.path.isdir(src_prof) and not os.path.exists(dst_prof):
+                        try: shutil.copytree(src_prof, dst_prof, dirs_exist_ok=True)
+                        except Exception: pass
+            
+            bundled_models = os.path.join(self.script_dir, "Models")
+            if os.path.isdir(bundled_models) and os.path.abspath(models_dir) != os.path.abspath(bundled_models):
+                for f in os.listdir(bundled_models):
+                    src_f = os.path.join(bundled_models, f)
+                    dst_f = os.path.join(models_dir, f)
+                    if os.path.isfile(src_f) and not os.path.exists(dst_f):
+                        try: shutil.copy2(src_f, dst_f)
+                        except Exception: pass
         
         self.turbo_vec = None
 
         # Start background polling        
-        # Support user-preferred 'settings.json' in root or System/
-        self.config_file = os.path.join(self.script_dir, "System", "config.json")
-        for p in [os.path.join(self.script_dir, "settings.json"), 
-                  os.path.join(self.script_dir, "System", "settings.json")]:
+        # Support user-preferred 'settings.json' or 'config.json' in persistent or local dirs
+        self.config_file = os.path.join(self.dirs["System"], "config.json")
+        for p in [os.path.join(self.data_dir, "settings.json"), 
+                  os.path.join(self.dirs["System"], "settings.json"),
+                  os.path.join(self.data_dir, "config.json"),
+                  os.path.join(self.exe_dir, "settings.json"),
+                  os.path.join(self.exe_dir, "System", "settings.json"),
+                  os.path.join(self.exe_dir, "System", "config.json"),
+                  os.path.join(self.exe_dir, "config.json")]:
             if os.path.exists(p):
                 self.config_file = p
                 break
         
-        if not os.path.exists(self.config_file) and os.path.exists(os.path.join(self.script_dir, "config.json")):
-            self.config_file = os.path.join(self.script_dir, "config.json")
         self.scratchpad_file = os.path.join(self.dirs["Logs"], "scratchpad.txt")
         self.error_log_file = os.path.join(self.dirs["Logs"], "error_log.txt")
 
@@ -1424,16 +1485,6 @@ class ChatbotApp:
         except Exception:
             pass
 
-    def on_closing(self):
-        try:
-            pos = self._get_current_sash_pos()
-            if pos and pos > 50:
-                self.config['sash_pos'] = pos
-            self.save_config()
-        except Exception:
-            pass
-        if self.root:
-            self.root.destroy()
 
     def _update_hw_indicator(self):
         """Updates the Hardware Mode indicator based on CPU specs and offline status."""
@@ -2615,6 +2666,35 @@ class ChatbotApp:
         except Exception as e:
             self.process_queue.put({"status": "error", "content": str(e)})
 
+    def resolve_model_path(self, path: Optional[str]) -> Optional[str]:
+        if not path:
+            return None
+        if not os.path.isabs(path):
+            candidates = [
+                os.path.join(self.dirs.get("Models", ""), path),
+                os.path.join(getattr(self, "exe_dir", self.script_dir), "Models", path),
+                os.path.join(getattr(self, "data_dir", ""), "Models", path),
+                os.path.join(self.script_dir, path),
+                os.path.join(getattr(self, "exe_dir", self.script_dir), path)
+            ]
+            for cand in candidates:
+                if cand and os.path.exists(cand):
+                    return cand
+            return os.path.join(self.dirs.get("Models", ""), path)
+        if os.path.exists(path):
+            return path
+        # If absolute path not found, search in Models directories by basename
+        base_fname = os.path.basename(path)
+        candidates = [
+            os.path.join(self.dirs.get("Models", ""), base_fname),
+            os.path.join(getattr(self, "exe_dir", self.script_dir), "Models", base_fname),
+            os.path.join(getattr(self, "data_dir", ""), "Models", base_fname)
+        ]
+        for cand in candidates:
+            if cand and os.path.exists(cand):
+                return cand
+        return path
+
     def _find_projector_for_model(self, model_path=None):
         m_path = model_path or self.model_path
         if not m_path:
@@ -2626,7 +2706,8 @@ class ChatbotApp:
                 if fl.endswith(".mmproj") or ("mmproj" in fl and fl.endswith(".gguf")) or ("projector" in fl and fl.endswith(".gguf")):
                     return os.path.join(model_dir, f)
         for proj_key in ["vision_multimodal_projector", "vision_video_projector", "vision_video_deep_projector"]:
-            p = self.model_paths.get(proj_key)
+            raw_p = self.model_paths.get(proj_key)
+            p = self.resolve_model_path(raw_p)
             if p and os.path.exists(p):
                 return p
         return None
@@ -2701,9 +2782,8 @@ class ChatbotApp:
             tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
             target_tier = tier_map.get(level, "low")
 
-        path = self.model_paths.get(target_tier)
-        if path and not os.path.isabs(path):
-            path = os.path.join(self.script_dir, path)
+        raw_path = self.model_paths.get(target_tier)
+        path = self.resolve_model_path(raw_path)
             
         if not path or not os.path.exists(path):
             msg = f"Model for {target_tier.upper()} tier not found at:\n{path or 'Not Set'}"
@@ -6855,21 +6935,22 @@ class ChatbotApp:
         self.set_avatar_state("off") 
         self._log_and_display("All models offloaded. VRAM Cleared.")
 
-    def get_history_path(self): 
+    def get_history_path(self) -> Optional[str]: 
         if not self.model_path: return None
-        hist_dir = self.get_user_history_dir()
-        base = f"{os.path.splitext(os.path.basename(self.model_path))[0]}_lvl{self.active_persona_level}.history"
-        p_enc = os.path.join(hist_dir, f"{base}.encz")
-        p_jsonz = os.path.join(hist_dir, f"{base}.jsonz")
+        hist_dir: str = self.get_user_history_dir()
+        base: str = f"{os.path.splitext(os.path.basename(self.model_path))[0]}_lvl{self.active_persona_level}.history"
+        p_enc: str = os.path.join(hist_dir, f"{base}.encz")
+        p_jsonz: str = os.path.join(hist_dir, f"{base}.jsonz")
         if os.path.exists(p_enc): return p_enc
         if os.path.exists(p_jsonz): return p_jsonz
-        ext = ".jsonz" if self.get_active_username() in ("Default", "Public") else (".encz" if (hasattr(self, 'vault_manager') and self.vault_manager.is_lock_enabled()) else ".jsonz")
+        ext: str = ".jsonz" if self.get_active_username() in ("Default", "Public") else (".encz" if (hasattr(self, 'vault_manager') and self.vault_manager.is_lock_enabled()) else ".jsonz")
         return os.path.join(hist_dir, f"{base}{ext}")
 
-    def save_history(self):
+    def save_history(self) -> None:
         if self.config.get("ghost_mode", False):
             return
-        if not (path := self.get_history_path()) or not self.messages: return
+        path: Optional[str] = self.get_history_path()
+        if not path or not self.messages: return
         try:
             if hasattr(self, 'vault_manager'):
                 self.vault_manager.write_history_messages(path, self.messages)
@@ -6978,8 +7059,8 @@ class ChatbotApp:
 
     def on_closing(self):
         self.save_config()
+        self.save_history()  # Save history unconditionally, regardless of model state
         self.stop_process.set()
-        if self.model: self.save_history()
         if self.live_agent_process: self.live_agent_process.terminate()
         if SYSTEM_MONITOR_LOADED: 
             try: nvidia_ml.nvmlShutdown()

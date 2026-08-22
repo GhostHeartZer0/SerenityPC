@@ -15,3 +15,4 @@ playwright
 chromadb
 cryptography
 opencv-python
+nvidia-ml-py

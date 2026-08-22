@@ -27,10 +27,19 @@
 ## Current & Historic Versions:
 
 ### Version 1.5.5
-- **Standalone Packaging (PyInstaller)**:
-  - Created `SerenityPC.spec` targeting `onedir` distribution, no-console windowed mode, and automated package data/hidden import discovery (`chromadb`, `onnxruntime`, `pystray`, `pyttsx3`, `uvicorn`).
-  - Added `build_exe.bat` for one-click clean PyInstaller builds.
-  - Kept runtime `Models/` and `System/` folders modular for dynamic runtime access.
+- **Standalone Packaging (.exemaker / PyInstaller)**:
+  - Updated `SerenityPC.spec` targeting standalone distribution with full data bundles (`System`, `Users`, `Media`, `Docs`, `Tools`, `serenity_resources.py`, `Models/For More Models....txt`) and app icon (`System/serenity.ico`).
+  - Added full hidden imports covering `System` submodules, `PIL.Image`, `PIL.ImageTk`, `windnd`, `cv2`, `speech_recognition`, `standard_aifc`, `pystray`, `pyttsx3`, `uvicorn`, `fastapi`, `psutil`, `pynvml`, `cryptography`, `torch`.
+  - Added `build_exe.bat` for clean PyInstaller builds.
+- **Model & Settings Persistence for Standalone Executable**:
+  - Implemented persistent runtime path resolution in main.py: separated `exe_dir`, `script_dir` (internal bundle `_MEIPASS`), and `data_dir` (`%APPDATA%/SerenityPC`).
+  - Guaranteed `Models/` directory resolution next to executable and in user data directory; added `resolve_model_path()` helper with basename fallback so configured models persist and load reliably across directories.
+  - Automated initial seeding of default system templates and `.json` configurations (`config.json`, `params.json`, `serenity_config.json`, `rgb_state.json`, `dmn_backbone.json`, `vault_state.json`, `rlhf_logs.json`) and user profile templates (`Users/Default`, `Users/Public`) into persistent storage on first executable launch.
+  - Configured `setup_localized_environment()` to route `.tmp`, `.cache`, `cuda`, `triton`, and `torch_extensions` to persistent user storage when running frozen.
+- **Main App Lifecycle, Unconditional Save & Type Safety**:
+  - Cleaned duplicate `on_closing()` handler in main.py, consolidating sash position persistence into `_on_sash_released` and ensuring standard window exit executes cleanly.
+  - Hardened on_closing() to trigger `self.save_history()` unconditionally on shutdown.
+  - Strictly typed get_history_path() with `Optional[str]` return signatures and verified safe string handling in save_history().
 
 ### Version 1.5.4
 - **Live Reasoning Stream to Chat Dropdown**:
