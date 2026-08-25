@@ -1,5 +1,5 @@
 # System/markdown_engine.py
-# High-Performance Interval-Based Markdown, Math, Table, and Code Renderer for Serenity AI.
+# High-Performance Interval-Based Markdown, Math, Table, and Code Renderer for SerenityPC.
 
 import re
 from typing import List, Tuple, Dict, Any, Optional

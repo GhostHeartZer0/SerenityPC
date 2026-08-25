@@ -26,6 +26,19 @@
 
 ## Current & Historic Versions:
 
+### Version 1.5.5
+- **Context Window & Session History Restoration**:
+  - Removed hardcoded 64k default tier clamps; aligned Level 5 Sage context defaults with 256k (`262144`).
+- **History Archive Header Overflow & Button Visibility**:
+  - Fixed action button clipping in `_render_history_menu` content view by packing action frame (`act_frame` with Edit/Save and Delete buttons) to the right before packing title label.
+  - Constrained archive title display text with ellipsis (`...`) truncation at 32 characters while preserving full title in hover tooltip.
+  - Reordered history list view card header to pack date/size metadata rightward before display name expansion.
+- **Standalone Packaging (PyInstaller)**:
+  - Created `SerenityPC.spec` targeting `onedir` distribution, no-console windowed mode, and automated package data/hidden import discovery (`chromadb`, `onnxruntime`, `pystray`, `pyttsx3`, `uvicorn`).
+  - Added missing system monitoring and standard library hidden imports (`unittest`, `pynvml`, `psutil`) to `SerenityPC.spec` to resolve standalone build fatal errors and PyTorch C API abort crashes.
+  - Added `build_exe.bat` for one-click clean PyInstaller builds.
+  - Kept runtime `Models/` and `System/` folders modular for dynamic runtime access.
+
 ### Version 1.5.4
 - **Live Reasoning Stream to Chat Dropdown**:
   - Wired streaming reasoning tokens (`thought_stream`) directly to an interactive, live-updating collapsible dropdown in `chat_history` during inference.

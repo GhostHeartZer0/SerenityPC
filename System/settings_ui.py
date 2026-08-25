@@ -28,7 +28,7 @@ def run_auto_detect(app, window=None):
     if manual_vram_mb > 0:
         vram_gb = manual_vram_mb / 1024
         app._log_and_display(f"Using Manual VRAM Target: {vram_gb:.2f}GB")
-    elif system_monitor_loaded and getattr(app, 'gpu_handle', None):
+    elif system_monitor_loaded and nvidia_ml is not None and getattr(app, 'gpu_handle', None):
         try:
             mem = nvidia_ml.nvmlDeviceGetMemoryInfo(app.gpu_handle)
             vram_gb = mem.total / 1024**3
@@ -317,7 +317,7 @@ def open_settings_window(app):
         t_action_frame.pack(anchor="n", pady=2)
         t_action_rbs = []
         for val, txt in [("save", "Save"), ("write", "Write"), ("modify", "Modify")]:
-            rb_t = tk.Radiobutton(t_action_frame, text=txt, variable=template_mode, value=val, indicatoron=0, 
+            rb_t = tk.Radiobutton(t_action_frame, text=txt, variable=template_mode, value=val, indicatoron=False, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["electric_blue"],
                            activebackground=THEME["electric_blue"], activeforeground="#000000")
             rb_t.pack(side=tk.LEFT, padx=2)
@@ -341,11 +341,11 @@ def open_settings_window(app):
             for j in range(4):
                 slot_id = f"T{(i*4)+j+1}"
                 t_name = app.config.get("custom_templates", {}).get(slot_id, {}).get("name", slot_id)
-                b = tk.Radiobutton(t_grid, text=t_name, variable=active_template, value=slot_id, indicatoron=0, width=12, 
+                b = tk.Radiobutton(t_grid, text=t_name, variable=active_template, value=slot_id, indicatoron=False, width=12, 
                                    bg=THEME["widget_bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["electric_blue"],
                                    activebackground=THEME["electric_blue"], activeforeground="#000000")
                 b.grid(row=i, column=j, padx=2, pady=2)
-                b.slot_id = slot_id
+                setattr(b, "slot_id", slot_id)
                 ToolTip(b, f"Template Slot {slot_id} ({t_name}). Click to apply or modify.", app=app)
                 template_buttons.append(b)
                 t_slot_rbs.append((b, slot_id))
@@ -388,7 +388,7 @@ def open_settings_window(app):
                     e.grid(row=r, column=c+1, padx=(0,10), pady=2)
                     fields[key] = e
                 def _save_mod():
-                    t_data = {"name": name_ent.get()}
+                    t_data: dict[str, object] = {"name": name_ent.get()}
                     for k, e in fields.items():
                         try: t_data[k] = float(e.get()) if '.' in e.get() else int(e.get())
                         except: t_data[k] = current.get(k, 0)
@@ -429,7 +429,7 @@ def open_settings_window(app):
             if not t_id: return
             if mode == "save":
                 t_data = app.config.get("custom_templates", {}).get(t_id, {})
-                t_data["name"] = t_data.get("name", t_id)
+                t_data["name"] = t_data.get("name", t_id)               
                 try: t_data["temp"] = float(temp_ents[tier_name].get())
                 except: pass
                 try: t_data["top_p"] = float(top_p_ents[tier_name].get())
@@ -463,7 +463,7 @@ def open_settings_window(app):
                 if not t_data: return
                 for k, d in [("temp", temp_ents), ("top_p", top_p_ents), ("min_p", min_p_ents), ("rep", rep_ents), ("pres", pres_ents), ("freq", freq_ents), ("top_k", top_k_ents), 
                 ("batch", n_batch_ents), ("layers", ents), ("ctx", ctx_ents), ("stop", stop_ents)]:
-                    if k in t_data: 
+                    if k in t_data and tier_name in d: 
                         d[tier_name].delete(0, tk.END)
                         d[tier_name].insert(0, str(t_data[k]))
                 messagebox.showinfo("Templating", f"Applied {t_data['name']} to {tier_name.upper()}!", parent=win)
@@ -817,14 +817,13 @@ def open_settings_window(app):
 
         # --- FONT FAMILY SELECTIONS ---
         UI_FONT_OPTIONS = [
-            "Segoe UI", "Arial", "Calibri", "Verdana", "Tahoma",
-            "Trebuchet MS", "Times New Roman", "Georgia", "Cambria",
-            "Palatino Linotype", "Comic Sans MS", "Franklin Gothic Medium",
-            "Impact", "Lucida Sans Unicode"
+            "Segoe UI", "Verdana", "Times New Roman", "Cambria",
+            "Comic Sans MS", "Gothic A1", "Modiableic",
+            "Comfortaa", "YU Gothic UI", "Segoe UI Variable",
         ]
         MONO_FONT_OPTIONS = [
-            "Consolas", "Courier New", "Lucida Console",
-            "Cascadia Code", "Cascadia Mono"
+            "Cascadia Code", "Doto", "Palatino Linotype",
+            "Tajawal", "MV Boli", "Sans Console",
         ]
 
         curr_ui_font = app.config.get("ui_font", "Segoe UI")
@@ -1521,7 +1520,7 @@ def open_text_scaling_center(app, parent_win=None):
             _update_preview_tags()
 
         scale_slider = tk.Scale(ctrl_lf, from_=70, to=250, orient=tk.HORIZONTAL, variable=scale_var,
-                                command=_on_scale_slider_move, showvalue=0, bg=THEME["widget_bg_color"],
+                                command=_on_scale_slider_move, showvalue=False, bg=THEME["widget_bg_color"],
                                 fg=THEME["fg_color"], activebackground=THEME["electric_blue"],
                                 highlightthickness=0, bd=0)
         scale_slider.pack(fill=tk.X, pady=(0, 4))
@@ -1660,7 +1659,7 @@ def open_text_scaling_center(app, parent_win=None):
                 return _cmd
                 
             s = tk.Scale(f, from_=-4, to=8, orient=tk.HORIZONTAL, variable=cat_vars[cat_key],
-                         command=_make_cat_cmd(cat_key, v_lbl), showvalue=0, bg=THEME["widget_bg_color"],
+                         command=_make_cat_cmd(cat_key, v_lbl), showvalue=False, bg=THEME["widget_bg_color"],
                          fg=THEME["fg_color"], activebackground=THEME["electric_blue"],
                          highlightthickness=0, bd=0)
             s.pack(fill=tk.X)
@@ -1691,7 +1690,7 @@ def open_text_scaling_center(app, parent_win=None):
             prev_text.insert(tk.END, "You: ", ("user_lead",))
             prev_text.insert(tk.END, "Can you show me a sample code and status readout?\n\n", ("user",))
             prev_text.insert(tk.END, "Serenity: ", ("ai_lead",))
-            prev_text.insert(tk.END, "# Serenity AI System Ready\n", ("md_header_1",))
+            prev_text.insert(tk.END, "# SerenityPC System Ready\n", ("md_header_1",))
             prev_text.insert(tk.END, "Thinking: Scanning active context and evaluating optimal tensor layers...\n", ("md_thought",))
             prev_text.insert(tk.END, "Typography scaling is active across all widgets and markdown tags.\n", ("md_bold",))
             prev_text.insert(tk.END, "def run_inference():\n    return 'Optimal speed: 42.5 t/s'\n", ("md_code",))

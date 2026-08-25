@@ -170,10 +170,10 @@
         "mid": 64,
         "transcendent": 64
     },
-    "sash_pos": 572,
+    "sash_pos": 558,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 6,
+    "active_persona_level": 1,
     "max_persona_level": 6.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,

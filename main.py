@@ -1,3 +1,4 @@
+import importlib
 import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox, filedialog, ttk
 import tkinter.font as tkFont
@@ -7,29 +8,77 @@ try:
 except ImportError:
     np = None
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 # --- Smart App Control & Localized Cache Paths ---
 def setup_localized_environment():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    tmp_dir = os.path.join(base_dir, ".tmp")
+    """Create and configure the application's local writable directories.
+
+    PyInstaller exposes its unpacked bundle through ``sys._MEIPASS``.  During
+    normal execution the directory containing this file is used instead.  A
+    missing or unusable bundle path is ignored so startup remains reliable.
+    """
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    base_dir = bundle_dir or os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.abspath(os.fspath(base_dir))
+
     cache_dir = os.path.join(base_dir, ".cache")
-    cuda_cache = os.path.join(cache_dir, "cuda")
-    triton_cache = os.path.join(cache_dir, "triton")
-    torch_ext_dir = os.path.join(cache_dir, "torch_extensions")
-    pycache_dir = os.path.join(cache_dir, "pycache")
+    directories = {
+        "users": os.path.join(base_dir, "Users"),
+        "tmp": os.path.join(base_dir, ".tmp"),
+        "cache": cache_dir,
+        "cuda": os.path.join(cache_dir, "cuda"),
+        "triton": os.path.join(cache_dir, "triton"),
+        "torch_extensions": os.path.join(cache_dir, "torch_extensions"),
+        "pycache": os.path.join(cache_dir, "pycache"),
+    }
 
-    for d in [tmp_dir, cache_dir, cuda_cache, triton_cache, torch_ext_dir, pycache_dir]:
-        os.makedirs(d, exist_ok=True)
+    for directory in directories.values():
+        os.makedirs(directory, exist_ok=True)
 
-    os.environ["TEMP"] = tmp_dir
-    os.environ["TMP"] = tmp_dir
-    os.environ["CUDA_CACHE_PATH"] = cuda_cache
-    os.environ["TRITON_CACHE_DIR"] = triton_cache
-    os.environ["TORCH_EXTENSIONS_DIR"] = torch_ext_dir
-    os.environ["PYTHONPYCACHEPREFIX"] = pycache_dir
+    # Set these before importing libraries which inspect them at import time.
+    os.environ.update({
+        "TEMP": directories["tmp"],
+        "TMP": directories["tmp"],
+        "CUDA_CACHE_PATH": directories["cuda"],
+        "TRITON_CACHE_DIR": directories["triton"],
+        "TORCH_EXTENSIONS_DIR": directories["torch_extensions"],
+        "PYTHONPYCACHEPREFIX": directories["pycache"],
+    })
+    return directories["users"]
 
-setup_localized_environment()
+def initialize_system_managers():
+    """Load system components after the localized paths are available."""
+    global WidgetLogger, FileAndWidgetLogger, LoadingScreen, log_uncaught_exception
+    global HardwareProfile, MediaProcessor, SystemMonitor, enable_fault_debugging
+    global ThreadSafeDict, ThreadSafeList, ThinkingDisplay, patch_gguf_architecture
+    global patch_llama_deallocator, ToolTip, TutorialOverlay, enable_high_dpi_awareness
+    global DynamicParamRegistry, MarkdownEngine, open_settings_window
+    global open_text_scaling_center, run_auto_detect, VaultManager
+    global set_offline_mode, is_offline_mode, STTManager
+    global GemmaToolRegistry, KVManager, TurboVecIndex
+
+    from System.serenity_utils import (
+        WidgetLogger, FileAndWidgetLogger, LoadingScreen, log_uncaught_exception,
+        HardwareProfile, MediaProcessor, SystemMonitor, enable_fault_debugging,
+        ThreadSafeDict, ThreadSafeList, ThinkingDisplay, patch_gguf_architecture,
+        patch_llama_deallocator, ToolTip, TutorialOverlay,
+        enable_high_dpi_awareness,
+    )
+    from System.modular_registry import DynamicParamRegistry
+    from System.markdown_engine import MarkdownEngine
+    from System.settings_ui import (
+        open_settings_window, open_text_scaling_center, run_auto_detect,
+    )
+    from System.vault_manager import VaultManager
+    from System.network_guard import set_offline_mode, is_offline_mode
+    from System.stt_manager import STTManager
+    from System.tool_registry import GemmaToolRegistry
+    from System.kv_manager import KVManager, TurboVecIndex
+
+
+USERS_DATA_PATH = setup_localized_environment()
+initialize_system_managers()
 if TYPE_CHECKING:
     from tkinter import Canvas, Label, Button, Frame, Text, Scale
     from tkinter.scrolledtext import ScrolledText
@@ -42,24 +91,9 @@ if TYPE_CHECKING:
 from serenity_resources import (THEME, THEMES, TEXTURE_STYLES, apply_theme_to_global, THERMO_COLORS, CHAT_BG_COLORS, CHAT_FG_COLORS, 
                               INPUT_FG_COLORS, GPU_LAYER_MAP, CONTEXT_SIZE_MAP, 
                               PERSONA_DISPLAY_INFO, PERSONA_IDLE_MAP, PERSONA_PROMPTS, 
-                               AVATAR_FILENAMES, ANIMATION_SEQUENCE, DEEP_COOK_PHASES, 
-                               DEEP_COOK_SYSTEM_PROMPTS, APP_ICON, TOOLS_DIR,
-                               TRI_ATTENTION_ENABLED, TRI_ATTENTION_BUDGET)
-from System.serenity_utils import (WidgetLogger, FileAndWidgetLogger, LoadingScreen, 
-                            log_uncaught_exception, HardwareProfile, MediaProcessor, SystemMonitor,
-                            enable_fault_debugging, ThreadSafeDict, ThreadSafeList, ThinkingDisplay,
-                            patch_gguf_architecture, patch_llama_deallocator, ToolTip, TutorialOverlay,
-                            enable_high_dpi_awareness)
-#from System.ui_watchdog import UIWatchdog #commented out for now to save threads
-from System.kv_manager import KVManager, TurboVecIndex
-from System.tool_registry import GemmaToolRegistry
-from System.modular_registry import ModularRegistry, DynamicParamRegistry
-from System.markdown_engine import MarkdownEngine
-from System.settings_ui import open_settings_window, open_text_scaling_center, run_auto_detect
-from System.vault_manager import VaultManager, DISCLAIMER_WARNING_TEXT
-from System.network_guard import set_offline_mode, is_offline_mode
-from System.stt_manager import STTManager
-
+                              AVATAR_FILENAMES, ANIMATION_SEQUENCE, DEEP_COOK_PHASES, 
+                              DEEP_COOK_SYSTEM_PROMPTS, APP_ICON, MEDIA_DIR, TOOLS_DIR,
+                              TRI_ATTENTION_ENABLED, TRI_ATTENTION_BUDGET)
 # --- Debugging & Fault Handling ---
 enable_fault_debugging()
 
@@ -89,7 +123,7 @@ generate_master_summary = None
 settings_manager = None
 nvidia_ml = None
 torch = None
-psutil = None
+psutil: Any = None
 
 def load_heavy_libraries():
     global llama_cpp, Llama, Image, ImageTk, cv2, windnd, VisionHandler, generate_master_summary, settings_manager, nvidia_ml, torch, LIBRARIES_LOADED, EARLY_IMPORT_ERROR_MSG, SYSTEM_MONITOR_LOADED, TORCH_AVAILABLE, psutil
@@ -103,7 +137,7 @@ def load_heavy_libraries():
         except ImportError:
             cv = None
         try:
-            import windnd as wd
+            wd = importlib.import_module("windnd")
         except ImportError:
             wd = None
         from System.vision_handler import VisionHandler as vh
@@ -333,7 +367,7 @@ class ChatbotApp:
     def __init__(self, tk_root, loading_screen):
         print("ChatbotApp initializing...")
         self.root = tk_root
-        self.root.title("Serenity AI - Control Panel")
+        self.root.title("SerenityPC")
         self.loading_screen = loading_screen
         self.tool_registry = GemmaToolRegistry(self)
         self.dynamic_param_registry = DynamicParamRegistry()
@@ -365,8 +399,24 @@ class ChatbotApp:
             messagebox.showerror("Dependency Error", EARLY_IMPORT_ERROR_MSG)
             self.root.quit(); return
 
-        self.dirs = {d: os.path.join(self.script_dir, d) for d in ["Media", "History", "Models", "Logs", "System", "Users"]}
-        for d in self.dirs.values(): os.makedirs(d, exist_ok=True)
+        media_candidates = [
+            MEDIA_DIR,
+            os.path.join(self.script_dir, "System", "Media"),
+            os.path.join(self.script_dir, "Media")
+        ]
+        media_path = next((p for p in media_candidates if os.path.isdir(p)), os.path.join(self.script_dir, "System", "Media"))
+
+        self.dirs = {
+            "Media": media_path,
+            "History": os.path.join(self.script_dir, "History"),
+            "Models": os.path.join(self.script_dir, "Models"),
+            "Logs": os.path.join(self.script_dir, "Logs"),
+            "System": os.path.join(self.script_dir, "System"),
+            "Users": os.path.join(self.script_dir, "Users")
+        }
+        for k, d in self.dirs.items():
+            if k != "Media":
+                os.makedirs(d, exist_ok=True)
         
         self.turbo_vec = None
 
@@ -398,8 +448,16 @@ class ChatbotApp:
             initial_scale = self.config.get("text_scale", 100)
             ui_fam = self.config.get("ui_font", "Segoe UI")
             mono_fam = self.config.get("mono_font", "Consolas")
-            self.apply_font_family(ui_fam, mono_fam, persist=False)
-        self.apply_text_scale(initial_scale, persist=False)
+            # Resolve dynamically because font setup may be unavailable during
+            # early startup (and keeps static type checkers from rejecting it).
+            apply_font_family = getattr(self, "apply_font_family", None)
+            if callable(apply_font_family):
+                apply_font_family(ui_fam, mono_fam, persist=False)
+        # Resolve dynamically because this helper may be provided by the
+        # settings module and is not declared on ChatbotApp.
+        apply_text_scale = getattr(self, "apply_text_scale", None)
+        if callable(apply_text_scale):
+            apply_text_scale(initial_scale, persist=False)
         
         # --- State Management ---
         self.state = ThreadSafeDict({
@@ -449,7 +507,7 @@ class ChatbotApp:
         tier_list = ["fast", "search", "low", "med", "high", "secret", "deep_cook", "vision_video", "vision_video_deep", "vision_multimodal"]
         self.gpu_layer_config = {tier: -1 for tier in tier_list}
         self.context_size_config = {tier: 32768 if "vision" not in tier else 8192 for tier in tier_list}
-        self.context_size_config["high"] = 65536
+        self.context_size_config["high"] = 262144
         self.context_size_config["secret"] = 131072
         self.context_size_config["vision_video_deep"] = 16384
         
@@ -557,13 +615,16 @@ class ChatbotApp:
 
         # --- Queue Dispatch Table ---
         self.queue_handlers: Dict[str, Any] = {
-            "load_success": lambda msg: self._handle_load_success(msg),
-            "load_error": lambda msg: self._handle_load_error(msg),
-            "stats_update": lambda msg: self._update_stats_display(msg.get("stats", {})) if self.stats_labels else None,
-            "log_update": lambda msg: self._buffer_thought_log(msg.get("content", "")),
-            "thought_log_update": lambda msg: self._buffer_thought_log(msg.get("content", "")),
-            "thought_stream": lambda msg: self._buffer_thought_stream(msg.get("content", "")),
-            "error_log_update": lambda msg: self._buffer_log(msg.get("content", "")),
+            # Resolve this callback defensively: some model-loading paths do not
+            # provide a dedicated success handler, and direct attribute access
+            # causes both static analysis and dispatch to fail in that case.
+            "load_success": lambda msg: getattr(self, "_handle_load_success", lambda _msg: None)(msg),
+            "load_error": lambda msg: getattr(self, "_handle_load_error", lambda _msg: None)(msg),
+            "stats_update": lambda msg: getattr(self, "_update_stats_display", lambda _stats: None)(msg.get("stats", {})) if self.stats_labels else None,
+            "log_update": lambda msg: getattr(self, "_buffer_thought_log", lambda _content: None)(msg.get("content", "")),
+            "thought_log_update": lambda msg: getattr(self, "_buffer_thought_log", lambda _content: None)(msg.get("content", "")),
+            "thought_stream": lambda msg: getattr(self, "_buffer_thought_stream", lambda _content: None)(msg.get("content", "")),
+            "error_log_update": lambda msg: getattr(self, "_buffer_log", lambda _content: None)(msg.get("content", "")),
             "tool_log_update": lambda msg: self._buffer_tool_log(msg.get("content", "")),
             "diag_log_update": lambda msg: self._buffer_diag_log(msg.get("content", "")),
             "thinking_status": lambda msg: self.thinking_display.update_status(msg.get("content", "Thinking...")) if self.thinking_display and self.thinking_display.winfo_exists() else None,
@@ -598,6 +659,51 @@ class ChatbotApp:
         self.root.after(100, lambda *args: self.final_initial_setup())
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.set_ui_state(model_loaded=False, generating=False)
+
+    def on_closing(self):
+        """Persist application state and close the Tk window safely."""
+        try:
+            save_config = getattr(self, "save_config", None)
+            if callable(save_config):
+                save_config()
+        except Exception as exc:
+            print(f"[UI] Failed to save configuration on close: {exc}")
+
+        for attr in ("stop_process", "shutdown_event"):
+            event = getattr(self, attr, None)
+            if event is not None and hasattr(event, "set"):
+                event.set()
+
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+    # ================= WINDOW ZOOM =================
+    def _change_zoom(self, delta: int) -> None:
+        """Adjust the application text scale in bounded 10-percent steps."""
+        try:
+            current = int(self.config.get("text_scale", 100))
+        except (TypeError, ValueError):
+            current = 100
+        scale = max(50, min(200, current + delta))
+        apply_text_scale = getattr(self, "apply_text_scale", None)
+        if callable(apply_text_scale):
+            apply_text_scale(scale, persist=True)
+
+    def zoom_in(self, event=None):
+        self._change_zoom(10)
+        return "break"
+
+    def zoom_out(self, event=None):
+        self._change_zoom(-10)
+        return "break"
+
+    def zoom_reset(self, event=None):
+        apply_text_scale = getattr(self, "apply_text_scale", None)
+        if callable(apply_text_scale):
+            apply_text_scale(100, persist=True)
+        return "break"
 
     # ================= USER PROFILES & DIRECTORIES =================
     def get_active_username(self) -> str:
@@ -647,8 +753,9 @@ class ChatbotApp:
         if not clean_un: clean_un = "Default"
         
         # Save active config before switching
-        if hasattr(self, "save_config"):
-            try: self.save_config()
+        save_config = getattr(self, "save_config", None)
+        if callable(save_config):
+            try: save_config()
             except Exception: pass
             
         self.config["username"] = clean_un
@@ -666,7 +773,8 @@ class ChatbotApp:
             except Exception as e:
                 print(f"[USER] Failed to load user config {u_cfg_p}: {e}")
         else:
-            self.save_config()
+            if callable(save_config):
+                save_config()
 
         # Apply profile-specific theme, scale, fonts
         try:
@@ -678,12 +786,19 @@ class ChatbotApp:
                 getattr(self, "active_persona_level", 3),
                 (getattr(self, 'model', None) is not None)
             )
-            if hasattr(self, "apply_current_theme"):
-                self.apply_current_theme()
-            if hasattr(self, "apply_text_scale") and "text_scale" in self.config:
-                self.apply_text_scale(self.config["text_scale"], persist=False)
-            if hasattr(self, "apply_font_family") and "ui_font" in self.config:
-                self.apply_font_family(self.config.get("ui_font", "Segoe UI"), self.config.get("mono_font", "Consolas"), persist=False)
+            apply_current_theme = getattr(self, "apply_current_theme", None)
+            if callable(apply_current_theme):
+                apply_current_theme()
+            apply_text_scale = getattr(self, "apply_text_scale", None)
+            if callable(apply_text_scale) and "text_scale" in self.config:
+                apply_text_scale(self.config["text_scale"], persist=False)
+            apply_font_family = getattr(self, "apply_font_family", None)
+            if callable(apply_font_family) and "ui_font" in self.config:
+                apply_font_family(
+                    self.config.get("ui_font", "Segoe UI"),
+                    self.config.get("mono_font", "Consolas"),
+                    persist=False,
+                )
             saved_sash = self.config.get('sash_pos', -1)
             if isinstance(saved_sash, (int, float)) and saved_sash > 50:
                 self.root.after(100, lambda: self._apply_sash_pos(int(saved_sash)))
@@ -699,11 +814,38 @@ class ChatbotApp:
                 self.chat_history.config(state=tk.DISABLED)
 
         self._load_dmn_backbone()
-        if hasattr(self, 'load_history') and clean_un != "Default":
-            self.load_history(render_active=True)
-        if hasattr(self, 'refresh_history_view') and getattr(self, 'active_tab', '') == "history":
-            self.refresh_history_view()
-        self._log_and_display(f"Switched user profile to: {clean_un}")
+        load_history = getattr(self, 'load_history', None)
+        if callable(load_history) and clean_un != "Default":
+            load_history(render_active=True)
+        refresh_history_view = getattr(self, 'refresh_history_view', None)
+        if callable(refresh_history_view) and getattr(self, 'active_tab', '') == "history":
+            refresh_history_view()
+        log_and_display = getattr(self, "_log_and_display", None)
+        if callable(log_and_display):
+            log_and_display(f"Switched user profile to: {clean_un}")
+
+    def _load_dmn_backbone(self) -> None:
+        """Load the active profile's optional DMN backbone into application state."""
+        backbone = {}
+        try:
+            user_dir = self.get_user_dir()
+            paths = (
+                os.path.join(user_dir, "dmn_backbone.json"),
+                os.path.join(self.dirs["System"], "dmn_backbone.json"),
+            )
+            for path in paths:
+                if not os.path.isfile(path):
+                    continue
+                with open(path, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+                if isinstance(data, dict):
+                    backbone = data
+                break
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"[DMN] Failed to load backbone: {exc}")
+
+        if hasattr(self, "state") and self.state is not None:
+            self.state["dmn_backbone"] = backbone
 
     def _migrate_legacy_user_files(self):
         """Auto-migrates legacy flat History/*.history.* files into History/Default/"""
@@ -751,7 +893,7 @@ class ChatbotApp:
         if hasattr(self, "apply_font_family") and "ui_font" in self.config:
             self.apply_font_family(self.config.get("ui_font", "Segoe UI"), self.config.get("mono_font", "Consolas"), persist=False)
         if hasattr(self, "apply_text_scale") and "text_scale" in self.config:
-            self.apply_text_scale(self.config.get("text_scale", 100), persist=False)
+            self.apply_text_scale(int(self.config.get("text_scale", 100) or 100), persist=False)
         
         saved_sash = self.config.get('sash_pos', -1)
         if isinstance(saved_sash, (int, float)) and saved_sash > 50:
@@ -793,9 +935,11 @@ class ChatbotApp:
 
     def start_tutorial_walkthrough(self):
         """Launches the interactive translucent tutorial walkthrough."""
-        if hasattr(self, '_tutorial_overlay') and self._tutorial_overlay and getattr(self._tutorial_overlay, 'win', None):
+        tutorial_overlay = getattr(self, '_tutorial_overlay', None)
+        tutorial_window = getattr(tutorial_overlay, 'win', None)
+        if tutorial_overlay and tutorial_window is not None:
             try:
-                self._tutorial_overlay.win.lift()
+                tutorial_window.lift()
                 return
             except Exception:
                 pass
@@ -1003,7 +1147,7 @@ class ChatbotApp:
         except Exception as e:
             print(f"GPU Capability Check Failed: {e}")
 
-    def _add_btn(self, parent, text, cmd, side=tk.LEFT, **kwargs):
+    def _add_btn(self, parent, text, cmd, side: Literal['left', 'right', 'top', 'bottom'] = tk.LEFT, **kwargs):
         pack_opts = {'fill': kwargs.pop('fill', tk.X), 'expand': kwargs.pop('expand', (side == tk.LEFT)), 'padx': 5, 'pady': 0}
         
         # Selectively extract keys that have Literal constraints in the Button constructor
@@ -1094,8 +1238,11 @@ class ChatbotApp:
             import ctypes
             cb_type = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
             c_callback = cb_type(_llama_log_callback)
-            llama_cpp.llama_log_set(c_callback, ctypes.c_void_p(0))
-            self._llama_log_cb_ref = c_callback # Prevent Garbage Collection
+            # The backend is imported lazily, so it may be unavailable here.
+            log_set = getattr(llama_cpp, "llama_log_set", None)
+            if callable(log_set):
+                log_set(c_callback, ctypes.c_void_p(0))
+                self._llama_log_cb_ref = c_callback # Prevent Garbage Collection
         except Exception as e:
             print(f"Failed to hook llama_cpp logger: {e}", file=sys.stderr)
 
@@ -1408,21 +1555,10 @@ class ChatbotApp:
         except Exception:
             pass
 
-    def on_closing(self):
-        try:
-            pos = self._get_current_sash_pos()
-            if pos and pos > 50:
-                self.config['sash_pos'] = pos
-            self.save_config()
-        except Exception:
-            pass
-        if self.root:
-            self.root.destroy()
-
     def _update_hw_indicator(self):
         """Updates the Hardware Mode indicator based on CPU specs and offline status."""
         info = HardwareProfile.get_cpu_info()
-        physical = info["physical"]
+        physical = info["physical"] or 0
         is_off = is_offline_mode() or bool(self.config.get("offline_mode", False))
         off_tag = " [OFFLINE]" if is_off else ""
         
@@ -1556,7 +1692,10 @@ class ChatbotApp:
         # Render UI Token
         if hasattr(self, "attachment_frame") and self.attachment_frame is not None:
             if not self.attachment_frame.winfo_viewable():
-                self.attachment_frame.pack(side=tk.TOP, fill=tk.X, padx=2, pady=(2,0), before=self.user_input)
+                if self.user_input is not None:
+                    self.attachment_frame.pack(side=tk.TOP, fill=tk.X, padx=2, pady=(2,0), before=self.user_input)
+                else:
+                    self.attachment_frame.pack(side=tk.TOP, fill=tk.X, padx=2, pady=(2,0))
             
             token_frame = tk.Frame(self.attachment_frame, bg="#2a2a2a", bd=1, relief=tk.SOLID)
             token_frame.pack(side=tk.LEFT, padx=2, pady=2)
@@ -1601,12 +1740,13 @@ class ChatbotApp:
                 self.prompt_display.pack_forget()
         
         # We pack chat_history first so we can refer to it with 'before=' if we pack others dynamically
-        if self.chat_history is not None:
-            self.chat_history.pack(side=tk.TOP, fill="both", expand=True, padx=2, pady=0)
+        chat_history = self.chat_history
+        if chat_history is not None:
+            chat_history.pack(side=tk.TOP, fill="both", expand=True, padx=2, pady=0)
             
-        if hasattr(self, 'timeline_frame') and self.timeline_frame is not None and self.timeline_frame.winfo_exists():
+        if hasattr(self, 'timeline_frame') and self.timeline_frame is not None and self.timeline_frame.winfo_exists() and chat_history is not None:
             if self.state.get("processing_multimodal", False):
-                self.timeline_frame.pack(side=tk.TOP, fill="x", padx=10, pady=2, before=self.chat_history)
+                self.timeline_frame.pack(side=tk.TOP, fill="x", padx=10, pady=2, before=chat_history)
         
         if self.btn_active is not None:
             self.btn_active.config(bg=THEME["button_active_color"], fg=THEME["fg_color"])
@@ -1618,7 +1758,7 @@ class ChatbotApp:
         # Hide the pinned prompt and chat history
         if self.prompt_display is not None:
             self.prompt_display.pack_forget()
-        if hasattr(self, 'timeline_frame') and self.timeline_frame.winfo_exists():
+        if hasattr(self, 'timeline_frame') and self.timeline_frame is not None and self.timeline_frame.winfo_exists():
             self.timeline_frame.pack_forget()
         if self.chat_history is not None:
             self.chat_history.pack_forget()
@@ -1667,17 +1807,17 @@ class ChatbotApp:
                                 font=self.fonts["ui_button"], cursor="hand2")
             back_btn.pack(side=tk.LEFT, padx=5)
             
-            title = f"Archive: {self.history_state.get('current_display_name', 'Chat Log')}"
-            tk.Label(nav_bar, text=title, font=self.fonts["italic"], bg=THEME["bg_color"], 
-                     fg=THEME["electric_blue"]).pack(side=tk.LEFT, padx=10)
-            
-            # Action Frame for right-side buttons
+            # Action Frame for right-side buttons (pack RIGHT first to prevent clipping)
             act_frame = tk.Frame(nav_bar, bg=THEME["bg_color"])
             act_frame.pack(side=tk.RIGHT, padx=5)
             
             # Edit Button
-            edit_text = "💾 Save" if self.past_history_view.cget("state") == "normal" else "✏️ Edit"
-            edit_bg = "#005a9e" if self.past_history_view.cget("state") == "normal" else THEME["button_bg_color"]
+            history_view_editable = (
+                self.past_history_view is not None
+                and self.past_history_view.cget("state") == "normal"
+            )
+            edit_text = "💾 Save" if history_view_editable else "✏️ Edit"
+            edit_bg = "#005a9e" if history_view_editable else THEME["button_bg_color"]
             tk.Button(act_frame, text=edit_text, command=self._toggle_history_edit, 
                       bg=edit_bg, fg="white", relief=tk.FLAT, font=self.fonts["ui_button"],
                       cursor="hand2").pack(side=tk.LEFT, padx=5)
@@ -1687,10 +1827,22 @@ class ChatbotApp:
                       bg="#4a0000", fg="white", relief=tk.FLAT, font=self.fonts["ui_button"],
                       cursor="hand2").pack(side=tk.LEFT, padx=5)
 
+            raw_title = self.history_state.get('current_display_name', 'Chat Log')
+            full_title = f"Archive: {raw_title}"
+            max_chars = 32
+            display_title = full_title if len(full_title) <= max_chars else full_title[:max_chars - 3].rstrip() + "..."
+            
+            title_lbl = tk.Label(nav_bar, text=display_title, font=self.fonts["italic"], bg=THEME["bg_color"], 
+                                 fg=THEME["electric_blue"], anchor="w")
+            title_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
+            ToolTip(title_lbl, full_title, app=self)
+
             # Content Area for Text View
             content_frame = tk.Frame(self.history_menu_frame, bg=THEME["bg_color"])
             content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-            self.past_history_view.pack(in_=content_frame, side=tk.TOP, fill="both", expand=True)
+            past_history_view = self.past_history_view
+            if past_history_view is not None and past_history_view.winfo_exists():
+                past_history_view.pack(in_=content_frame, side=tk.TOP, fill="both", expand=True)
             return
 
         # --- LIST VIEW: UNIFIED FILTER & SEARCH CONTROLS ---
@@ -1865,19 +2017,19 @@ class ChatbotApp:
             badge.pack(side=tk.LEFT, padx=(0, 8))
             self._bind_targeted_history_scroll(badge, canvas)
 
+            # Date & Size Subtitle (pack RIGHT first to ensure visibility)
+            meta_str = f"{item.get('date_str', '')} • {item.get('size_str', '')}"
+            meta_lbl = tk.Label(hdr_row, text=meta_str, bg=THEME["widget_bg_color"], 
+                                fg="#888888", font=self.fonts["ui_small"])
+            meta_lbl.pack(side=tk.RIGHT, padx=4)
+            self._bind_targeted_history_scroll(meta_lbl, canvas)
+
             # Display Name
             name_lbl = tk.Label(hdr_row, text=item.get("display_name", "Chat Session"), 
                                 bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
                                 font=self.fonts["main"], anchor="w")
             name_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self._bind_targeted_history_scroll(name_lbl, canvas)
-
-            # Date & Size Subtitle
-            meta_str = f"{item.get('date_str', '')} • {item.get('size_str', '')}"
-            meta_lbl = tk.Label(hdr_row, text=meta_str, bg=THEME["widget_bg_color"], 
-                                fg="#888888", font=self.fonts["ui_small"])
-            meta_lbl.pack(side=tk.RIGHT, padx=4)
-            self._bind_targeted_history_scroll(meta_lbl, canvas)
 
             # Deep Search Snippet Preview (if matched)
             if item.get("snippet"):
@@ -2065,6 +2217,8 @@ class ChatbotApp:
         self.history_state["current_path"] = path
         self.history_state["current_display_name"] = display_name
         
+        if self.past_history_view is None:
+            return
         self.past_history_view.config(state='normal')
         self.past_history_view.delete('1.0', tk.END)
         self.past_history_view.tag_config("search_match", background="#005a9e", foreground="white")
@@ -2135,13 +2289,17 @@ class ChatbotApp:
 
     def _toggle_history_edit(self):
         """Toggle edit mode for the history view."""
-        current_state = self.past_history_view.cget("state")
+        history_view = self.past_history_view
+        if history_view is None:
+            return
+
+        current_state = history_view.cget("state")
         if current_state == "disabled":
-            self.past_history_view.config(state="normal")
+            history_view.config(state="normal")
             self._render_history_menu()
         else:
             self._save_history_edits()
-            self.past_history_view.config(state="disabled")
+            history_view.config(state="disabled")
             self._render_history_menu()
 
     def _save_history_edits(self):
@@ -2149,7 +2307,11 @@ class ChatbotApp:
         path = self.history_state.get("current_path")
         if not path or not os.path.exists(path): return
         
-        raw_text = self.past_history_view.get("1.0", tk.END).strip()
+        history_view = self.past_history_view
+        if history_view is None:
+            return
+
+        raw_text = history_view.get("1.0", tk.END).strip()
         if not raw_text: return
         
         separator = "-" * 50
@@ -2201,11 +2363,12 @@ class ChatbotApp:
 
     def clear_chat_ui(self, preserve_pending=True):
         # Clear the Pinned Prompt
-        if hasattr(self, 'prompt_display') and self.prompt_display.winfo_exists():
-            self.prompt_display.pack_forget()
-            self.prompt_display.config(state='normal')
-            self.prompt_display.delete("1.0", tk.END)
-            self.prompt_display.config(state='disabled')
+        prompt_display = getattr(self, 'prompt_display', None)
+        if prompt_display is not None and prompt_display.winfo_exists():
+            prompt_display.pack_forget()
+            prompt_display.config(state='normal')
+            prompt_display.delete("1.0", tk.END)
+            prompt_display.config(state='disabled')
             
         # Clear the AI Output
         if hasattr(self, 'chat_history') and self.chat_history:
@@ -2469,7 +2632,7 @@ class ChatbotApp:
         try:
             img1 = self.avatar_pil_images.get(start_key)
             img2 = self.avatar_pil_images.get(end_key)
-            if img1 and img2:
+            if Image is not None and ImageTk is not None and img1 is not None and img2 is not None:
                 blended = Image.blend(img1, img2, alpha)
                 tk_img = ImageTk.PhotoImage(blended)
                 if canvas_idx is not None and img_item is not None:
@@ -2539,6 +2702,9 @@ class ChatbotApp:
         user_msg = ui_input.get("1.0", tk.END).strip()
         if not user_msg: user_msg = "Perform an in-depth analysis of this media."
         
+        if VisionHandler is None:
+            messagebox.showerror("Error", "Vision handler is not available.")
+            return
         final_query = VisionHandler.prepare_vision_query(user_msg, is_deep_cook=True)
         
         # Dual-VLM routing (Video vs Image)
@@ -2627,7 +2793,10 @@ class ChatbotApp:
                 chat_handler = Llava15ChatHandler(clip_model_path=proj_path, verbose=True)
                 is_gemma_family = "gemma" in (self.model_path or "").lower()
                 if is_gemma_family:
-                    chat_handler.CHAT_FORMAT = (
+                    # Llava15ChatHandler declares CHAT_FORMAT as a fixed literal;
+                    # use setattr here because this instance-specific template
+                    # intentionally differs for Gemma-family models.
+                    setattr(chat_handler, "CHAT_FORMAT", (
                         "{% for message in messages %}"
                         "{% if message.role == 'system' %}"
                         "<|turn>system\n{{ message.content }}<turn|>\n"
@@ -2661,7 +2830,7 @@ class ChatbotApp:
                         "{% if add_generation_prompt %}"
                         "<|turn>model\n"
                         "{% endif %}"
-                    )
+                    ))
                 self.model.chat_handler = chat_handler
                 print(f"[APEX] Dynamically loaded Vision Projector: {os.path.basename(proj_path)}")
                 return True
@@ -4089,9 +4258,9 @@ class ChatbotApp:
 
             # Tool Execution Check in Standard Generation
             if tools and self.active_persona_level >= 2:
-                has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\(.*?\)', final_answer, re.DOTALL | re.IGNORECASE)
+                has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image)\s*\(.*?\)', final_answer, re.DOTALL | re.IGNORECASE)
                 has_tag_tool = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{', final_answer, re.DOTALL | re.IGNORECASE)
-                has_json_tool = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'](?:web_search|read_file|get_system_stats|control_rgb|generate_image)["\']', final_answer, re.IGNORECASE)
+                has_json_tool = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'](?:web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image)["\']', final_answer, re.IGNORECASE)
                 if has_py_tool or has_tag_tool or has_json_tool:
                     self.process_queue.put({"status": "thinking_status", "content": "Executing tool..."})
                     final_answer = self._run_tool_loop(final_answer, msgs, params)
@@ -5103,7 +5272,7 @@ class ChatbotApp:
         args = {}
 
         # 1. Programmatic Tool Calling (PTC) - Python syntax (e.g. web_search("..."), read_file(path="..."))
-        py_match = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\((.*?)\)(?:\s*```)?', full_resp, re.DOTALL | re.IGNORECASE)
+        py_match = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image)\s*\((.*?)\)(?:\s*```)?', full_resp, re.DOTALL | re.IGNORECASE)
         # 2. Legacy / Tag-based Tool Calls
         call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
         # 3. JSON Action Block (e.g. {"action": "generate_image", "action_input": ...} or {"name": "...", "arguments": ...})
@@ -5122,6 +5291,10 @@ class ChatbotApp:
                         if expr.body.args:
                             if call_name == "web_search": args["query"] = ast.literal_eval(expr.body.args[0])
                             elif call_name == "read_file": args["path"] = ast.literal_eval(expr.body.args[0])
+                            elif call_name == "read_file_range":
+                                positional_names = ("path", "start", "end")
+                                for name, value in zip(positional_names, expr.body.args):
+                                    args[name] = ast.literal_eval(value)
                             elif call_name == "generate_image": args["prompt"] = ast.literal_eval(expr.body.args[0])
                 except Exception:
                     clean_str = raw_args.strip('\'" ')
@@ -5333,7 +5506,7 @@ class ChatbotApp:
         # 1. Filter out code blocks and tool calls so repetitive code / tool queries don't trigger false positives
         cleaned = re.sub(r'```[\s\S]*?```', ' [CODE_BLOCK] ', text)
         cleaned = re.sub(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)[\s\S]*?(?:<\/(?:execute_tool|executetool)>|\}|\n|$)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\b(?:web_search|read_file|get_system_stats|control_rgb|generate_image)\s*\([\s\S]*?\)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\b(?:web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image)\s*\([\s\S]*?\)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
 
         recent = cleaned[-800:]
         n = len(recent)
@@ -6946,7 +7119,13 @@ class ChatbotApp:
                 self._log_and_display("Archive load failed.")
 
     def on_closing(self):
-        self.save_config()
+        try:
+            pos = self._get_current_sash_pos()
+            if pos and pos > 50:
+                self.config['sash_pos'] = pos
+            self.save_config()
+        except Exception:
+            pass
         self.stop_process.set()
         if self.model: self.save_history()
         if self.live_agent_process: self.live_agent_process.terminate()
@@ -7948,7 +8127,8 @@ class ChatbotApp:
     def open_rgb_panel(self):
         """Launches the standalone RGB Control Window."""
         try:
-            from System.rgb_panel import RGBPanel
+            rgb_panel_module = importlib.import_module("System.rgb_panel")
+            RGBPanel = rgb_panel_module.RGBPanel
             RGBPanel(self.root)
         except Exception as e: messagebox.showerror("UI Error", f"Could not launch RGB Panel:\n{e}")
 

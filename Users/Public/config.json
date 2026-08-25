@@ -1,36 +1,36 @@
 {
     "username": "Public",
-    "main_window": "960x600+21+294",
+    "main_window": "1014x867+804+124",
     "model_paths": {
         "fast": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "low": "C:/Users/ccrg6/Documents/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "med": "C:/Users/ccrg6/Documents/SerenityPC/Models/26B-A4B/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
-        "high": "C:/Users/ccrg6/Documents/SerenityPC/Models/26B-A4B/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+        "high": "S:/LLM/yuxinlu1 fable5/gemma4-v2-Q4_K_M.gguf",
         "secret": "S:/LLM/gemma-4-unc/gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.i1-Q4_K_M.gguf",
         "deep_cook": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
-        "vision_video": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        "vision_video": "C:/Users/ccrg6/Documents/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "vision_video_projector": "S:/LLM/gemma-4-12B/mmproj-F16.gguf",
-        "vision_video_deep": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        "vision_video_deep": "C:/Users/ccrg6/Documents/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "vision_video_deep_projector": "",
-        "vision_multimodal": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        "vision_multimodal": "C:/Users/ccrg6/Documents/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "vision_multimodal_projector": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/gemma-4-12b/mmproj-F16.gguf",
         "mid": "S:/SerenityPC/Models/gemma-4-26B MoE/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-        "transcendent": "S:/LLM/META ASI (Muse Glimmer)/Muse-Glimmer-30B-UD-Q4_K_XL.gguf"
+        "transcendent": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     },
     "gpu_layer_config": {
         "fast": 99,
         "search": 99,
         "low": 20,
         "med": 20,
-        "high": 5,
+        "high": 10,
         "secret": 8,
         "deep_cook": 99,
         "vision_video": 99,
         "vision_video_deep": 14,
         "vision_multimodal": 99,
         "mid": 99,
-        "transcendent": 5
+        "transcendent": 99
     },
     "context_size_config": {
         "fast": 32768,
@@ -44,21 +44,21 @@
         "vision_video_deep": 4096,
         "vision_multimodal": 32768,
         "mid": 32768,
-        "transcendent": 65536
+        "transcendent": 32768
     },
     "temp_config": {
         "fast": 0.8,
         "search": 0.8,
         "low": 0.8,
         "med": 0.8,
-        "high": 0.8,
+        "high": 0.4,
         "secret": 0.8,
         "deep_cook": 0.8,
         "vision_video": 0.1,
         "vision_video_deep": 0.1,
         "vision_multimodal": 1.0,
         "mid": 0.8,
-        "transcendent": 1.0
+        "transcendent": 0.8
     },
     "top_p_config": {
         "fast": 0.95,
@@ -100,7 +100,7 @@
         "vision_video_deep": 1.0,
         "vision_multimodal": 1.0,
         "mid": 1.1,
-        "transcendent": 1.05
+        "transcendent": 1.1
     },
     "frequency_penalty_config": {
         "fast": 0.0,
@@ -170,10 +170,10 @@
         "mid": 64,
         "transcendent": 64
     },
-    "sash_pos": 482,
+    "sash_pos": 563,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 6,
+    "active_persona_level": 5,
     "max_persona_level": 6.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
@@ -321,7 +321,6 @@
         },
         "T11": {
             "name": "Lvl 3 12B",
-            "stop": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
             "temp": 0.8,
             "top_p": 0.95,
             "min_p": 0.05,
@@ -474,46 +473,46 @@
             "ctx": 65536
         }
     },
-    "streaming_mode": "Real-time",
+    "streaming_mode": "Buffered",
     "max_token_ratio": 4,
     "auto_vram_offload": false,
     "speculative_drafting": false,
-    "history_lookup_mode": "targeted",
+    "history_lookup_mode": "level",
     "k_cache_type": "q8_0",
-    "v_cache_type": "q4_0",
+    "v_cache_type": "q5_1",
     "hao_preset": "exps=CPU",
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
     "history_usage": "all",
     "ghost_mode": false,
-    "dynamic_params_enabled": true,
+    "dynamic_params_enabled": false,
     "startup_count": 0,
-    "offline_mode": false,
-    "theme": "matrix",
-    "texture_style": "default",
+    "offline_mode": true,
+    "theme": "persona",
+    "texture_style": "gloss",
     "frosted_glass": false,
     "repeat_detection_mode": "lazy",
-    "status_bar_mode": "hybrid",
-    "status_bar_anim_style": "spinner",
+    "status_bar_mode": "percentage",
+    "status_bar_anim_style": "orbit",
     "status_bar_dmn_idle": true,
     "status_bar_fallback_info": true,
     "benchmark_enabled": false,
     "inline_markdown": true,
-    "budget_recovery_mode": "wrapup",
+    "budget_recovery_mode": "autocont",
     "monitor_graph_mode": false,
     "tutorial_completed": true,
     "glitch_animation": "warp",
     "turbovec_mode": "fallback",
-    "thinking_checkbox": true,
+    "thinking_checkbox": false,
     "show_tooltips": true,
     "image_handling": "auto",
     "muse_reasoning_strength": "off",
     "dmn_timeout": "05:00",
     "stt_device_index": 0,
     "stt_language": "en-US",
-    "text_scale": 115,
-    "ui_font": "Segoe UI",
-    "mono_font": "Courier New",
+    "text_scale": 100,
+    "ui_font": "Franklin Gothic Medium",
+    "mono_font": "Cascadia Code",
     "responsive_font_scaling": true,
     "font_size_offsets": {
         "chat": 0,
@@ -522,5 +521,8 @@
         "stats": 0,
         "ui": 0
     },
-    "dark_mode": true
+    "dark_mode": true,
+    "mtp_mapping": {
+        "S:/LLM/Qwen3.8/Qwen3.8-27B-UD-Q4_K_XL.gguf": "S:/LLM/Qwen3.8/mmproj-F16.gguf"
+    }
 }
