@@ -1,71 +1,71 @@
-# IDE, Virtualenvs, and Caches
-.vs/
-.idea/
-.vscode/
-.cache/
-.venv/
+# ==============================================================================
+# Byte-compiled / Optimized / Caches / Environments
+# ==============================================================================
 __pycache__/
-System/__pycache__/
-Live/__pycache__/
-*.pyc
-*.db
-*.sqlite
-*.sqlite3
-*.env
-*.env.example
+*.py[cod]
+*$py.class
+.cache/
+.tmp/
+tmp/
+.venv/
+env/
+venv/
+ENV/
 
-# Logs and temp files
+# ==============================================================================
+# PyInstaller & Build Outputs
+# ==============================================================================
+build/
+dist/
+*.manifest
+*.spec.bak
+/build_log.txt
+/build_log_utf8.txt
+/stderr
+
+# ==============================================================================
+# IDEs & Editor Files
+# ==============================================================================
+.vscode/
+.idea/
+.vs/
+*.code-workspace
+
+# ==============================================================================
+# OS Generated Files
+# ==============================================================================
+[Dd]esktop.ini
+Thumbs.db
+ehthumbs.db
+.DS_Store
+
+# ==============================================================================
+# App Runtime Logs, History, & User Artifacts
+# ==============================================================================
 Logs/
 System/Logs/
 Live/Logs/
-/build_log_utf8.txt
-/build_log.txt
-/stderr
-tmp/
-.tmp/
-/.tmp.drivedownload
-/.tmp.driveupload
-
-# Workspace configurations and scratch files
-/.agents
-/Deep Cook Latest.txt
-/History
-/main.py.txt.txt
-/Misc
-/Notepad.txt
-/removedcode.txt
-scratch/
-/SerenityPC.code-workspace
-/test_logs.py
-/TODO.txt
-
-# Benchmark & test reports, private notes, and crash logs
-benchmark_reports/
-debate_reports/
-wringer/old/
-wringer_highscores.json
-*.gguf_report.md
-gemma4_param_notes.md
-test01rough.md
-modeltest*.txt
+History/
+Users/
 crash_*.txt
-*.lnk
+*.log
 
-# Large external folders/binaries
-/temp_zip
-/test files
-/llama.cpp
-/llama-diffusion-src
-/llama-b9592
-/llama-cpp-python-src
-/Mystic_light_SDK_1.0.0.08
-/Live/t5gemma-2-4b-4b
-/Live/t5gemma-2-1b-1b
-/Live/t5gemma-2-270m-270m
+# ==============================================================================
+# Local Configs, Secrets & State
+# ==============================================================================
+*.env
+*.env.example
+*.db
+*.sqlite
+*.sqlite3
+System/config.json
+System/rgb_state.json
+System/vault/
+
+# ==============================================================================
+# Heavy Model Weights & External Binaries
+# ==============================================================================
 Models/
-dist/
-
-# Model weight and binary formats
 *.gguf
 *.safetensors
 *.bin
@@ -75,19 +75,39 @@ dist/
 *.dll
 *.so
 *.dylib
+*.whl
 *.zip
 *.tar.gz
 *.tgz
 *.rar
-# Windows OS files
-[dD]esktop.ini
-**/[dD]esktop.ini
-Thumbs.db
-**/Thumbs.db
 
-System/config.json
-Docs/Test Prompts.txt
-System/rgb_state.json
-/setup.py
-dist/llama_cpp_python-0.3.23-py3-none-win_amd64.whl
-Users/GhostHeartZer0
+# Source / External Repos
+/llama.cpp
+/llama-diffusion-src
+/llama-b9592
+/llama-cpp-python-src
+/Mystic_light_SDK_1.0.0.08
+/Live/t5gemma-2-4b-4b
+/Live/t5gemma-2-1b-1b
+/Live/t5gemma-2-270m-270m
+
+# ==============================================================================
+# Benchmarks, Scratch & Test Artifacts
+# ==============================================================================
+benchmark_reports/
+debate_reports/
+benchmarks/wringer/old/
+wringer_highscores.json
+*.gguf_report.md
+gemma4_param_notes.md
+test01rough.md
+modeltest*.txt
+scratch/
+/Deep Cook Latest.txt
+/Notepad.txt
+/removedcode.txt
+/TODO.txt
+/.agents
+Misc/
+test files/
+/temp_zip

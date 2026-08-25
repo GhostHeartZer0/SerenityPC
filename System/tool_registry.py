@@ -1,5 +1,5 @@
 # System/tool_registry.py
-# Modular Tool Registry for Programmatic & Template Tool Calling in Serenity AI.
+# Modular Tool Registry for Programmatic & Template Tool Calling in SerenityPC.
 
 import os
 import json
@@ -32,6 +32,21 @@ class GemmaToolRegistry:
                             "path": {"type": "string", "description": "Absolute path to the file."}
                         },
                         "required": ["path"]
+                    }
+                }
+            },
+            {
+                "function": {
+                    "name": "read_file_range",
+                    "description": "Reads an inclusive range of 1-based lines from a local text file for analysis.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Absolute path to the file."},
+                            "start": {"type": "integer", "description": "First line number to read (1-based, inclusive)."},
+                            "end": {"type": "integer", "description": "Last line number to read (1-based, inclusive)."}
+                        },
+                        "required": ["path", "start", "end"]
                     }
                 }
             },
@@ -356,6 +371,44 @@ root.mainloop()"""
             except Exception as e:
                 return f"Notice: Error reading file '{path}': {str(e)}"
 
+        @self.registry.register("read_file_range")
+        def handle_read_file_range(args: Dict[str, Any]) -> str:
+            path = args.get("path")
+            if not path:
+                return "Notice: No file path provided."
+
+            start_value = args.get("start")
+            end_value = args.get("end")
+            if start_value is None or end_value is None:
+                return "Notice: Start and end must be integer line numbers."
+            try:
+                start = int(start_value)
+                end = int(end_value)
+            except (TypeError, ValueError):
+                return "Notice: Start and end must be integer line numbers."
+            if start < 1 or end < start:
+                return "Notice: Start and end must define a valid 1-based inclusive line range."
+
+            target_path = path
+            if not os.path.exists(target_path):
+                base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
+                alt_path = os.path.join(base_dir, path)
+                if os.path.exists(alt_path):
+                    target_path = alt_path
+
+            if not os.path.exists(target_path):
+                return f"Notice: File '{path}' was not found."
+
+            try:
+                with open(target_path, "r", encoding="utf-8", errors="ignore") as f:
+                    selected_lines = [
+                        line for line_number, line in enumerate(f, start=1)
+                        if start <= line_number <= end
+                    ]
+                return "".join(selected_lines)
+            except Exception as e:
+                return f"Notice: Error reading file '{path}': {str(e)}"
+
         @self.registry.register("control_rgb")
         def handle_control_rgb(args: Dict[str, Any]) -> str:
             base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
@@ -399,7 +452,7 @@ root.mainloop()"""
             # Strictly filter out web_search and remote internet services when offline
             base_tools = [t for t in base_tools if t["function"]["name"] not in ("web_search",)]
             
-        allowed_names = {"get_system_stats", "control_rgb", "generate_image", "read_file"}
+        allowed_names = {"get_system_stats", "control_rgb", "generate_image", "read_file", "read_file_range"}
         if not is_offline:
             allowed_names.add("web_search")
         return [t for t in base_tools if t["function"]["name"] in allowed_names]

@@ -1,5 +1,5 @@
 # System/modular_registry.py
-# Reusable Modular Registry Framework & Dynamic Parameter Auto-Adjustment Engine for Serenity AI.
+# Reusable Modular Registry Framework & Dynamic Parameter Auto-Adjustment Engine for SerenityPC.
 
 import re
 from typing import Dict, Any, Callable, List, Optional, Tuple

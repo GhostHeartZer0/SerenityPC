@@ -10,8 +10,8 @@ NOTE: AI is hyper-demanding on a system. If a model crashes, please use a lower 
 Turbo mode adds 3 GPU layers to the current mode, clicking the model name (eg. The Helper) will unload turbo. the "The" moniker is used as a turbo mode sensor, as is the background colors for the model type. 
 Lite mode disables GPU offloading, using only the CPU. GPU usage and performance is dependent on the proper framework and hardware/software capability.
 
-Serenity AI - Chatbot Application Guide
-This guide details all the necessary hardware, software, and files required to run the Serenity AI chatbot application. Following these steps will ensure the application runs correctly with full GPU acceleration.
+SerenityPC - Chatbot Application Guide
+This guide details all the necessary hardware, software, and files required to run the SerenityPC chatbot application. Following these steps will ensure the application runs correctly with full GPU acceleration.
 
 1. Hardware Requirements
 GPU (Crucial): An NVIDIA graphics card with CUDA support is required for GPU acceleration. A GPU with at least 4GB of VRAM is recommended to use the persona-level reloading features without instability.

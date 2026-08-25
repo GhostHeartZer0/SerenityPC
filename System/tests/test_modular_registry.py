@@ -110,6 +110,7 @@ class TestGemmaToolRegistry(unittest.TestCase):
         self.assertIn("web_search", keys)
         self.assertIn("get_system_stats", keys)
         self.assertIn("read_file", keys)
+        self.assertIn("read_file_range", keys)
         self.assertIn("control_rgb", keys)
         self.assertIn("generate_image", keys)
 
@@ -121,6 +122,23 @@ class TestGemmaToolRegistry(unittest.TestCase):
     def test_read_file_not_found(self):
         result = self.tool_reg.execute("read_file", {"path": "non_existent_file_12345.txt"})
         self.assertIn("not found", result.lower())
+
+    def test_read_file_range(self):
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False) as test_file:
+            test_file.write("one\ntwo\nthree\nfour\n")
+            test_path = test_file.name
+        try:
+            result = self.tool_reg.execute("read_file_range", {
+                "path": test_path,
+                "start": 2,
+                "end": 3,
+            })
+            self.assertEqual(result, "two\nthree\n")
+        finally:
+            os.unlink(test_path)
 
     def test_offline_mode_excludes_web_search(self):
         from System.network_guard import set_offline_mode

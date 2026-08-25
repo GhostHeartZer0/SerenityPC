@@ -1,9 +1,14 @@
 # serenity_resources.py
-# Stores static configurations, themes, and persona data for Serenity AI.
+# Stores static configurations, themes, and persona data for SerenityPC.
 
 import os
+import sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 SYSTEM_DIR = os.path.join(BASE_DIR, "System")
 MEDIA_DIR = os.path.join(SYSTEM_DIR, "Media")
 LIVE_DIR = os.path.join(BASE_DIR, "Live")
@@ -339,7 +344,7 @@ CONTEXT_SIZE_MAP = {
     2: 16384, 
     3: 32768,  # Extended for Collaborator
     4: 32768,  # Extended for Companion
-    5: 65536, # Massive context for Sage
+    5: 262144, # Massive context for Sage
     6: 131072, # 128k for Transcendent One
     7: 131072 # 128k for Cecilia
 }

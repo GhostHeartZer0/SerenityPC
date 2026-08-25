@@ -1,4 +1,4 @@
-Serenity AI - Easy Setup Guide
+SerenityPC - Easy Setup Guide
 (Updated for all features)
 
 This guide will walk you through setting up your AI chatbot on your Windows computer.
@@ -76,7 +76,7 @@ Go to:
 https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF
 and download the proper one; Recommended VRAM overhead is half a gig, so go something like VRAM-0.5GB=max file size of the model. This goes in the "Models" Folder.
 
-Step 5: Run Serenity AI!
+Step 5: Run SerenityPC!
 
 Close the Developer Command Prompt.
 
