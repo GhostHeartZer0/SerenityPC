@@ -27,7 +27,41 @@
 
 ## Current Version:
 
-### Version 1.6.0 -beta
+### Version 1.6.0
+- **Wringer Benchmark Test Import & Bootstrap Path Fix**:
+  - Corrected `wringer_dir` resolution in `test_wringer_checkpointing.py` to point to `benchmarks/wringer`.
+  - Fixed project root traversal and added `__main__` guard to `_bootstrap_venv()` in `Wringer.py` to prevent import recursion during unit test runs.
+- **Security Hardening & Sandboxing**:
+  - Implemented OS permission, canonical path, and readability validation in `launch_lore_book` preventing arbitrary executable launching.
+  - Added ReDoS mitigations to `_parse_and_stage_filename_imports` bounding input length (`<= 10000` chars) and regex token length (`<= 260` chars).
+  - Added DoS throttling with `threading.Semaphore(2)` and search debounce generation tracking in `_async_deep_history_search`.
+  - Sandboxed `read_file` and `read_file_range` in `System/tool_registry.py` to strictly restrict file access inside Serenity workspace directories and reject external path traversals.
+  - Added unit test suite `System/tests/test_security_hardening.py` verifying sandboxing, ReDoS safety, and lore book execution permissions.
+- **UI State & Mid Split Persistence**:
+  - Bound sash release and configure triggers ensuring mid split sash position persists across app restarts and profile switches.
+- **Testing & Verification**:
+  - Added unit test suite `System/tests/test_delegation_settings_and_cecilia.py` verifying Delegation section settings for Lvls 6 & 7 (`delegation_enabled`, `cecilia_delegation_mode`, `subagent_selection_mode`, `delegation_model_mode`, `delegation_chain_preset`, `delegation_handoff_target`) and Cecilia Shadow Wizard vs Divine Judgement prompt separation, subagent hierarchy visibility, and multi-agent dispatch execution.
+  - Implemented direct omniscience fast-path in `System/orchestration_manager.py` for Cecilia Level 7 `divine_judgement` mode bypassing subagent handoffs.
+  - Added `get_available_subagents` utility in `System/orchestration_manager.py` to dynamically filter visible subagents based on parent level (1-5 visible to Level 6 supervisor).
+- **Multimodal & Architecture Routing Fixes**:
+  - Added `_is_native_encoder_decoder_model` detection to `main.py` recognizing unified native encoder/decoder architectures (e.g. 12B) without external CLIP `.mmproj` projectors.
+  - Enforced native mode non-fallback guarantee in `send_message` so native mode always utilizes the active model directly without swapping to the vision model.
+  - Refined `_find_projector_for_model` to strictly search for `.mmproj` files (`.mmproj`, `.mmproj.gguf`, `mmproj*.gguf`) and prioritize adjacent model directory projectors.
+  - Added automatic MTP Speculative Drafting bypass for models smaller than 4GB with settings UI annotation and tracking in `TODO.txt` line 37.
+  - Preserved native `gemma` architecture header integrity in `System/gguf_draft_model.py` preventing invalid `llama` architecture patching on Gemma MTP/assistant draft heads.
+  - Preserved explicit manual mapping priority in `_find_projector_for_model` while safely bypassing auto-discovery for native encoder/decoder models.
+- **GUI, Diagnostics & Type Safety Fixes**:
+  - Added model existence and loading guards to `send_message` inline media handler and `_generation_worker` in `main.py` preventing `NoneType` `create_chat_completion` crashes when uninitialized.
+  - Unpacked `parent` keyword argument conditionally across `main.py` dialogs (`askyesno`) to eliminate `None` type mismatch warning.
+  - Removed duplicate declarations of `on_closing`, `zoom_in`, `zoom_out`, `zoom_reset`, and `_load_dmn_backbone` in `main.py`.
+  - Fixed unbound/undefined variables in `main.py` (`recent_context` in `_dmn_pondering_cycle`, `prompt_str` -> `prompt` in Deep Cook sub-task tool loop, `LEVEL7_SYNTHESIS_SYSTEM_PROMPT` scope, and `traceback` / `requests` lazy imports).
+  - Fixed audio format validation in `System/vision_handler.py` to support `.ogg` and `.m4a` files alongside `.wav`, `.mp3`, and `.flac`.
+  - Enforced thought channel isolation in `_batch_vision_worker` using `split_thoughts_and_answer` to route internal reasoning strictly to Thought Logs and deliver clean final answers without truncation.
+  - Added model load check to `initiate_vision_analysis` to prevent uninitialized media worker execution, and updated batch abort diagnostic log to distinguish audio/video media.
+  - Fixed tuple query rendering in chat UI by unwrapping `(query, budget)` tuple before dispatching to `_display_user_message`.
+  - Fixed thought log routing in `_batch_vision_worker` so direct answers are not echoed into `[THOUGHTS: <file>]` blocks when no reasoning tags are present.
+  - Patched GGUF assistant architecture header handling in `patch_gguf_architecture` for standalone draft model compatibility.
+  - Fixed missing `if final_ans:` fallbacks for thought log output in both audio and video batch processors to ensure reasoning is logged even when no explicit reasoning tags are present.
 - **KV Cache Footprint & Context Scaling Calibration**:
   - Calibrated Level 5 (Sage) default context window to `65536` (64k) in `serenity_resources.py` to prevent runaway host RAM/VRAM exhaustion.
   - Removed artificial 35% VRAM cap on KV cache estimation in `calculate_dynamic_gpu_layers` across `main.py` and `benchmarks/debate/Debate.py`, ensuring dynamic layer auto-offload accurately computes full KV allocation at massive context sizes (64k - 256k) and prevents CUDA OOM crashes.

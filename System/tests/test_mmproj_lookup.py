@@ -30,13 +30,16 @@ class MockApp:
 
     # Bind the exact lookup method from main.py
     from main import ChatbotApp
+    _is_native_encoder_decoder_model = ChatbotApp._is_native_encoder_decoder_model
     _find_projector_for_model = ChatbotApp._find_projector_for_model
+    _ensure_chat_handler = ChatbotApp._ensure_chat_handler
 
 from unittest.mock import patch
 
 class TestMmprojLookup(unittest.TestCase):
     def setUp(self):
         self.app = MockApp()
+        self.app.model = object() # Dummy model instance
 
     @patch("os.path.exists")
     @patch("os.listdir")
@@ -68,6 +71,13 @@ class TestMmprojLookup(unittest.TestCase):
         mock_walk.return_value = []
         proj = self.app._find_projector_for_model(self.app.model_paths["med"], interactive=False)
         self.assertIsNone(proj)
+
+    def test_12b_detected_as_native_encoder_decoder(self):
+        """Verify 12B model is detected as native encoder/decoder and passes chat handler check without mmproj."""
+        is_native = self.app._is_native_encoder_decoder_model(self.app.model_paths["med"])
+        self.assertTrue(is_native)
+        self.app.model_path = self.app.model_paths["med"]
+        self.assertTrue(self.app._ensure_chat_handler(interactive=False))
 
     @patch("os.path.exists")
     def test_persistent_mapping_takes_priority(self, mock_exists):
