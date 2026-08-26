@@ -12,11 +12,8 @@ Users = os.path.join(os.path.dirname(__name__), 'Users')
 
 # 1. Data Files: Collect app asset folders and library data
 datas = [
-    ('System/Media', 'System/Media'),
     ('System', 'System'),
-    ('Tools', 'Tools'),
     (Users, 'Users'), # Bundled Users directory
-    ('Models', 'Models'), # <-- ADDED: Bundle the Models directory
 ]
 datas += collect_data_files('llama_cpp')
 
@@ -34,7 +31,6 @@ hiddenimports = [
     # Monitoring & Hardware
     'pynvml',
     'psutil',
-    'unittest',
     # Imaging, Video & GUI
     'PIL',
     'PIL.Image',
@@ -49,13 +45,30 @@ hiddenimports = [
 # Recursively capture all modules within the System package
 hiddenimports += collect_submodules('System')
 
-# Optional modules (guarded imports in main.py)
-for optional_mod in ['torch', 'numpy', 'requests']:
+# Optional modules: only pull essential submodules
+for optional_mod in ['numpy', 'requests']:
     try:
         __import__(optional_mod)
         hiddenimports += collect_submodules(optional_mod)
     except ImportError:
         pass
+
+# Heavy packages to exclude from build bundle
+excludes = [
+    'torch',
+    'torchvision',
+    'torchaudio',
+    'bitsandbytes',
+    'triton',
+    'benchmarks',
+    'pytest',
+    'unittest',
+    'test',
+    'IPython',
+    'matplotlib',
+    'scipy',
+    'pandas',
+]
 
 a = Analysis(
     ['main.py'],
@@ -66,7 +79,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['benchmarks', 'pytest'],
+    excludes=excludes,
     noarchive=False,
     optimize=0,
 )

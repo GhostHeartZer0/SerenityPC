@@ -12,4 +12,4 @@ set TORCH_EXTENSIONS_DIR=%~dp0tmp\torch_extensions
 set TRITON_CACHE_DIR=%~dp0tmp\triton_cache
 
 set PYTHONPATH=.venv\Lib\site-packages
-python.exe main.py
+pythonw.exe main.py

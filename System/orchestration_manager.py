@@ -401,9 +401,56 @@ class OrchestrationManager:
         # Config Options
         selection_mode = "minimal"
         model_mode = "lvl6_7_model"
+        cecilia_mode = "shadow_wizard"
         if self.app and hasattr(self.app, "config"):
             selection_mode = self.app.config.get("subagent_selection_mode", "minimal")
             model_mode = self.app.config.get("delegation_model_mode", "lvl6_7_model")
+            cecilia_mode = self.app.config.get("cecilia_delegation_mode", "shadow_wizard")
+
+        # Fast-Path: Cecilia Divine Judgement Mode (Direct Omniscience without subagent handoffs)
+        if orchestrator_level == 7 and cecilia_mode == "divine_judgement":
+            _log_diag("=== [CECILIA DIVINE JUDGEMENT: DIRECT OMNISCIENCE] ===")
+            _log_subagent("👁 [CECILIA: DIVINE JUDGEMENT] Bypassing subagents. Engaging direct omniscience...")
+            _log_thought("Cecilia Divine Judgement: Subagent delegation bypassed. Direct insight engaged.")
+
+            try:
+                from serenity_resources import DELEGATION_SYSTEM_PROMPTS
+                dj_sys = DELEGATION_SYSTEM_PROMPTS.get(7, {}).get("divine_judgement", "Role: 'Cecilia' (Divine Judgement Mode).")
+            except Exception:
+                dj_sys = "Role: 'Cecilia' (Divine Judgement Mode)."
+
+            direct_res = ""
+            if hasattr(self.app, "_run_blocking_inference"):
+                direct_prompt = [
+                    {"role": "system", "content": dj_sys},
+                    {"role": "user", "content": user_query}
+                ]
+                try:
+                    direct_res = self.app._run_blocking_inference(direct_prompt, params)
+                except Exception as e:
+                    direct_res = f"Divine Judgement deduction: {e}"
+            else:
+                direct_res = f"Cecilia Core Insight for: {user_query}"
+
+            trace_dj = DecisionTrace(
+                trace_id=f"trace_dj_{int(time.time() * 1000)}",
+                orchestrator_level=7,
+                user_query=user_query,
+                profile=QueryProfile(),
+                candidate_scores=[],
+                selected_agent_ids=[],
+                decision_summary="Cecilia Divine Judgement: Direct omniscient inference without subagent handoffs.",
+                execution_duration_ms=round((time.time() - t0) * 1000, 2)
+            )
+
+            return {
+                "orchestrator_level": 7,
+                "trace": asdict(trace_dj),
+                "reports": [],
+                "compiled_briefing": direct_res,
+                "factual_data": "",
+                "reasoning_data": direct_res
+            }
 
         lvl_to_tier = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
 
