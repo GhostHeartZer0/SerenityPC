@@ -1,0 +1,65 @@
+# test_mmproj_lookup.py
+# Unit and integration test suite for mmproj lookup hierarchy, parameter matching, and fallback selection.
+
+import unittest
+import sys
+import os
+
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
+
+class MockApp:
+    def __init__(self):
+        self.config = {
+            "mmproj_mapping": {}
+        }
+        self.model_paths = {
+            "med": os.path.join(base_dir, "Models", "12B", "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"),
+            "high": os.path.join(base_dir, "Models", "26B-A4B", "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"),
+            "fast": os.path.join(base_dir, "Models", "E4B", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+            "vision_multimodal": os.path.join(base_dir, "Models", "E4B", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+            "vision_multimodal_projector": os.path.join(base_dir, "Models", "E4B", "mmproj-BF16.gguf")
+        }
+        self.model_path = self.model_paths["med"]
+        self.current_model_tier = "med"
+        self.save_config_called = False
+
+    def save_config(self):
+        self.save_config_called = True
+
+    # Bind the exact lookup method from main.py
+    from main import ChatbotApp
+    _find_projector_for_model = ChatbotApp._find_projector_for_model
+
+class TestMmprojLookup(unittest.TestCase):
+    def setUp(self):
+        self.app = MockApp()
+
+    def test_e4b_model_matches_e4b_projector(self):
+        """Verify E4B model automatically matches adjacent or size-matched E4B projector."""
+        proj = self.app._find_projector_for_model(self.app.model_paths["fast"], interactive=False)
+        self.assertIsNotNone(proj)
+        self.assertIn("E4B", proj)
+
+    def test_26b_model_matches_26b_projector(self):
+        """Verify 26B model automatically matches adjacent or size-matched 26B projector."""
+        proj = self.app._find_projector_for_model(self.app.model_paths["high"], interactive=False)
+        self.assertIsNotNone(proj)
+        self.assertIn("26B-A4B", proj)
+
+    def test_12b_model_avoids_incompatible_e4b_projector(self):
+        """Verify 12B model does NOT blindly bind an incompatible 2560-dim E4B projector."""
+        proj = self.app._find_projector_for_model(self.app.model_paths["med"], interactive=False)
+        # Since 12B directory has no mmproj, it should return None rather than a broken 4B projector
+        self.assertIsNone(proj)
+
+    def test_persistent_mapping_takes_priority(self):
+        """Verify user manual mapping in mmproj_mapping is prioritized."""
+        fake_custom_path = os.path.join(base_dir, "Models", "26B-A4B", "mmproj-BF16.gguf")
+        self.app.config["mmproj_mapping"][self.app.model_paths["med"]] = fake_custom_path
+        proj = self.app._find_projector_for_model(self.app.model_paths["med"], interactive=False)
+        self.assertEqual(proj, fake_custom_path)
+
+if __name__ == "__main__":
+    unittest.main()

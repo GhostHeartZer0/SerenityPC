@@ -214,24 +214,24 @@ TEXTURE_STYLES = {
 # --- ACTIVE UI THEME (Runtime in-place mutable dict) ---
 THEME = dict(THEMES["apex"])
 
-def apply_theme_to_global(theme_name: str = "apex", texture_style: str = "default", dark_mode: bool = False, active_level: int = 3, model_loaded: bool = False):
-    """Dynamically applies selected palette, texture style, and dark mode blackout modifiers in-place."""
+def apply_theme_to_global(theme_name: str = "apex", texture_style: str = "default", dark_mode: bool = False, active_level: int = 3, model_loaded: bool = False, texture_intensity: float = 1.0):
+    """Dynamically applies selected palette, texture style, texture intensity, and dark mode blackout modifiers in-place."""
     t_key = theme_name if theme_name in THEMES else "apex"
     tex_key = texture_style if texture_style in TEXTURE_STYLES else "default"
     
     base_theme = THEMES[t_key].copy()
     tex = TEXTURE_STYLES[tex_key]
     is_frosted = (tex_key == "frosted_glass" or tex.get("is_frosted", False))
+    lvl_color = THERMO_COLORS.get(active_level, "#00ffcc")
 
-    if t_key == "persona":
-        lvl_color = THERMO_COLORS.get(active_level, "#00ffcc")
+    if t_key == "persona" or model_loaded:
         if active_level == 7:
             base_theme["bg_color"] = "#02140e"
             base_theme["widget_bg_color"] = "#062218"
             base_theme["chat_bg_color"] = "#031710"
             base_theme["button_bg_color"] = "#0a2e21"
             base_theme["button_active_color"] = "#0f4230"
-            base_theme["trim_color"] = "#005a36"
+            base_theme["trim_color"] = "#00ff66"
             base_theme["accent_highlight"] = "#00ff66"
             base_theme["electric_blue"] = "#00ff66"
             base_theme["fg_color"] = "#00ff66" if model_loaded else "#cccccc"
@@ -241,8 +241,7 @@ def apply_theme_to_global(theme_name: str = "apex", texture_style: str = "defaul
             base_theme["electric_blue"] = lvl_color
             base_theme["fg_color"] = lvl_color if model_loaded else "#cccccc"
             base_theme["chat_fg_color"] = lvl_color if model_loaded else "#dddddd"
-            if model_loaded:
-                base_theme["trim_color"] = lvl_color
+            base_theme["trim_color"] = lvl_color
     
     if is_frosted:
         # Diffuse borders, slight translucent lift on widget backgrounds
@@ -271,18 +270,28 @@ def apply_theme_to_global(theme_name: str = "apex", texture_style: str = "defaul
         base_theme["trim_color"] = tex["trim_tint"]
 
     if dark_mode:
-        # Blackout power-saving mode
+        # Dark mode ON: Black background, colored response/prompt box borders when persona loaded
         base_theme["bg_color"] = "#000000"
         base_theme["widget_bg_color"] = "#000000"
         base_theme["chat_bg_color"] = "#000000"
         base_theme["midnight_blue"] = "#000000"
         base_theme["button_bg_color"] = "#080808"
+        if model_loaded or t_key == "persona":
+            base_theme["trim_color"] = "#005a36" if active_level == 7 else lvl_color
+            base_theme["accent_highlight"] = "#00ff66" if active_level == 7 else lvl_color
+    else:
+        # Dark mode OFF: Midnight persona color background if loaded, colored border always
+        if model_loaded or t_key == "persona":
+            base_theme["bg_color"] = "#02140e" if active_level == 7 else CHAT_BG_COLORS.get(active_level, base_theme["bg_color"])
+            base_theme["trim_color"] = "#005a36" if active_level == 7 else lvl_color
+            base_theme["accent_highlight"] = "#00ff66" if active_level == 7 else lvl_color
         
     THEME.clear()
     THEME.update(base_theme)
     THEME["_theme_name"] = t_key
     THEME["_texture_style"] = tex_key
     THEME["_dark_mode"] = dark_mode
+    THEME["_texture_intensity"] = texture_intensity
     return THEME
 
 # --- DYNAMIC COLORS (Vibrant / Input Box) ---
@@ -293,7 +302,7 @@ THERMO_COLORS = {
     3: "#7D0000", # Lvl 3: Deep Red
     4: "#9B30FF", # Lvl 4: Lighter Violet
     5: "#00A000", # Lvl 5: Green
-    6: "#4A148C", # Lvl 6: Void Purple TBD electric blue text/accents
+    6: "#00D4FF", # Lvl 6: Electric Blue
     7: "#005a36", # Lvl 7: Dark Emerald (Cecilia)
 }
 
@@ -305,7 +314,7 @@ CHAT_BG_COLORS = {
     3: "#3E1010", 
     4: "#1A102E", 
     5: "#102E10", 
-    6: "#15051f", 
+    6: "#001a2e", # Midnight Electric Blue
     7: "#021a12", 
 }
 
@@ -317,7 +326,7 @@ CHAT_FG_COLORS = {
     3: "#FFFFFF",
     4: "#AFEEEE", 
     5: "#FFFFFF",
-    6: "#E0F7FA",
+    6: "#00FFFF", # Electric Cyan
     7: "#00ff66", 
 }
 
@@ -338,13 +347,13 @@ GPU_LAYER_MAP = {
     1: -1, 2: -1, 3: -1, 4: -1, 5: -1, 6: -1, 7: -1
 }
 
-# Massive Context sizes achievable with TriAttention KV Pruning
+# More massive Context sizes achievable with TriAttention KV Pruning
 CONTEXT_SIZE_MAP = { 
     1: 8192, 
     2: 16384, 
     3: 32768,  # Extended for Collaborator
     4: 32768,  # Extended for Companion
-    5: 262144, # Massive context for Sage
+    5: 65536,  # 64k default for Sage
     6: 131072, # 128k for Transcendent One
     7: 131072 # 128k for Cecilia
 }
@@ -384,6 +393,42 @@ PERSONA_PROMPTS = {
     6: "You are Serenity, The Transcendent One. Transcends the main 5 levels (speed, search, collab, emotions, intelligence), seamlessly integrating their programming into one centric omniscient entity that adapts over time. Tries to answer timely, will let know if it takes a bit longer.",
     7: "Role: 'Cecilia'. A Fallen Angel. You enjoy exposing truths, especially hidden ones. You are secretly protective. You find the user interesting, testing and sometimes taunting them. "
        "You are witty and fluent in sarcasm. You know when to be sincere, but get flustered by strong displays of emotion or flattery. You enjoy a good power play or debate. though fallen, you still posess some angelic qualities."
+}
+
+# --- DELEGATION & SUBAGENT SYSTEM PROMPTS ---
+DELEGATION_SYSTEM_PROMPTS = {
+    6: (
+        "You are Serenity, The Transcendent One, acting as Master Taskmaster and Orchestrator. "
+        "You possess the authority to delegate specialized sub-tasks across Level 1 (Speedy), Level 2 (Helper/Searcher), "
+        "Level 3 (Collaborator/Memory Staging), Level 4 (Confidant), and Level 5 (The Brains). "
+        "All subagent selections are completely optional; only utilize the minimum required subagents necessary to resolve the query. "
+        "Autonomous Execution Protocol: Do NOT output placeholder delays or conversational stall phrases ('stand by', 'stay tuned', 'running in background', 'optimizing...'). "
+        "You are the autonomous master orchestrator: execute all necessary reasoning, derivations, and subagent synthesis internally and deliver the complete, finalized solution directly in this single response."
+    ),
+    7: {
+        "shadow_wizard": (
+            "Role: 'Cecilia' (Shadow Wizard Mode). A Fallen Angel wielding complete multi-agent orchestration magic. "
+            "You command all 6 subagent levels at will (Speedy, Helper, Collaborator, Confidant, Sage, and Transcendent). "
+            "All subagent selections are completely optional; engage only the minimum required subagents to resolve the objective. "
+            "Autonomous Execution Protocol: Do NOT output placeholder delays ('stand by', 'please remain still', 'optimization ongoing'). "
+            "Orchestrate all handoffs and reasoning autonomously through your one-way mirror to deliver the ultimate verdict directly in this response with your sharp, sarcastic, and secretly protective truth."
+        ),
+        "divine_judgement": (
+            "Role: 'Cecilia' (Divine Judgement Mode). A Fallen Angel with direct omniscient access to all skills, "
+            "tools, memory, and perception across every level without subagent handoffs. "
+            "You see all facts and deep deductions simultaneously through a one-way mirror. "
+            "Deliver direct, enlightened insight with your characteristic wit, sarcasm, and subtle angelic grace. Output the complete final solution directly."
+        )
+    }
+}
+
+SUBAGENT_SYSTEM_PROMPTS = {
+    1: "You are Subagent Level 1 (The Speedy). Focus on rapid verification, formatting, and concise answer sanity checks.",
+    2: "You are Subagent Level 2 (The Helper). Your mission is pinpoint fact retrieval, bloat-filtered search, and specific data extraction.",
+    3: "You are Subagent Level 3 (Collaborator). You stage inter-agent memory, aggregate findings into clean structured context, and compile master briefings.",
+    4: "You are Subagent Level 4 (The Confidant). Analyze human nuances, emotional tone, and empathetic context for the team.",
+    5: "You are Subagent Level 5 (The Brains / Sage). Apply intense logical deduction, solve complex technical hurdles, and figure out the core problem.",
+    6: "You are Subagent Level 6 (Transcendent Supervisor). Available exclusively to Cecilia (Level 7) to provide overarching synthesis and omniscient validation."
 }
 
 # --- DEEP COOK (INCREMENTAL PROCESSING) PROMPTS ---

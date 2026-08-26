@@ -1,6 +1,6 @@
 # Changelog
 
-> For the repository versioning specification (historical v1.x, -alpha mid-releases, SemVer 2.0+ with even minor features and odd bug patches), see VERSIONING.md.
+> For the repository versioning specification (historical v1.x, alpha mid-releases, SemVer 2.0), see VERSIONING.md.
 
 ---
 
@@ -18,13 +18,83 @@
 - Deep Cook Cycles Verified.
 
 ### Version 1.7.0
-- Multi-Agent Delegation & Subagents Implemented.
+- **Fonts Refactored**
+  - Updated the font options
+  - Replaced hardcoded font names with dynamic configuration.
+- **Settings UI Refactored**
+  - Settings UI Reorganized into dedicated tabs.
 
----
-### Version 1.6.0
-- **TBD**
+## Current Version:
 
-## Current & Historic Versions:
+### Version 1.6.0 -beta
+- **KV Cache Footprint & Context Scaling Calibration**:
+  - Calibrated Level 5 (Sage) default context window to `65536` (64k) in `serenity_resources.py` to prevent runaway host RAM/VRAM exhaustion.
+  - Removed artificial 35% VRAM cap on KV cache estimation in `calculate_dynamic_gpu_layers` across `main.py` and `benchmarks/debate/Debate.py`, ensuring dynamic layer auto-offload accurately computes full KV allocation at massive context sizes (64k - 256k) and prevents CUDA OOM crashes.
+- **Autonomous Subagent Chaining & Model Consolidation**:
+  - Injected anti-stall directive into `DELEGATION_SYSTEM_PROMPTS` in `serenity_resources.py` eliminating conversational delay loops and enforcing full 1-turn autonomous solutions.
+  - Added Subagent Density configuration (`subagent_selection_mode`: `minimal` vs `all`) in `System/settings_ui.py` and `System/orchestration_manager.py`.
+  - Added Multi-Agent Execution Engine model modes (`delegation_model_mode`: `lvl6_7_model` vs `per_subagent_model`) with smooth dynamic offload/load model swapping via `app.model_swap`.
+  - Streamed live subagent dispatching and task execution milestones into UI Tool Log (`tool_log_update`).
+  - Wired backend delegation chain directly into inference loop in `main.py` for Lvl 6 & 7.
+- **Context-Driven Dynamic Agent Orchestration Framework**:
+  - Implemented `IntentProfiler` & `UtilityDispatchEngine` in `System/orchestration_manager.py` replacing static linear chains with a real-time weighted utility function $U(Agent_i, Query)$ that dynamically selects and routes optimal subagents based on factual, reasoning, emotional, and speed profiles.
+  - Enforced subagent permission invariant: Level 6 as an agent is strictly accessible only to Level 7 (Cecilia).
+  - Architected `SerializedAgentContext` with `Offload/Load` protocol and bounded token budgets to eliminate context bloat and prevent Out-of-Memory (Anti-OOM) errors during inter-agent handoffs.
+  - Added Observability Layer (`DecisionTrace`) logging query feature vectors, candidate utility scoring tables, chosen execution paths, and exclusion rationales to diagnostics telemetry without chat output leakage.
+- **Search Bloat Filter**:
+  - Added HTML boilerplate, cookie notice, ad copy, navigation noise, and deduplication filter (`clean_search_bloat`) to `GemmaToolRegistry.handle_web_search` in `System/tool_registry.py`.
+- **Cecilia Shadow Wizard & Divine Judgement Modes**:
+  - Integrated *Shadow Wizard* (multi-agent orchestration god mode) and *Divine Judgement* (direct one-way mirror omniscience) persona modes in `serenity_resources.py` and `main.py`.
+- **Delegation Settings Section**:
+  - Added interactive Delegation & Subagents panel to `System/settings_ui.py` with toggleable delegation enable switch, Cecilia mode radiobuttons, delegation chain presets, subagent density toggles, execution engine model options, and handoff target routing.
+
+## Historic Versions:
+
+### Version 1.5.7 -alpha
+- **Chat Tab Header & System Status Label Fix**:
+  - Aligned background color of `system_status_label`, `hw_mode_label`, `tab_bar_frame`, and `chat_frame` to `bg_color` (`THEME["bg_color"]`), eliminating mismatched trim color blocks in the top right corner of the chat tab header.
+  - Initialized default status text to `"System: Idle"` with proper theme electric blue accent foreground color.
+- **Console Log & UI Typography Overhaul**:
+  - Overhauled Console Log / Code font choices to `Doto`, `Inconsolata`, `Noto Sans Mono`, `Lucida Sans Console`, `Palatino Linotype`, `Tajawal`, `MV Boli`, and `Didact Gothic`.
+  - Added `Modern Antiqua`, `Quicksand`, and `UnifrakturMaguntia` to UI Font choices.
+  - Purged disliked fonts (`Arial`, `Calibri`, `Franklin Gothic Medium`, `Georgia`, `Impact`, `Lucida Sans Unicode`, `Trebuchet MS`) from UI font selection options.
+  - Positioned Code / Log Font dropdown directly below UI Font dropdown and fixed grid row alignment for Scaling Center launch button.
+- **UI Entry Limits & Input Safeguards**:
+  - Added `bind_entry_limit` validation helper in `serenity_utils.py` to bind max character constraints across all text box and entry widgets (VRAM, DMN timeout, parameters, profile call signs, vault passwords, auto-lock timeout, search bar, and debate topic/contestant inputs) preventing UI grid scaling and overflow defects.
+- **Theme-Aware Typing Cursor Colorization**:
+  - Synchronized `insertbackground` cursor color to theme accent color (`THEME["electric_blue"]` / `accent_highlight` / `accent_sec` / `accent_hl`) across prompt input (`user_input`), search bar (`search_entry`), master password modals, all backend log consoles (`thought_log`, `error_log`, `tool_log`, `diag_log`), and settings input fields.
+
+### Version 1.5.6 -alpha
+- **Context 64k Hard Cap & Dynamic Headroom Allocation**:
+  - Removed artificial 64k clamp in `main.py:_get_inference_params` for large context models; dynamic calculation now respects explicit `max_tokens` and allocates full context headroom up to 256k (`ctx - 1024`).
+  - Updated `System/kv_manager.py` max context token capacity default to 256k (`262144`) with dynamic `set_max_context` runtime resizing and multimodal token estimation.
+  - Implemented token-budgeted fallback message packing in `main.py`, preserving complete session history up to model token budget when KV pruning is bypassed instead of hardcoded 12 messages.
+- **Auto-Scroll Intent & Smooth Navigation**:
+  - Added user scroll intent tracking on `chat_history` via mouse wheel and scrollbar bindings (`_user_scrolled_up`).
+  - Relaxed strict `0.98` lock threshold and prevented streaming chunks or markdown formatting from snapping downwards when user is inspecting earlier messages.
+- **Dynamic Theming & Persona Outline Indicators**:
+  - Implemented dynamic outline border synchronization across Dark Mode ON (blackout + persona-colored borders) and Dark Mode OFF (midnight persona background + persona-colored borders).
+  - Dynamically synchronized `input_control_frame`, `user_input`, and `chat_frame` with active persona colors on slider change or model load.
+- **Texture Modifiers & Intensity Controls**:
+  - Added `Texture Intensity` slider (0%–100%) in Settings UI under Texture Style.
+  - Wired `texture_intensity` parameter to `apply_theme_to_global` in `serenity_resources.py` and saved to `app.config`.
+- **Level 6 Electric Blue Palette Update**:
+  - Updated Level 6 (The Transcendent One) to Electric Blue palette: `#00D4FF` accents (`THERMO_COLORS[6]`), `#001a2e` Midnight Electric Blue background (`CHAT_BG_COLORS[6]`), and `#00FFFF` Electric Cyan text (`CHAT_FG_COLORS[6]`).
+- **Tutorial Unleash Instructions Alignment**:
+  - Synchronized Tutorial Slide 3 in `System/serenity_utils.py` to explain dual Level 7 unlock triggers (6 clicks on 'Persona:' header or double-click secret anchor).
+- **Custom Profile Name & User Addressing Preference (Phase 5)**:
+  - Added Preferred Name / Call Sign and Addressing Style (`Direct / Plain`, `Warm / Familiar`, `Formal / Respectful`, `Silent / Unnamed`) fields to User Profile Settings.
+  - Injected user identity directives into system prompts dynamically across standard and deep cook workflows while preserving thought channel isolation.
+  - Added test suite `System/tests/test_profile_custom_name.py`.
+- **Multimodal Projector (.mmproj) Lookup & Fallback Selection**:
+  - Implemented intelligent `_find_projector_for_model` hierarchy: persistent `mmproj_mapping`, adjacent directory scan, model parameter size tag matching (`12B`, `26B-A4B`, `E4B`, `E2B`), and interactive file dialog registration wizard identical to MTP drafter.
+  - Prevented incompatible dimension binding (e.g. 2560-dim E4B projector on 3840-dim 12B model).
+  - Added dedicated Projector selector button and display directly in Settings UI under Multimedia Handling.
+  - Added automatic fallback to dedicated Vision model tier in `send_message` if native projector is unavailable.
+  - Created test suite `System/tests/test_mmproj_lookup.py`.
+- **Graceful Import Fallbacks & Test Hardening**:
+  - Added graceful try-except fallbacks for `psutil` and `cv2` imports across `serenity_utils.py`, `tool_registry.py`, and `System/tests/`.
+  - Added `System/tests/test_context_and_scroll.py` and `System/tests/test_muse_glimmer_isolation.py`.
 
 ### Version 1.5.5
 - **Context Window & Session History Restoration**:
@@ -33,6 +103,8 @@
   - Fixed action button clipping in `_render_history_menu` content view by packing action frame (`act_frame` with Edit/Save and Delete buttons) to the right before packing title label.
   - Constrained archive title display text with ellipsis (`...`) truncation at 32 characters while preserving full title in hover tooltip.
   - Reordered history list view card header to pack date/size metadata rightward before display name expansion.
+- **Multimedia Handling Expansion (Images, Audio, Video)**:
+  - Expanded Settings UI and runtime configuration from `image_handling` to `multimedia_handling` (with backward compatibility), supporting automated, dedicated vision model, and native multimodal routing for image, audio, and video attachments.
 - **Standalone Packaging (PyInstaller)**:
   - Created `SerenityPC.spec` targeting `onedir` distribution, no-console windowed mode, and automated package data/hidden import discovery (`chromadb`, `onnxruntime`, `pystray`, `pyttsx3`, `uvicorn`).
   - Added missing system monitoring and standard library hidden imports (`unittest`, `pynvml`, `psutil`) to `SerenityPC.spec` to resolve standalone build fatal errors and PyTorch C API abort crashes.
