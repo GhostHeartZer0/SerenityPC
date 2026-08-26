@@ -10,16 +10,31 @@ class KVManager:
     the maximum context threshold. It uses TriAttention simulated
     scoring to determine which messages to keep.
     """
-    def __init__(self, max_context_tokens: int = 120000, prune_ratio: float = 0.5):
-        # Default target of 120k for massive context, but configurable
+    def __init__(self, max_context_tokens: int = 262144, prune_ratio: float = 0.5): #TODO: make this dymanic, tied to chosen setting.
+        # Default target of 262144 (256k) for massive context windows, dynamically updated on model load
         self.max_context_tokens = max_context_tokens
         self.prune_ratio = prune_ratio
         self.scorer = TriAttentionScorer(budget_ratio=prune_ratio)
         self.logger = logging.getLogger("KVManager")
 
-    def _estimate_tokens(self, text: str) -> int:
-        """Rough token estimation (typically 4 chars = 1 token for LLMs)"""
-        return max(1, len(text) // 4)
+    def set_max_context(self, max_context_tokens: int):
+        """Dynamically update maximum context capacity matching active model tier."""
+        self.max_context_tokens = max_context_tokens
+
+    def _estimate_tokens(self, content: Any) -> int:
+        """Robust token estimation (typically 4 chars = 1 token for LLMs, handles multimodal lists)."""
+        if isinstance(content, str):
+            return max(1, len(content) // 4)
+        if isinstance(content, list):
+            total = 0
+            for item in content:
+                if isinstance(item, dict):
+                    txt = item.get("text", "") or str(item.get("image_url", ""))
+                    total += len(str(txt)) // 4
+                else:
+                    total += len(str(item)) // 4
+            return max(1, total)
+        return 1
 
     def _get_messages_token_count(self, messages: List[Dict[str, str]]) -> int:
         return sum(self._estimate_tokens(msg.get("content", "")) for msg in messages)

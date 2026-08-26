@@ -1,5 +1,5 @@
-import pytest
 import re
+import sys
 
 class DummyApp:
     def __init__(self, repeat_mode="lazy"):
@@ -161,3 +161,11 @@ def test_empty_or_short_input():
     assert not app._detect_repetition("")
     assert not app._detect_repetition(None)
     assert not app._detect_repetition("Short text")
+
+if __name__ == "__main__":
+    test_repeat_mode_off()
+    test_repeat_mode_lazy_allows_code_blocks()
+    test_repeat_mode_lazy_catches_true_runaways()
+    test_repeat_mode_hyper_catches_tight_loops()
+    test_empty_or_short_input()
+    print("[PASS] test_repeat_detection passed successfully.")

@@ -56,14 +56,14 @@ def initialize_system_managers():
     global DynamicParamRegistry, MarkdownEngine, open_settings_window
     global open_text_scaling_center, run_auto_detect, VaultManager
     global set_offline_mode, is_offline_mode, STTManager
-    global GemmaToolRegistry, KVManager, TurboVecIndex
+    global GemmaToolRegistry, KVManager, TurboVecIndex, bind_entry_limit, OrchestrationManager
 
     from System.serenity_utils import (
         WidgetLogger, FileAndWidgetLogger, LoadingScreen, log_uncaught_exception,
         HardwareProfile, MediaProcessor, SystemMonitor, enable_fault_debugging,
         ThreadSafeDict, ThreadSafeList, ThinkingDisplay, patch_gguf_architecture,
         patch_llama_deallocator, ToolTip, TutorialOverlay,
-        enable_high_dpi_awareness,
+        enable_high_dpi_awareness, bind_entry_limit,
     )
     from System.modular_registry import DynamicParamRegistry
     from System.markdown_engine import MarkdownEngine
@@ -75,6 +75,7 @@ def initialize_system_managers():
     from System.stt_manager import STTManager
     from System.tool_registry import GemmaToolRegistry
     from System.kv_manager import KVManager, TurboVecIndex
+    from System.orchestration_manager import OrchestrationManager
 
 
 USERS_DATA_PATH = setup_localized_environment()
@@ -91,6 +92,7 @@ if TYPE_CHECKING:
 from serenity_resources import (THEME, THEMES, TEXTURE_STYLES, apply_theme_to_global, THERMO_COLORS, CHAT_BG_COLORS, CHAT_FG_COLORS, 
                               INPUT_FG_COLORS, GPU_LAYER_MAP, CONTEXT_SIZE_MAP, 
                               PERSONA_DISPLAY_INFO, PERSONA_IDLE_MAP, PERSONA_PROMPTS, 
+                              DELEGATION_SYSTEM_PROMPTS, SUBAGENT_SYSTEM_PROMPTS,
                               AVATAR_FILENAMES, ANIMATION_SEQUENCE, DEEP_COOK_PHASES, 
                               DEEP_COOK_SYSTEM_PROMPTS, APP_ICON, MEDIA_DIR, TOOLS_DIR,
                               TRI_ATTENTION_ENABLED, TRI_ATTENTION_BUDGET)
@@ -516,6 +518,8 @@ class ChatbotApp:
             history_dir=self.dirs.get("History", os.path.join(self.script_dir, "History")),
             state_dir=self.dirs.get("System", os.path.join(self.script_dir, "System"))
         )
+        self.tool_registry = GemmaToolRegistry(self)
+        self.orchestration_manager = OrchestrationManager(self)
         self._last_user_activity_time = time.time()
         self._vault_modal_open = False
         self.temp_config = {tier: 0.8 if "vision" not in tier else 0.1 for tier in tier_list}
@@ -1046,7 +1050,8 @@ class ChatbotApp:
         pwd_var = tk.StringVar()
         pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, show="*", width=26, 
                              bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
-                             insertbackground=THEME["fg_color"], font=self.fonts["main"], relief=tk.SUNKEN)
+                             insertbackground=THEME.get("electric_blue", THEME["fg_color"]), font=self.fonts["main"], relief=tk.SUNKEN)
+        bind_entry_limit(pwd_entry, max_len=64)
         pwd_entry.pack(pady=2)
 
         err_lbl = tk.Label(unlock_win, text="", font=self.fonts["ui_button"], bg=THEME["bg_color"], fg="#ff4444")
@@ -1298,11 +1303,11 @@ class ChatbotApp:
         ToolTip(btn_clr, "Clear active attachments and media queue.", app=self)
 
         # --- 2. CHAT FRAME ---
-        chat_frame = tk.Frame(left, bg=THEME["trim_color"])
+        chat_frame = tk.Frame(left, bg=THEME["bg_color"])
         chat_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
 
         # --- TAB CONTROLS ---
-        tab_frame = tk.Frame(chat_frame, bg=THEME["trim_color"])
+        tab_frame = tk.Frame(chat_frame, bg=THEME["bg_color"])
         self.tab_bar_frame = tab_frame
         tab_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
 
@@ -1318,13 +1323,13 @@ class ChatbotApp:
         btn_tab_hist.pack(side=tk.LEFT, padx=2)
         ToolTip(btn_tab_hist, "Search and review archived conversation histories.", app=self)
 
-        lbl_status = tk.Label(tab_frame, text="System: Ready", bg=THEME["trim_color"], 
-                                          fg="#888888", font=self.fonts["italic"])
+        lbl_status = tk.Label(tab_frame, text="System: Idle", bg=THEME["bg_color"], 
+                                          fg=THEME["electric_blue"], font=self.fonts["italic"])
         self.system_status_label = lbl_status
         lbl_status.pack(side=tk.RIGHT, padx=10)
         ToolTip(lbl_status, "System engine status and telemetry indicator.", app=self)
 
-        lbl_hw = tk.Label(tab_frame, text="", bg=THEME["trim_color"], font=self.fonts["bold"])
+        lbl_hw = tk.Label(tab_frame, text="", bg=THEME["bg_color"], font=self.fonts["bold"])
         self.hw_mode_label = lbl_hw
         lbl_hw.pack(side=tk.RIGHT, padx=5)
         ToolTip(lbl_hw, "Hardware architecture optimization mode (Apex / Legacy) and offline guard status.", app=self)
@@ -1362,6 +1367,17 @@ class ChatbotApp:
                                              bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
                                              relief=tk.FLAT, highlightthickness=0)
         self.chat_history = txt_chat
+        self._user_scrolled_up = False
+        def _on_chat_scroll(event=None):
+            try:
+                if self.chat_history:
+                    yv = self.chat_history.yview()
+                    self._user_scrolled_up = (yv[1] < 0.95)
+            except Exception: pass
+
+        txt_chat.bind("<MouseWheel>", lambda e: self.root.after(10, _on_chat_scroll), add="+")
+        txt_chat.bind("<Button-4>", lambda e: self.root.after(10, _on_chat_scroll), add="+")
+        txt_chat.bind("<Button-5>", lambda e: self.root.after(10, _on_chat_scroll), add="+")
         txt_chat.pack(side=tk.TOP, fill="both", expand=True, padx=2, pady=2)
         
         # Configure Markdown tags
@@ -1421,6 +1437,7 @@ class ChatbotApp:
         
         txt_user = tk.Text(input_frame, height=3, font=self.fonts["main"], wrap=tk.WORD,
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                           insertbackground=THEME.get("electric_blue", THEME["fg_color"]),
                            highlightthickness=1, highlightbackground=THEME["trim_color"], 
                            highlightcolor=THEME["electric_blue"], relief=tk.FLAT)
         self.user_input = txt_user
@@ -1576,7 +1593,7 @@ class ChatbotApp:
         self.persona_label = lbl_p
         lbl_p.pack(side=tk.LEFT)
         lbl_p.bind("<Button-1>", self._on_persona_label_click)
-        ToolTip(lbl_p, "Adjust persona depth (click 6 times for Secret Level 7).", app=self)
+        ToolTip(lbl_p, "Persona Depth Selection (Levels 1 to 6/7).", app=self)
 
         # Extended to Level 6 dynamically
         scale_d = tk.Scale(p_frame, from_=1, to=self.max_persona_level, orient=tk.HORIZONTAL, length=110, 
@@ -1855,8 +1872,9 @@ class ChatbotApp:
         
         search_var = tk.StringVar(value=self.history_state.get("search_query", ""))
         search_entry = tk.Entry(search_frame, textvariable=search_var, bg=THEME["widget_bg_color"], 
-                                fg=THEME["fg_color"], insertbackground=THEME["fg_color"], 
+                                fg=THEME["fg_color"], insertbackground=THEME.get("electric_blue", THEME["fg_color"]), 
                                 relief=tk.FLAT, font=self.fonts["small"])
+        bind_entry_limit(search_entry, max_len=120)
         search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4, pady=2)
         
         def _execute_search(event=None):
@@ -2765,28 +2783,109 @@ class ChatbotApp:
         except Exception as e:
             self.process_queue.put({"status": "error", "content": str(e)})
 
-    def _find_projector_for_model(self, model_path=None):
+    def _find_projector_for_model(self, model_path=None, interactive=False):
+        """
+        Intelligent lookup for multimodal vision/audio projectors (.mmproj).
+        1. Checks persistent user mmproj_mapping in app.config.
+        2. Scans adjacent directory for exact or family-matching projector.
+        3. Validates model parameter size tags (e.g. 12B vs E4B) to avoid loading mismatched dimensions.
+        4. Provides an interactive file selector fallback (identical to MTP Drafter Registration).
+        """
         m_path = model_path or self.model_path
         if not m_path:
             return None
+        norm_main = os.path.normcase(os.path.abspath(m_path))
+        
+        # 1. Persistent mmproj mapping
+        mmproj_mapping = self.config.setdefault("mmproj_mapping", {})
+        if m_path in mmproj_mapping and os.path.exists(mmproj_mapping[m_path]):
+            cand = mmproj_mapping[m_path]
+            if os.path.normcase(os.path.abspath(cand)) != norm_main:
+                return cand
+            else:
+                del mmproj_mapping[m_path]
+                self.config["mmproj_mapping"] = mmproj_mapping
+                if hasattr(self, 'save_config'):
+                    self.save_config()
+
+        # 2. Check explicit vision tier projector configs if current tier matches
+        target_v_tier = f"vision_{self.current_model_tier}" if hasattr(self, 'current_model_tier') and self.current_model_tier else "vision_multimodal"
+        explicit_tier_p = self.model_paths.get(f"{target_v_tier}_projector")
+        if explicit_tier_p and os.path.exists(explicit_tier_p):
+            return explicit_tier_p
+
+        # 3. Model directory scan (Same Directory)
         model_dir = os.path.dirname(m_path)
         if os.path.exists(model_dir):
             for f in os.listdir(model_dir):
                 fl = f.lower()
                 if fl.endswith(".mmproj") or ("mmproj" in fl and fl.endswith(".gguf")) or ("projector" in fl and fl.endswith(".gguf")):
-                    return os.path.join(model_dir, f)
-        for proj_key in ["vision_multimodal_projector", "vision_video_projector", "vision_video_deep_projector"]:
-            p = self.model_paths.get(proj_key)
-            if p and os.path.exists(p):
-                return p
+                    cand_path = os.path.join(model_dir, f)
+                    if os.path.normcase(os.path.abspath(cand_path)) != norm_main:
+                        mmproj_mapping[m_path] = cand_path
+                        self.config["mmproj_mapping"] = mmproj_mapping
+                        if hasattr(self, 'save_config'):
+                            self.save_config()
+                        return cand_path
+
+        # 4. Smart Model Family / Size Matching across Models Directory
+        m_basename = os.path.basename(m_path).lower()
+        size_tags = []
+        for tag in ["e2b", "e4b", "26b-a4b", "26b", "a4b", "12b", "27b", "7b", "8b", "2b", "4b", "3b"]:
+            if tag in m_basename or tag in model_dir.lower():
+                size_tags.append(tag)
+                break
+        
+        models_root = os.path.dirname(model_dir) if os.path.basename(model_dir) in ["12B", "26B-A4B", "E2B", "E4B", "mobile"] else model_dir
+        if os.path.exists(models_root):
+            for root_dir, dirs, files in os.walk(models_root):
+                for f in files:
+                    fl = f.lower()
+                    if fl.endswith(".mmproj") or ("mmproj" in fl and fl.endswith(".gguf")) or ("projector" in fl and fl.endswith(".gguf")):
+                        cand_path = os.path.join(root_dir, f)
+                        cand_low = cand_path.lower()
+                        if os.path.normcase(os.path.abspath(cand_path)) != norm_main:
+                            if size_tags:
+                                if any(t in cand_low for t in size_tags):
+                                    mmproj_mapping[m_path] = cand_path
+                                    self.config["mmproj_mapping"] = mmproj_mapping
+                                    if hasattr(self, 'save_config'):
+                                        self.save_config()
+                                    return cand_path
+
+        # 5. Interactive Fallback File Selection (Like MTP Drafter Registration)
+        if interactive:
+            import tkinter.messagebox
+            from tkinter import filedialog
+            try:
+                response = tkinter.messagebox.askyesno(
+                    "Vision / Audio Projector Required",
+                    f"No compatible multimodal projector (.mmproj) was automatically found for:\n{os.path.basename(m_path)}\n\nWould you like to locate the Projector (.mmproj / GGUF) file manually?",
+                    parent=getattr(self, 'root', None)
+                )
+                if response:
+                    selected_path = filedialog.askopenfilename(
+                        title="Select Vision/Audio Projector (.mmproj / GGUF)",
+                        filetypes=[("Projector Files", "*.gguf;*.mmproj;*.bin"), ("All Files", "*.*")],
+                        initialdir=model_dir if os.path.exists(model_dir) else models_root
+                    )
+                    if selected_path and os.path.exists(selected_path) and os.path.normcase(os.path.abspath(selected_path)) != norm_main:
+                        mmproj_mapping[m_path] = selected_path
+                        self.config["mmproj_mapping"] = mmproj_mapping
+                        if hasattr(self, 'save_config'):
+                            self.save_config()
+                        return selected_path
+            except Exception as gui_err:
+                print(f"[ENGINE] Projector Picker GUI failed: {gui_err}")
+
         return None
 
-    def _ensure_chat_handler(self):
+    def _ensure_chat_handler(self, interactive=True):
         if not self.model:
             return False
         if getattr(self.model, "chat_handler", None) is not None:
             return True
-        proj_path = self._find_projector_for_model()
+        proj_path = self._find_projector_for_model(interactive=interactive)
         if proj_path and os.path.exists(proj_path):
             try:
                 from llama_cpp.llama_chat_format import Llava15ChatHandler
@@ -2836,6 +2935,32 @@ class ChatbotApp:
                 return True
             except Exception as e:
                 print(f"[APEX] Failed to dynamically load vision projector '{proj_path}': {e}")
+                # Invalidate broken mapping
+                if self.model_path and self.config.get("mmproj_mapping", {}).get(self.model_path) == proj_path:
+                    del self.config["mmproj_mapping"][self.model_path]
+                    if hasattr(self, 'save_config'):
+                        self.save_config()
+                if interactive:
+                    import tkinter.messagebox
+                    from tkinter import filedialog
+                    try:
+                        resp = tkinter.messagebox.askyesno(
+                            "Projector Dimension Mismatch",
+                            f"The projector '{os.path.basename(proj_path)}' is incompatible with this model:\n{e}\n\nWould you like to select a different Projector file?",
+                            parent=getattr(self, 'root', None)
+                        )
+                        if resp:
+                            new_path = filedialog.askopenfilename(
+                                title="Select Compatible Projector (.mmproj / GGUF)",
+                                filetypes=[("Projector Files", "*.gguf;*.mmproj;*.bin"), ("All Files", "*.*")]
+                            )
+                            if new_path and os.path.exists(new_path):
+                                self.config.setdefault("mmproj_mapping", {})[self.model_path] = new_path
+                                if hasattr(self, 'save_config'):
+                                    self.save_config()
+                                return self._ensure_chat_handler(interactive=False)
+                    except Exception as err2:
+                        print(f"[ENGINE] Fallback dialog failed: {err2}")
                 return False
         return False
 
@@ -3007,7 +3132,7 @@ class ChatbotApp:
         if has_media or self.state.get("staged_multimodal"):
             if not user_msg: user_msg = "Analyze this media."
             
-            image_mode = self.config.get("image_handling", "auto")
+            image_mode = self.config.get("multimedia_handling", self.config.get("image_handling", "auto"))
             
             # Auto-detect native capability via active or dynamically loadable vision projector
             has_projector_path = bool(self._find_projector_for_model())
@@ -3040,10 +3165,10 @@ class ChatbotApp:
                 
                 # Verify and dynamically load or reload vision projector for inline native vision
                 if use_inline and self.model is not None and getattr(self.model, "chat_handler", None) is None:
-                    if self._ensure_chat_handler():
+                    if self._ensure_chat_handler(interactive=True):
                         print("[APEX] Dynamically integrated mmproj vision projector.")
                     else:
-                        proj_path = self._find_projector_for_model()
+                        proj_path = self._find_projector_for_model(interactive=True)
                         if proj_path and os.path.exists(proj_path):
                             self._log_and_display("Reloading model to integrate mmproj vision projector...")
                             self.pending_task = {"type": "chat", "message": user_msg}
@@ -3051,14 +3176,15 @@ class ChatbotApp:
                             return
                         else:
                             if has_vision_model:
+                                print("[APEX] No native mmproj found. Falling back to dedicated Vision model.")
                                 use_inline = False
                                 use_vision = True
                             else:
-                                messagebox.showerror("Vision Error", "Native vision requested, but no vision projector (.mmproj) was found for the current model.")
+                                messagebox.showerror("Vision Error", "Native vision requested, but no vision projector (.mmproj) was found for the current model.\n\nPlease select a projector or configure a dedicated vision model in Settings.")
                                 return
 
                 if not use_inline and not use_vision:
-                    if self.model is not None and self._ensure_chat_handler():
+                    if self.model is not None and self._ensure_chat_handler(interactive=True):
                         use_inline = True
                     elif bool(self.model_paths.get("vision_multimodal")):
                         use_vision = True
@@ -3333,9 +3459,9 @@ class ChatbotApp:
         vram_per_layer = model_base_vram_mb / total_layers
         
         # 3. Dynamic KV Cache Footprint Estimation (Adjusted for Quantized KV / SWA / Flash Attention)
-        # 8-bit/4-bit quantized KV cache and SWA reduce footprint dramatically vs legacy FP16 estimates
+        # 8-bit/4-bit quantized KV cache and SWA reduce footprint dramatically vs legacy FP16 estimates (~900MB per 48k tokens on q8)
         raw_kv_est = (ctx_size / 49152) * 900.0
-        kv_cache_vram_mb = max(250.0, min(targeted_reserve_vram_mb * 0.35, raw_kv_est))
+        kv_cache_vram_mb = max(250.0, raw_kv_est)
 
         # 4. Math: Allocate remaining VRAM budget to layers
         available_weight_vram = targeted_reserve_vram_mb - kv_cache_vram_mb
@@ -3459,7 +3585,7 @@ class ChatbotApp:
             if target_tier.startswith("vision_"):
                 proj_path = self.model_paths.get(f"{target_tier}_projector")
                 if not proj_path or not os.path.exists(proj_path):
-                    proj_path = self._find_projector_for_model(self.model_path)
+                    proj_path = self._find_projector_for_model(self.model_path, interactive=True)
                 
                 if proj_path and os.path.exists(proj_path):
                     try:
@@ -3968,7 +4094,20 @@ class ChatbotApp:
             self.process_queue.put({"status": "thinking_status", "content": "Hold up, lemme cook..."})
             print(f"[INFERENCE] Starting generation for user message ({len(user_message)} chars).")
             
-            sys_content = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
+            # Multi-Agent Delegation & Persona Selection
+            delegation_on = bool(self.config.get("delegation_enabled", False))
+            if self.active_persona_level == 6 and delegation_on:
+                sys_content = DELEGATION_SYSTEM_PROMPTS.get(6, PERSONA_PROMPTS.get(6, "You are Serenity."))
+            elif self.active_persona_level == 7:
+                cecilia_mode = self.config.get("cecilia_delegation_mode", "shadow_wizard")
+                if delegation_on and cecilia_mode == "shadow_wizard":
+                    sys_content = DELEGATION_SYSTEM_PROMPTS.get(7, {}).get("shadow_wizard", PERSONA_PROMPTS.get(7, "You are Cecilia."))
+                elif cecilia_mode == "divine_judgement":
+                    sys_content = DELEGATION_SYSTEM_PROMPTS.get(7, {}).get("divine_judgement", PERSONA_PROMPTS.get(7, "You are Cecilia."))
+                else:
+                    sys_content = PERSONA_PROMPTS.get(7, "You are Cecilia.")
+            else:
+                sys_content = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
             if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
                 r_str = self.config.get("muse_reasoning_strength", "xhigh")
                 if r_str != "off": sys_content += f"\nReasoning strength: {r_str}"
@@ -3983,6 +4122,16 @@ class ChatbotApp:
                 )
                 sys_content += grounding_rule
 
+            # User Identity & Addressing Preference
+            pref_name = str(self.config.get("user_preferred_name", "")).strip()
+            addr_style = str(self.config.get("user_address_style", "Direct / Plain")).strip()
+            if pref_name:
+                sys_content += f"\n[User Identity]: The user's name is {pref_name}."
+                if addr_style and addr_style != "Silent / Unnamed":
+                    sys_content += f" Preferred addressing style: {addr_style}."
+                elif addr_style == "Silent / Unnamed":
+                    sys_content += " Do not address the user by name unless explicitly asked."
+
             is_gemma = "gemma" in (self.model_path or "").lower()
             has_multimodal_content = any(isinstance(m.get("content"), list) for m in temp_messages)
             if has_multimodal_content:
@@ -3996,6 +4145,17 @@ class ChatbotApp:
                 # Structural Safety: Ensure the turn closer is always present, but don't force legacy tokens
                 if "<turn|>" not in params.get("stop", []):
                     params.setdefault("stop", []).append("<turn|>")
+
+            # Autonomous Multi-Agent Delegation Pipeline (Lvls 6 & 7)
+            if delegation_on and (self.active_persona_level == 6 or (self.active_persona_level == 7 and self.config.get("cecilia_delegation_mode", "shadow_wizard") == "shadow_wizard")):
+                if hasattr(self, "orchestration_manager") and self.orchestration_manager:
+                    try:
+                        self.process_queue.put({"status": "thinking_status", "content": "Orchestrating subagents..."})
+                        del_res = self.orchestration_manager.execute_delegation_chain(self.active_persona_level, user_message, params)
+                        if del_res and del_res.get("compiled_briefing"):
+                            sys_content += f"\n\n{del_res['compiled_briefing']}\n[DIRECTIVE]: Synthesize the above subagent findings into your direct final response. Deliver the full solution now."
+                    except Exception as e:
+                        print(f"[DELEGATION WARNING] Delegation pipeline execution error: {e}")
                             
             sys_clean = sys_content.strip()
             def official_q(s): return f"<|\"|>{s}<|\"|>"
@@ -4037,7 +4197,20 @@ class ChatbotApp:
             elif self.kv_manager and TRI_ATTENTION_ENABLED:
                 processed_msgs = self.kv_manager.enforce_kv_budget(temp_messages)
             else:
-                processed_msgs = temp_messages[-12:]
+                # Token-budgeted fallback: Preserve as much full session history as context headroom permits
+                ctx_limit = self.context_size_config.get(self.current_model_tier, 32768)
+                budget_tokens = int(ctx_limit * 0.9)
+                accumulated = 0
+                fitting_msgs = []
+                for msg in reversed(temp_messages):
+                    cnt = msg.get("content", "")
+                    tok_est = max(1, len(str(cnt)) // 4)
+                    if accumulated + tok_est > budget_tokens and fitting_msgs:
+                        break
+                    fitting_msgs.append(msg)
+                    accumulated += tok_est
+                fitting_msgs.reverse()
+                processed_msgs = fitting_msgs if fitting_msgs else temp_messages[-12:]
                         
             # Multi-turn thought pruning to avoid feeding previous thoughts back into history
             cleaned_msgs = []
@@ -4309,6 +4482,15 @@ class ChatbotApp:
                 if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
                     r_str = self.config.get("muse_reasoning_strength", "xhigh")
                     if r_str != "off": sys_msg += f"\nReasoning strength: {r_str}"
+                
+                pref_name = str(self.config.get("user_preferred_name", "")).strip()
+                addr_style = str(self.config.get("user_address_style", "Direct / Plain")).strip()
+                if pref_name:
+                    sys_msg += f"\n[User Identity]: The user's name is {pref_name}."
+                    if addr_style and addr_style != "Silent / Unnamed":
+                        sys_msg += f" Preferred addressing style: {addr_style}."
+                    elif addr_style == "Silent / Unnamed":
+                        sys_msg += " Do not address the user by name unless explicitly asked."
                 is_gemma = "gemma" in self.model_path.lower()
                 params = self._get_inference_params(reasoning_history=reasoning_history)
                 if temp_override:
@@ -4607,7 +4789,7 @@ class ChatbotApp:
             # Embed the thought history for UI rendering with frontend tags
             payload = final_resp
             
-            # --- DEEP COOK RUNTIME METRICS (PHASE 5-6: Quality Gates & Polish) ---
+            # --- DEEP COOK RUNTIME METRICS ---
             hidden_text_len = len(full_draft_history)
             diag_msg2 = f"--- DEEP COOK METRICS ---\n"
             diag_msg2 += f"Cycles Executed: {current_cycle}\n"
@@ -4956,13 +5138,15 @@ class ChatbotApp:
         if render_mode > 0:
             self._apply_markdown(start_idx, end_idx, ("user",))
         
+        self._user_scrolled_up = False
         hist.see(tk.END)
 
     def _update_ai_message(self, chunk):
         hist = self.chat_history
         if not chunk or hist is None: return
         
-        is_at_bottom = hist.yview()[1] >= 0.98
+        user_scrolled = getattr(self, '_user_scrolled_up', False)
+        is_at_bottom = (not user_scrolled) and (hist.yview()[1] >= 0.95)
 
         if not self.state.get("response_started", False):
             think = self.thinking_display
@@ -4999,7 +5183,8 @@ class ChatbotApp:
     def _replace_ai_message(self, text):
         hist = self.chat_history
         if hist is None: return
-        is_at_bottom = hist.yview()[1] >= 0.98
+        user_scrolled = getattr(self, '_user_scrolled_up', False)
+        is_at_bottom = (not user_scrolled) and (hist.yview()[1] >= 0.95)
 
         if not self.state.get("response_started", False):
             think = self.thinking_display
@@ -5034,7 +5219,8 @@ class ChatbotApp:
     def _append_to_chat(self, text, tag):
         hist = self.chat_history
         if hist is None: return
-        is_at_bottom = hist.yview()[1] >= 0.98
+        user_scrolled = getattr(self, '_user_scrolled_up', False)
+        is_at_bottom = (not user_scrolled) and (hist.yview()[1] >= 0.95)
         
         hist.config(state='normal')
         hist.insert(tk.END, text, (tag,))
@@ -5045,7 +5231,7 @@ class ChatbotApp:
             
         hist.config(state='disabled')
         
-        if is_at_bottom or tag in ["user", "ai_lead", "system"]:
+        if (is_at_bottom and not user_scrolled) or tag in ["user", "system"]:
             hist.yview_moveto(1.0)
         
         bg = hist.cget("bg")
@@ -6903,18 +7089,16 @@ class ChatbotApp:
                  else: name = f"LVL {lvl}: DEEP COOK"
              except: name = f"LVL {lvl}: DEEP COOK"
 
-        if self.config.get("theme") == "persona":
-            from serenity_resources import apply_theme_to_global
-            apply_theme_to_global("persona", self.config.get("texture_style", "default"), self.config.get("dark_mode", False), lvl, (self.model is not None))
-            self.apply_current_theme()
-        else:
-            if self.chat_history is not None:
-                self.chat_history.config(bg=THEME["chat_bg_color"], fg=THEME["chat_fg_color"])
-            if self.user_input is not None:
-                self.user_input.config(bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
-            if self.depth_slider is not None:
-                lvl_color = THERMO_COLORS.get(lvl, THEME["electric_blue"])
-                self.depth_slider.config(bg=THEME["bg_color"], troughcolor=THEME["widget_bg_color"], activebackground=lvl_color)
+        from serenity_resources import apply_theme_to_global
+        apply_theme_to_global(
+            self.config.get("theme", "apex"),
+            self.config.get("texture_style", "default"),
+            self.config.get("dark_mode", False),
+            lvl,
+            (self.model is not None),
+            float(self.config.get("texture_intensity", 1.0))
+        )
+        self.apply_current_theme()
         
         if hasattr(self, 'persona_name_button') and self.persona_name_button is not None:
             if (self.live_agent_process and self.live_agent_process.poll() is None):
@@ -7554,7 +7738,7 @@ class ChatbotApp:
             if hasattr(self, 'attachment_frame') and self.attachment_frame and self.attachment_frame.winfo_exists():
                 self.attachment_frame.config(bg=trim)
             if hasattr(self, 'user_input') and self.user_input and self.user_input.winfo_exists():
-                self.user_input.config(bg=widget_bg, fg=fg, insertbackground=fg, 
+                self.user_input.config(bg=widget_bg, fg=fg, insertbackground=accent, 
                                        highlightthickness=1, highlightbackground=trim, highlightcolor=accent)
 
             # Loading Bar & ThinkingDisplay Theming
@@ -7617,7 +7801,7 @@ class ChatbotApp:
                 self.past_history_view.tag_config("md_code", foreground=accent_hl, background="#050505" if dark_mode else "#111111")
                 
             if hasattr(self, 'user_input') and self.user_input and self.user_input.winfo_exists():
-                self.user_input.config(bg=widget_bg, fg=fg, insertbackground=fg)
+                self.user_input.config(bg=widget_bg, fg=fg, insertbackground=accent)
                 
             if hasattr(self, 'prompt_display') and self.prompt_display and self.prompt_display.winfo_exists():
                 self.prompt_display.config(bg=trim, fg=accent)
@@ -7663,9 +7847,9 @@ class ChatbotApp:
 
             # System and Telemetry Labels
             if hasattr(self, 'system_status_label') and self.system_status_label and self.system_status_label.winfo_exists():
-                self.system_status_label.config(bg=trim, fg=accent)
+                self.system_status_label.config(bg=bg, fg=accent)
             if hasattr(self, 'hw_mode_label') and self.hw_mode_label and self.hw_mode_label.winfo_exists():
-                self.hw_mode_label.config(bg=trim, fg=accent_hl)
+                self.hw_mode_label.config(bg=bg, fg=accent_hl)
             if hasattr(self, 'persona_label') and self.persona_label and self.persona_label.winfo_exists():
                 self.persona_label.config(bg=bg, fg=accent)
 
@@ -7704,16 +7888,16 @@ class ChatbotApp:
 
             # ScrolledText Logs & Tags
             if hasattr(self, 'thought_log') and self.thought_log and self.thought_log.winfo_exists():
-                self.thought_log.config(bg=widget_bg, fg=fg, insertbackground=fg)
+                self.thought_log.config(bg=widget_bg, fg=fg, insertbackground=accent)
                 self.thought_log.tag_config("stdout", foreground=fg)
                 self.thought_log.tag_config("system", foreground=accent)
             if hasattr(self, 'error_log') and self.error_log and self.error_log.winfo_exists():
-                self.error_log.config(bg=widget_bg, fg="#ff8a8a" if not dark_mode else "#ff6666", insertbackground=fg)
+                self.error_log.config(bg=widget_bg, fg="#ff8a8a" if not dark_mode else "#ff6666", insertbackground=accent)
                 self.error_log.tag_config("stderr", foreground="#ff8a8a" if not dark_mode else "#ff6666")
             if hasattr(self, 'tool_log') and self.tool_log and self.tool_log.winfo_exists():
-                self.tool_log.config(bg=widget_bg, fg=accent_sec, insertbackground=fg)
+                self.tool_log.config(bg=widget_bg, fg=accent_sec, insertbackground=accent_sec)
             if hasattr(self, 'diag_log') and self.diag_log and self.diag_log.winfo_exists():
-                self.diag_log.config(bg=widget_bg, fg=accent_hl, insertbackground=fg)
+                self.diag_log.config(bg=widget_bg, fg=accent_hl, insertbackground=accent_hl)
                 self.diag_log.tag_config("diag", foreground=accent_hl)
 
             # Telemetry UI & System Stats
@@ -7886,8 +8070,15 @@ class ChatbotApp:
         
         # Dynamic Max Tokens (Context Headroom Management)
         ctx = self.context_size_config.get(self.current_model_tier, 4096)
-        ratio = int(self.config.get("max_token_ratio", 4))
-        calculated_max = ctx // ratio
+        if "max_tokens" in self.config and self.config.get("max_tokens"):
+            calculated_max = int(self.config["max_tokens"])
+        else:
+            ratio = int(self.config.get("max_token_ratio", 4))
+            if "max_token_ratio" in self.config:
+                calculated_max = ctx // max(1, ratio)
+            else:
+                # Give generous headroom for extended context models (e.g. 256k) up to ctx - 1024
+                calculated_max = max(4096, ctx - 1024) if ctx > 8192 else max(256, ctx // ratio)
         
         if self.current_model_tier and self.current_model_tier.startswith("vision_"):
             inf_params["max_tokens"] = max(512, calculated_max)

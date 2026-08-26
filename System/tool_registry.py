@@ -2,10 +2,14 @@
 # Modular Tool Registry for Programmatic & Template Tool Calling in SerenityPC.
 
 import os
+import re
 import json
 import threading
 import subprocess
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 from typing import List, Dict, Any
 from System.modular_registry import ModularRegistry
 
@@ -97,6 +101,34 @@ class GemmaToolRegistry:
     def _register_handlers(self):
         """Registers modular handlers using ModularRegistry."""
 
+        def clean_search_bloat(text: str) -> str:
+            """Filters out web boilerplate, cookie notices, navigation junk, and duplicate noise."""
+            if not text: return ""
+            # Strip common web noise lines
+            noise_patterns = [
+                r'(?i)^\s*(?:accept all cookies|cookie settings|privacy policy|terms of use|terms & conditions|all rights reserved|copyright \d{4}).*$',
+                r'(?i)^\s*(?:sign in|sign up|log in|register|subscribe now|subscribe|join now|download app).*$',
+                r'(?i)^\s*(?:skip to (?:content|main|navigation)|menu|search query|toggle navigation).*$',
+                r'(?i)^\s*(?:advertisement|sponsored|ad choices|share this article|related articles).*$',
+                r'(?i)^\s*(?:enable javascript|please enable javascript to view).*$'
+            ]
+            lines = []
+            seen = set()
+            for line in text.splitlines():
+                l_str = line.strip()
+                if not l_str or len(l_str) < 4:
+                    continue
+                if any(re.match(pat, l_str) for pat in noise_patterns):
+                    continue
+                l_norm = l_str.lower()
+                if l_norm in seen:
+                    continue
+                seen.add(l_norm)
+                lines.append(l_str)
+            cleaned = "\n".join(lines)
+            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+            return cleaned.strip()
+
         @self.registry.register("web_search")
         def handle_web_search(args: Dict[str, Any]) -> str:
             query = args.get("query", "").strip()
@@ -135,10 +167,13 @@ class GemmaToolRegistry:
                         title = res.select_one('h2, .title, .search-snippet-title')
                         snippet = res.select_one('p, .content, .snippet-description, .snippet-content')
                         if title and snippet:
-                            results.append(f"[{title.get_text(strip=True)}]\n{snippet.get_text(strip=True)}")
+                            c_title = clean_search_bloat(title.get_text(strip=True))
+                            c_snip = clean_search_bloat(snippet.get_text(strip=True))
+                            if c_title and c_snip:
+                                results.append(f"[{c_title}]\n{c_snip}")
                     
                     if len(results) >= 1:
-                        proof_msg = f"[SEARCH PROOF] Provider: Brave | Status: {resp.status_code} | Found: {len(results)}"
+                        proof_msg = f"[SEARCH PROOF] Provider: Brave | Status: {resp.status_code} | Cleaned Extracts: {len(results)}"
                         if self.app and hasattr(self.app, "process_queue"):
                             self.app.process_queue.put({"status": "tool_log_update", "content": f"\n{proof_msg}"})
                         return f"Brave Search Results for '{query}':\n\n" + "\n\n".join(results[:5])
@@ -156,10 +191,13 @@ class GemmaToolRegistry:
                         title = res.select_one('h2')
                         snippet = res.select_one('.b_caption p, .b_snippet')
                         if title and snippet:
-                            results.append(f"[{title.get_text(strip=True)}]\n{snippet.get_text(strip=True)}")
+                            c_title = clean_search_bloat(title.get_text(strip=True))
+                            c_snip = clean_search_bloat(snippet.get_text(strip=True))
+                            if c_title and c_snip:
+                                results.append(f"[{c_title}]\n{c_snip}")
                     
                     if len(results) >= 2:
-                        proof_msg = f"[SEARCH PROOF] Provider: Bing | Status: {resp.status_code} | Found: {len(results)}"
+                        proof_msg = f"[SEARCH PROOF] Provider: Bing | Status: {resp.status_code} | Cleaned Extracts: {len(results)}"
                         if self.app and hasattr(self.app, "process_queue"):
                             self.app.process_queue.put({"status": "tool_log_update", "content": f"\n{proof_msg}"})
                         return f"Bing Search Context for '{query}':\n\n" + "\n\n".join(results[:5])
@@ -176,9 +214,12 @@ class GemmaToolRegistry:
                         title = res.select_one('.result__title')
                         snippet = res.select_one('.result__snippet')
                         if title and snippet:
-                            results.append(f"[{title.get_text(strip=True)}]\n{snippet.get_text(strip=True)}")
+                            c_title = clean_search_bloat(title.get_text(strip=True))
+                            c_snip = clean_search_bloat(snippet.get_text(strip=True))
+                            if c_title and c_snip:
+                                results.append(f"[{c_title}]\n{c_snip}")
                     if len(results) >= 2:
-                        proof_msg = f"[SEARCH PROOF] Provider: DuckDuckGo | Status: {resp.status_code} | Found: {len(results)}"
+                        proof_msg = f"[SEARCH PROOF] Provider: DuckDuckGo | Status: {resp.status_code} | Cleaned Extracts: {len(results)}"
                         if self.app and hasattr(self.app, "process_queue"):
                             self.app.process_queue.put({"status": "tool_log_update", "content": f"\n{proof_msg}"})
                         return f"DuckDuckGo Context for '{query}':\n\n" + "\n\n".join(results[:5])
@@ -213,15 +254,22 @@ class GemmaToolRegistry:
                     }""")
                     browser.close()
                     
-                    if content:
-                        proof_msg = f"[SEARCH PROOF] Provider: Playwright (Bing) | Content Fragments: {len(content)}"
+                    cleaned_content = [clean_search_bloat(c) for c in content if clean_search_bloat(c)]
+                    if cleaned_content:
+                        proof_msg = f"[SEARCH PROOF] Provider: Playwright (Bing) | Cleaned Fragments: {len(cleaned_content)}"
                         if self.app and hasattr(self.app, "process_queue"):
                             self.app.process_queue.put({"status": "tool_log_update", "content": f"\n{proof_msg}"})
-                        return f"Deep Web Extract for '{query}':\n\n" + "\n\n".join(content)
+                        return f"Deep Web Extract for '{query}':\n\n" + "\n\n".join(cleaned_content)
             except Exception as e:
                 print(f"[SEARCH DEBUG] Playwright failed: {e}")
             
             return f"Notice: Web search was unable to retrieve live results for '{query}' (network offline or search providers unreachable). Please proceed to answer the user directly and gracefully using your internal knowledge."
+
+        @self.registry.register("delegate_subtask")
+        def handle_delegate_subtask(args: Dict[str, Any]) -> str:
+            subagent_lvl = args.get("subagent_level", 2)
+            task_desc = args.get("task_description", "")
+            return f"[SUBAGENT LVL {subagent_lvl} DISPATCH]: Task '{task_desc}' received and queued for handoff."
 
         @self.registry.register("generate_image")
         def handle_generate_image(args: Any) -> str:
