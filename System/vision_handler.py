@@ -534,7 +534,7 @@ class VisionHandler:
 
         # Verify extension support
         ext = os.path.splitext(audio_path)[1].lower()
-        if ext not in [".mp3", ".wav", ".flac"]:
+        if ext not in [".mp3", ".wav", ".flac", ".ogg", ".m4a"]:
             print(f"[APEX] Unsupported audio format: {ext}")
             return []
 
@@ -663,4 +663,69 @@ class VisionHandler:
             count += 1
         video.release()
         return sampled
+
+    @staticmethod
+    def split_thoughts_and_answer(raw_output: str):
+        """
+        Splits internal reasoning/thinking tags from the actual response text.
+        Guarantees thoughts do not leak into final answer buffers.
+        """
+        import re
+        if not raw_output:
+            return "", ""
+
+        closers = [
+            r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
+            r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+            r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
+            r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
+        ]
+        all_splits = []
+        for tag_pattern in closers:
+            for m in re.finditer(tag_pattern, raw_output, re.IGNORECASE):
+                all_splits.append(m.end())
+
+        t_lower = raw_output.lower().strip()
+        openers_exact = (
+            "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
+            "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self<|message|>",
+            "<|start|>assistant to=self", "to=self"
+        )
+        is_opener = any(op in t_lower for op in openers_exact) or raw_output.lower().lstrip().startswith("thought")
+
+        if not all_splits and is_opener:
+            all_splits.append(len(raw_output))
+
+        all_splits.sort()
+        best_split = -1
+        if all_splits:
+            for split in all_splits:
+                remaining = raw_output[split:].strip()
+                if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self', remaining, re.IGNORECASE):
+                    continue
+                best_split = split
+                break
+            if best_split == -1:
+                best_split = all_splits[-1]
+
+        if best_split != -1:
+            think_log = raw_output[:best_split].strip()
+            final_answer = raw_output[best_split:].strip()
+        else:
+            has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+', raw_output, re.IGNORECASE))
+            if has_thought_openers or is_opener:
+                think_log = raw_output
+                final_answer = ""
+            else:
+                think_log = ""
+                final_answer = raw_output.strip()
+
+        tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>'
+        think_log = re.sub(tag_clean_pattern, '', think_log).strip()
+        think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
+        final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+        final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
+
+        return think_log, final_answer
+
 
