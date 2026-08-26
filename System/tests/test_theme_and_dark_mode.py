@@ -191,6 +191,8 @@ class TestThemeAndDarkMode(unittest.TestCase):
                 self.stats_row_frames = [f1]
                 self.stats_title_labels = [lbl_t]
                 self.stats_labels = {"CPU": lbl_v}
+                self.system_status_label = tk.Label(self.root, text="System: Idle", bg="#ffffff", fg="#000000")
+                self.hw_mode_label = tk.Label(self.root, text="[APEX]", bg="#ffffff", fg="#000000")
 
             apply_current_theme = ChatbotApp.apply_current_theme
 
@@ -202,13 +204,19 @@ class TestThemeAndDarkMode(unittest.TestCase):
         self.assertEqual(app.secret_trigger.cget("fg"), THEME["bg_color"])
         self.assertEqual(app.input_control_frame.cget("bg"), THEME["trim_color"])
         self.assertEqual(app.user_input.cget("highlightbackground"), THEME["trim_color"])
+        self.assertEqual(app.user_input.cget("insertbackground"), THEME["electric_blue"])
         self.assertEqual(app.log_header_label.cget("fg"), THEME["electric_blue"])
         self.assertEqual(app.self_analysis_btn.cget("fg"), THEME["electric_blue"])
         self.assertEqual(app.thought_log.cget("bg"), THEME["widget_bg_color"])
+        self.assertEqual(app.thought_log.cget("insertbackground"), THEME["electric_blue"])
         self.assertEqual(app.stats_frame.cget("bg"), THEME["widget_bg_color"])
         self.assertEqual(app.stats_row_frames[0].cget("bg"), THEME["widget_bg_color"])
         self.assertEqual(app.stats_title_labels[0].cget("bg"), THEME["widget_bg_color"])
         self.assertEqual(app.stats_labels["CPU"].cget("fg"), THEME["electric_blue"])
+        self.assertEqual(app.system_status_label.cget("bg"), THEME["bg_color"])
+        self.assertEqual(app.system_status_label.cget("fg"), THEME["electric_blue"])
+        self.assertEqual(app.hw_mode_label.cget("bg"), THEME["bg_color"])
+        self.assertEqual(app.hw_mode_label.cget("fg"), THEME["accent_highlight"])
 
         root.destroy()
 

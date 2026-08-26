@@ -165,7 +165,7 @@ def calculate_dynamic_gpu_layers(model_path: str, ctx_size: int, targeted_reserv
     vram_per_layer = model_base_vram_mb / total_layers
 
     raw_kv_est = (ctx_size / 49152) * 900.0
-    kv_cache_vram_mb = max(250.0, min(targeted_reserve_vram_mb * 0.35, raw_kv_est))
+    kv_cache_vram_mb = max(250.0, raw_kv_est)
     available_weight_vram = targeted_reserve_vram_mb - kv_cache_vram_mb
 
     if available_weight_vram <= 0:
@@ -473,7 +473,11 @@ class DebateApp:
         topic_row = tk.Frame(config_frame, bg=self.THEME["panel_bg"])
         topic_row.pack(fill="x", padx=10, pady=5)
         tk.Label(topic_row, text="Topic:", font=("Segoe UI", 10), bg=self.THEME["panel_bg"], fg=self.THEME["fg"], width=10, anchor="w").pack(side="left")
-        topic_entry = tk.Entry(topic_row, textvariable=self.topic_var, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], insertbackground=self.THEME["fg"], relief="flat", bd=2)
+        topic_entry = tk.Entry(topic_row, textvariable=self.topic_var, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], insertbackground=self.THEME["accent"], relief="flat", bd=2)
+        try:
+            def _limit_topic(t): return len(t) <= 160
+            topic_entry.config(validate='key', validatecommand=(topic_entry.register(_limit_topic), '%P'))
+        except Exception: pass
         topic_entry.pack(side="left", fill="x", expand=True, padx=5)
         topic_entry.insert(0, "")
         tk.Label(topic_row, text="(blank = random)", font=("Segoe UI", 8, "italic"), bg=self.THEME["panel_bg"], fg="#666").pack(side="left")
@@ -634,7 +638,11 @@ class DebateApp:
                 combo = ttk.Combobox(row, textvariable=var, values=options, state="readonly", width=18)
                 combo.pack(side="left", padx=5)
             else:
-                entry = tk.Entry(row, textvariable=var, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], insertbackground=self.THEME["fg"], relief="flat", width=20)
+                entry = tk.Entry(row, textvariable=var, font=("Segoe UI", 10), bg=self.THEME["entry_bg"], fg=self.THEME["entry_fg"], insertbackground=self.THEME["accent"], relief="flat", width=20)
+                try:
+                    def _limit_entry(t): return len(t) <= 64
+                    entry.config(validate='key', validatecommand=(entry.register(_limit_entry), '%P'))
+                except Exception: pass
                 entry.pack(side="left", padx=5)
             return var
 

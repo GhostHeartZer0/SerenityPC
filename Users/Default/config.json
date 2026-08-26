@@ -170,10 +170,10 @@
         "mid": 64,
         "transcendent": 64
     },
-    "sash_pos": 574,
+    "sash_pos": 481,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 6,
+    "active_persona_level": 1,
     "max_persona_level": 6.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
@@ -485,7 +485,7 @@
     "media_rendering": 1,
     "history_usage": "all",
     "ghost_mode": true,
-    "dynamic_params_enabled": true,
+    "dynamic_params_enabled": false,
     "startup_count": 2,
     "offline_mode": false,
     "theme": "yellow_blacket",
@@ -512,7 +512,7 @@
     "stt_language": "en-US",
     "text_scale": 100,
     "ui_font": "Segoe UI",
-    "mono_font": "Courier New",
+    "mono_font": "Inconsolata",
     "responsive_font_scaling": true,
     "font_size_offsets": {
         "chat": 0,
@@ -521,5 +521,19 @@
         "stats": -1,
         "ui": 0
     },
-    "dark_mode": true
+    "dark_mode": true,
+    "mmproj_mapping": {
+        "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B\\mmproj-BF16.gguf",
+        "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B\\mmproj-BF16.gguf"
+    },
+    "multimedia_handling": "auto",
+    "texture_intensity": 1.0,
+    "user_preferred_name": "",
+    "user_address_style": "Direct / Plain",
+    "delegation_enabled": false,
+    "cecilia_delegation_mode": "shadow_wizard",
+    "subagent_selection_mode": "minimal",
+    "delegation_model_mode": "lvl6_7_model",
+    "delegation_chain_preset": "standard",
+    "delegation_handoff_target": "lvl3_compiler"
 }

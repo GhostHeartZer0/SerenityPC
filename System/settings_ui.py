@@ -5,9 +5,9 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, ttk, simpledialog
 from serenity_resources import THEME
 try:
-    from System.serenity_utils import ToolTip, TutorialOverlay
+    from System.serenity_utils import ToolTip, TutorialOverlay, bind_entry_limit
 except ImportError:
-    from serenity_utils import ToolTip, TutorialOverlay
+    from serenity_utils import ToolTip, TutorialOverlay, bind_entry_limit
 
 def run_auto_detect(app, window=None):
     """
@@ -28,7 +28,7 @@ def run_auto_detect(app, window=None):
     if manual_vram_mb > 0:
         vram_gb = manual_vram_mb / 1024
         app._log_and_display(f"Using Manual VRAM Target: {vram_gb:.2f}GB")
-    elif system_monitor_loaded and getattr(app, 'gpu_handle', None):
+    elif system_monitor_loaded and nvidia_ml is not None and getattr(app, 'gpu_handle', None):
         try:
             mem = nvidia_ml.nvmlDeviceGetMemoryInfo(app.gpu_handle)
             vram_gb = mem.total / 1024**3
@@ -187,8 +187,9 @@ def open_settings_window(app):
         vram_frame.pack(anchor="w", pady=(5, 0))
         lbl_vram = tk.Label(vram_frame, text="VRAM (GB):", bg=THEME["bg_color"], fg=THEME["electric_blue"])
         lbl_vram.pack(side=tk.LEFT)
-        ToolTip(lbl_vram, "Target VRAM threshold in Gigabytes for GPU layer calculation.", app=app)
-        vram_ent = tk.Entry(vram_frame, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=6)
+        vram_ent = tk.Entry(vram_frame, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                            insertbackground=THEME.get("electric_blue", THEME["fg_color"]), width=6)
+        bind_entry_limit(vram_ent, max_len=6)
         vram_ent.pack(side=tk.LEFT, padx=5)
         ToolTip(vram_ent, "Target VRAM threshold in Gigabytes for GPU layer calculation.", app=app)
         
@@ -197,7 +198,9 @@ def open_settings_window(app):
         lbl_dmn = tk.Label(dmn_frame, text="DMN Timeout (min:sec):", bg=THEME["bg_color"], fg=THEME["electric_blue"])
         lbl_dmn.pack(side=tk.LEFT)
         ToolTip(lbl_dmn, "Default Mode Network idle countdown before Serenity begins background reflections.", app=app)
-        dmn_ent = tk.Entry(dmn_frame, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=7)
+        dmn_ent = tk.Entry(dmn_frame, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                           insertbackground=THEME.get("electric_blue", THEME["fg_color"]), width=7)
+        bind_entry_limit(dmn_ent, max_len=8)
         dmn_val = app.config.get("dmn_timeout", "05:00")
         dmn_ent.insert(0, str(dmn_val))
         dmn_ent.pack(side=tk.LEFT, padx=5)
@@ -225,17 +228,48 @@ def open_settings_window(app):
             cb_rgb.pack(anchor="w")
             ToolTip(cb_rgb, "Toggle visibility of RGB lighting controls button.", app=app)
 
-        lbl_img = tk.Label(left_header, text="Image Handling Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_img = tk.Label(left_header, text="Multimedia Handling Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
         lbl_img.pack(anchor="w", pady=(5, 0))
-        ToolTip(lbl_img, "Choose between automated handling, dedicated vision model, or native multimodal.", app=app)
-        image_handling_var = tk.StringVar(value=app.config.get("image_handling", "auto"))
-        image_handling_frame = tk.Frame(left_header, bg=THEME["bg_color"])
-        image_handling_frame.pack(anchor="w", padx=10)
+        ToolTip(lbl_img, "Choose between automated handling, dedicated vision model, or native multimodal (images/audio/video).", app=app)
+        multimedia_handling_var = tk.StringVar(value=app.config.get("multimedia_handling", app.config.get("image_handling", "auto")))
+        multimedia_handling_frame = tk.Frame(left_header, bg=THEME["bg_color"])
+        multimedia_handling_frame.pack(anchor="w", padx=10)
         for opt in ["auto", "vision", "native"]:
-            rb = tk.Radiobutton(image_handling_frame, text=opt.capitalize(), variable=image_handling_var, value=opt,
+            rb = tk.Radiobutton(multimedia_handling_frame, text=opt.capitalize(), variable=multimedia_handling_var, value=opt,
                            bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
             rb.pack(side=tk.LEFT, padx=5)
-            ToolTip(rb, f"Use {opt} image handling mode.", app=app)
+            ToolTip(rb, f"Use {opt} multimedia (images, audio, video) handling mode.", app=app)
+
+        # Active Model Projector Mapping Selector
+        proj_sel_frame = tk.Frame(left_header, bg=THEME["bg_color"])
+        proj_sel_frame.pack(anchor="w", padx=10, pady=(2, 2))
+        
+        curr_m_path = app.model_path or ""
+        curr_proj_cand = app.config.get("mmproj_mapping", {}).get(curr_m_path, "")
+        if not curr_proj_cand and hasattr(app, "_find_projector_for_model"):
+            curr_proj_cand = app._find_projector_for_model(curr_m_path, interactive=False) or ""
+        
+        lbl_proj_disp = tk.Label(proj_sel_frame, text=f"Projector: {os.path.basename(curr_proj_cand) if curr_proj_cand else 'None (Auto-Scanned)'}", 
+                                 bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"])
+        
+        def _pick_active_projector():
+            from tkinter import filedialog
+            chosen = filedialog.askopenfilename(
+                title="Select Vision/Audio Projector (.mmproj / GGUF)",
+                filetypes=[("Projector Files", "*.gguf;*.mmproj;*.bin"), ("All Files", "*.*")],
+                parent=win
+            )
+            if chosen and os.path.exists(chosen):
+                if app.model_path:
+                    app.config.setdefault("mmproj_mapping", {})[app.model_path] = chosen
+                    if hasattr(app, 'save_config'): app.save_config()
+                lbl_proj_disp.config(text=f"Projector: {os.path.basename(chosen)}")
+
+        btn_proj_pick = tk.Button(proj_sel_frame, text="Set Projector", command=_pick_active_projector, 
+                                  bg=THEME["widget_bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_small"])
+        btn_proj_pick.pack(side=tk.LEFT, padx=(0, 5))
+        lbl_proj_disp.pack(side=tk.LEFT)
+        ToolTip(btn_proj_pick, "Manually map a multimodal projector (.mmproj / GGUF) to the currently loaded model.", app=app)
 
         lbl_muse = tk.Label(left_header, text="Muse Reasoning:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
         lbl_muse.pack(anchor="w", pady=(5, 0))
@@ -317,7 +351,7 @@ def open_settings_window(app):
         t_action_frame.pack(anchor="n", pady=2)
         t_action_rbs = []
         for val, txt in [("save", "Save"), ("write", "Write"), ("modify", "Modify")]:
-            rb_t = tk.Radiobutton(t_action_frame, text=txt, variable=template_mode, value=val, indicatoron=0, 
+            rb_t = tk.Radiobutton(t_action_frame, text=txt, variable=template_mode, value=val, indicatoron=False, 
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["electric_blue"],
                            activebackground=THEME["electric_blue"], activeforeground="#000000")
             rb_t.pack(side=tk.LEFT, padx=2)
@@ -341,11 +375,11 @@ def open_settings_window(app):
             for j in range(4):
                 slot_id = f"T{(i*4)+j+1}"
                 t_name = app.config.get("custom_templates", {}).get(slot_id, {}).get("name", slot_id)
-                b = tk.Radiobutton(t_grid, text=t_name, variable=active_template, value=slot_id, indicatoron=0, width=12, 
+                b = tk.Radiobutton(t_grid, text=t_name, variable=active_template, value=slot_id, indicatoron=False, width=12, 
                                    bg=THEME["widget_bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["electric_blue"],
                                    activebackground=THEME["electric_blue"], activeforeground="#000000")
                 b.grid(row=i, column=j, padx=2, pady=2)
-                b.slot_id = slot_id
+                setattr(b, "slot_id", slot_id)
                 ToolTip(b, f"Template Slot {slot_id} ({t_name}). Click to apply or modify.", app=app)
                 template_buttons.append(b)
                 t_slot_rbs.append((b, slot_id))
@@ -371,7 +405,9 @@ def open_settings_window(app):
                 t_win.attributes("-topmost", False)
                 current = app.config.get("custom_templates", {}).get(t_id, {})
                 tk.Label(t_win, text="Name:", bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(anchor="w", padx=10, pady=(10,0))
-                name_ent = tk.Entry(t_win, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+                name_ent = tk.Entry(t_win, bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                    insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+                bind_entry_limit(name_ent, max_len=24)
                 name_ent.insert(0, current.get("name", t_id))
                 name_ent.pack(fill=tk.X, padx=10)
                 param_list = [("Temp:", "temp", 0.8), ("Top P:", "top_p", 0.9), ("Min P:", "min_p", 0.05), ("Rep Pen:", "rep", 1.1), ("Pres Pen:", "pres", 0.0),
@@ -383,12 +419,14 @@ def open_settings_window(app):
                     r, c = divmod(idx, 2)
                     c *= 2
                     tk.Label(grid_f, text=label, bg=THEME["bg_color"], fg=THEME["electric_blue"], width=9, anchor="w").grid(row=r, column=c, padx=(0,2), pady=2)
-                    e = tk.Entry(grid_f, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], width=8)
+                    e = tk.Entry(grid_f, bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                                 insertbackground=THEME.get("electric_blue", THEME["fg_color"]), width=8)
+                    bind_entry_limit(e, max_len=10)
                     e.insert(0, str(current.get(key, default)))
                     e.grid(row=r, column=c+1, padx=(0,10), pady=2)
                     fields[key] = e
                 def _save_mod():
-                    t_data = {"name": name_ent.get()}
+                    t_data: dict[str, object] = {"name": name_ent.get()}
                     for k, e in fields.items():
                         try: t_data[k] = float(e.get()) if '.' in e.get() else int(e.get())
                         except: t_data[k] = current.get(k, 0)
@@ -429,7 +467,7 @@ def open_settings_window(app):
             if not t_id: return
             if mode == "save":
                 t_data = app.config.get("custom_templates", {}).get(t_id, {})
-                t_data["name"] = t_data.get("name", t_id)
+                t_data["name"] = t_data.get("name", t_id)               
                 try: t_data["temp"] = float(temp_ents[tier_name].get())
                 except: pass
                 try: t_data["top_p"] = float(top_p_ents[tier_name].get())
@@ -463,7 +501,7 @@ def open_settings_window(app):
                 if not t_data: return
                 for k, d in [("temp", temp_ents), ("top_p", top_p_ents), ("min_p", min_p_ents), ("rep", rep_ents), ("pres", pres_ents), ("freq", freq_ents), ("top_k", top_k_ents), 
                 ("batch", n_batch_ents), ("layers", ents), ("ctx", ctx_ents), ("stop", stop_ents)]:
-                    if k in t_data: 
+                    if k in t_data and tier_name in d: 
                         d[tier_name].delete(0, tk.END)
                         d[tier_name].insert(0, str(t_data[k]))
                 messagebox.showinfo("Templating", f"Applied {t_data['name']} to {tier_name.upper()}!", parent=win)
@@ -488,21 +526,43 @@ def open_settings_window(app):
             
             r1b = tk.Frame(lf, bg=THEME["bg_color"]); r1b.pack(fill=tk.X, padx=5, pady=2)
             tk.Label(r1b, text="Layers:", bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(side=tk.LEFT)
-            ents[key] = tk.Entry(r1b, width=4); ents[key].insert(0, str(app.gpu_layer_config.get(key, -1))); ents[key].pack(side=tk.LEFT, padx=2)
+            ents[key] = tk.Entry(r1b, width=4, bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                 insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+            bind_entry_limit(ents[key], max_len=5)
+            ents[key].insert(0, str(app.gpu_layer_config.get(key, -1)))
+            ents[key].pack(side=tk.LEFT, padx=2)
+
             tk.Label(r1b, text="Ctx:", bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(side=tk.LEFT, padx=(5, 0))
-            ctx_ents[key] = tk.Entry(r1b, width=6); ctx_ents[key].insert(0, str(app.context_size_config.get(key, 4096))); ctx_ents[key].pack(side=tk.LEFT, padx=2)
+            ctx_ents[key] = tk.Entry(r1b, width=6, bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                     insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+            bind_entry_limit(ctx_ents[key], max_len=8)
+            ctx_ents[key].insert(0, str(app.context_size_config.get(key, 4096)))
+            ctx_ents[key].pack(side=tk.LEFT, padx=2)
+
             tk.Label(r1b, text="Batch:", bg=THEME["bg_color"], fg=THEME["fg_color"]).pack(side=tk.LEFT, padx=(5, 0))
-            n_batch_ents[key] = tk.Entry(r1b, width=5); n_batch_ents[key].insert(0, str(app.n_batch_config.get(key, 512))); n_batch_ents[key].pack(side=tk.LEFT, padx=2)
+            n_batch_ents[key] = tk.Entry(r1b, width=5, bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                         insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+            bind_entry_limit(n_batch_ents[key], max_len=6)
+            n_batch_ents[key].insert(0, str(app.n_batch_config.get(key, 512)))
+            n_batch_ents[key].pack(side=tk.LEFT, padx=2)
 
             r2 = tk.Frame(lf, bg=THEME["bg_color"]); r2.pack(fill=tk.X, padx=5)
             for l, d, c, df in [("Temp", temp_ents, app.temp_config, 0.8), ("Top-P", top_p_ents, app.top_p_config, 0.95), ("Min-P", min_p_ents, app.min_p_config, 0.05), ("Top-K", top_k_ents, app.top_k_config, 40)]:
                 tk.Label(r2, text=f"{l}:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side=tk.LEFT, padx=(2, 0))
-                d[key] = tk.Entry(r2, width=5); d[key].insert(0, f"{c.get(key, df):g}"); d[key].pack(side=tk.LEFT, padx=2)
+                d[key] = tk.Entry(r2, width=5, bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                  insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+                bind_entry_limit(d[key], max_len=8)
+                d[key].insert(0, f"{c.get(key, df):g}")
+                d[key].pack(side=tk.LEFT, padx=2)
                 
             r2b = tk.Frame(lf, bg=THEME["bg_color"]); r2b.pack(fill=tk.X, padx=5)
             for l, d, c, df in [("Rep", rep_ents, app.repeat_penalty_config, 1.1), ("Freq", freq_ents, app.frequency_penalty_config, 0.0), ("Pres", pres_ents, app.presence_penalty_config, 0.0)]:
                 tk.Label(r2b, text=f"{l}:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side=tk.LEFT, padx=(2, 0))
-                d[key] = tk.Entry(r2b, width=5); d[key].insert(0, f"{c.get(key, df):g}"); d[key].pack(side=tk.LEFT, padx=2)
+                d[key] = tk.Entry(r2b, width=5, bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                   insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+                bind_entry_limit(d[key], max_len=8)
+                d[key].insert(0, f"{c.get(key, df):g}")
+                d[key].pack(side=tk.LEFT, padx=2)
 
             if is_vision:
                 pk = f"{key}_projector"
@@ -740,10 +800,20 @@ def open_settings_window(app):
         tex_dropdown.grid(row=7, column=1, padx=5, pady=2)
         ToolTip(tex_dropdown, "Switch active texture finish style.", app=app)
 
+        lbl_tex_int = tk.Label(kv_frame, text="Texture Intensity:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+        lbl_tex_int.grid(row=8, column=0, sticky="w", pady=2)
+        ToolTip(lbl_tex_int, "Adjust the depth and opacity weighting of active texture styling (0% - 100%).", app=app)
+        curr_tex_int = int(float(app.config.get("texture_intensity", 1.0)) * 100)
+        tex_int_var = tk.IntVar(value=curr_tex_int)
+        tex_int_scale = tk.Scale(kv_frame, from_=0, to=100, orient=tk.HORIZONTAL, variable=tex_int_var, 
+                                 bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0, resolution=5, length=120)
+        tex_int_scale.grid(row=8, column=1, padx=5, pady=2, sticky="ew")
+        ToolTip(tex_int_scale, "Live texture intensity modifier.", app=app)
+
         dark_mode_var = tk.BooleanVar(value=app.config.get("dark_mode", False))
         cb_dark = tk.Checkbutton(kv_frame, text="Dark Mode (OLED Blackout)", variable=dark_mode_var,
                        bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"], font=app.fonts["ui_label"])
-        cb_dark.grid(row=8, column=0, columnspan=2, sticky="w", pady=2)
+        cb_dark.grid(row=9, column=0, columnspan=2, sticky="w", pady=2)
         ToolTip(cb_dark, "Blacks out the interface to pure OLED #000000 to save power and maximize neon text contrast.", app=app)
 
         # STT Audio Input Settings
@@ -764,18 +834,18 @@ def open_settings_window(app):
 
         stt_dev_var = tk.StringVar(value=curr_dev_label)
         lbl_stt = tk.Label(kv_frame, text="STT Mic Input:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
-        lbl_stt.grid(row=9, column=0, sticky="w", pady=2)
+        lbl_stt.grid(row=10, column=0, sticky="w", pady=2)
         ToolTip(lbl_stt, "Select local audio microphone device for Speech-To-Text dictation.", app=app)
         stt_dev_dropdown = ttk.Combobox(kv_frame, textvariable=stt_dev_var, values=dev_names, state="readonly", width=14)
-        stt_dev_dropdown.grid(row=9, column=1, padx=5, pady=2)
+        stt_dev_dropdown.grid(row=10, column=1, padx=5, pady=2)
         ToolTip(stt_dev_dropdown, "Select microphone input device for STT recording.", app=app)
 
         lbl_sttl = tk.Label(kv_frame, text="STT Language:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
-        lbl_sttl.grid(row=10, column=0, sticky="w", pady=2)
+        lbl_sttl.grid(row=11, column=0, sticky="w", pady=2)
         ToolTip(lbl_sttl, "Recognition language code for offline Speech-To-Text.", app=app)
         stt_lang_var = tk.StringVar(value=app.config.get("stt_language", "en-US"))
         stt_lang_dropdown = ttk.Combobox(kv_frame, textvariable=stt_lang_var, values=["en-US", "en-GB", "es-ES", "fr-FR", "de-DE", "ja-JP", "zh-CN"], state="readonly", width=14)
-        stt_lang_dropdown.grid(row=10, column=1, padx=5, pady=2)
+        stt_lang_dropdown.grid(row=11, column=1, padx=5, pady=2)
         ToolTip(stt_lang_dropdown, "Select spoken language code for voice dictation.", app=app)
 
         # --- TEXT & FONT SCALING ---
@@ -798,11 +868,11 @@ def open_settings_window(app):
         text_scale_val_var = tk.IntVar(value=curr_text_scale)
 
         lbl_scale = tk.Label(kv_frame, text="Text Size / Scale:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
-        lbl_scale.grid(row=11, column=0, sticky="w", pady=2)
+        lbl_scale.grid(row=12, column=0, sticky="w", pady=2)
         ToolTip(lbl_scale, "Adjust text and font size scaling (70% - 250%). Use Ctrl + / Ctrl - for quick zoom.", app=app)
         
         scale_dropdown = ttk.Combobox(kv_frame, textvariable=text_scale_display_var, values=list(SCALE_MAP.keys()), state="readonly", width=14)
-        scale_dropdown.grid(row=11, column=1, padx=5, pady=2)
+        scale_dropdown.grid(row=12, column=1, padx=5, pady=2)
         ToolTip(scale_dropdown, "Select text size scale preset.", app=app)
         
         def _on_scale_dropdown_select(*args):
@@ -817,35 +887,35 @@ def open_settings_window(app):
 
         # --- FONT FAMILY SELECTIONS ---
         UI_FONT_OPTIONS = [
-            "Segoe UI", "Arial", "Calibri", "Verdana", "Tahoma",
-            "Trebuchet MS", "Times New Roman", "Georgia", "Cambria",
-            "Palatino Linotype", "Comic Sans MS", "Franklin Gothic Medium",
-            "Impact", "Lucida Sans Unicode"
+            "Segoe UI", "Verdana", "Times New Roman", "Cambria",
+            "Comic Sans MS", "Gothic A1", "Modiableic",
+            "Comfortaa", "YU Gothic UI", "Segoe UI Variable",
+            "Modern Antiqua", "Quicksand", "UnifrakturMaguntia",
         ]
         MONO_FONT_OPTIONS = [
-            "Consolas", "Courier New", "Lucida Console",
-            "Cascadia Code", "Cascadia Mono"
+            "Doto", "Inconsolata", "Noto Sans Mono", "Lucida Sans Console",
+            "Palatino Linotype", "Tajawal", "MV Boli", "Didact Gothic",
         ]
 
         curr_ui_font = app.config.get("ui_font", "Segoe UI")
         curr_mono_font = app.config.get("mono_font", "Consolas")
         ui_font_var = tk.StringVar(value=curr_ui_font if curr_ui_font in UI_FONT_OPTIONS else "Segoe UI")
-        mono_font_var = tk.StringVar(value=curr_mono_font if curr_mono_font in MONO_FONT_OPTIONS else "Consolas")
+        mono_font_var = tk.StringVar(value=curr_mono_font if curr_mono_font in MONO_FONT_OPTIONS else MONO_FONT_OPTIONS[0])
 
         lbl_ui_font = tk.Label(kv_frame, text="UI Font:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
-        lbl_ui_font.grid(row=12, column=0, sticky="w", pady=2)
+        lbl_ui_font.grid(row=13, column=0, sticky="w", pady=2)
         ToolTip(lbl_ui_font, "Select font family for chat, buttons, menus, and labels.", app=app)
 
         ui_font_dropdown = ttk.Combobox(kv_frame, textvariable=ui_font_var, values=UI_FONT_OPTIONS, state="readonly", width=14)
-        ui_font_dropdown.grid(row=12, column=1, padx=5, pady=2)
+        ui_font_dropdown.grid(row=13, column=1, padx=5, pady=2)
         ToolTip(ui_font_dropdown, "Choose UI typography font family.", app=app)
 
         lbl_mono_font = tk.Label(kv_frame, text="Code / Log Font:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
-        lbl_mono_font.grid(row=13, column=0, sticky="w", pady=2)
+        lbl_mono_font.grid(row=14, column=0, sticky="w", pady=2)
         ToolTip(lbl_mono_font, "Select font family for code blocks, telemetry, and backend logs.", app=app)
 
         mono_font_dropdown = ttk.Combobox(kv_frame, textvariable=mono_font_var, values=MONO_FONT_OPTIONS, state="readonly", width=14)
-        mono_font_dropdown.grid(row=13, column=1, padx=5, pady=2)
+        mono_font_dropdown.grid(row=14, column=1, padx=5, pady=2)
         ToolTip(mono_font_dropdown, "Choose monospace font family.", app=app)
 
         def _on_font_family_change(*args):
@@ -861,7 +931,7 @@ def open_settings_window(app):
                                        command=lambda: open_text_scaling_center(app, win),
                                        bg=THEME["widget_bg_color"], fg=THEME.get("accent_highlight", "#00ffcc"),
                                        font=app.fonts["ui_button"], relief=tk.FLAT)
-        btn_scaling_center.grid(row=14, column=0, columnspan=2, pady=(6, 2), sticky="ew")
+        btn_scaling_center.grid(row=15, column=0, columnspan=2, pady=(6, 2), sticky="ew")
         ToolTip(btn_scaling_center, "Open comprehensive Text size & Scaling Center for live preview and custom category scaling.", app=app)
 
         # --- USER PROFILE & HISTORY SEPARATION ---
@@ -914,6 +984,33 @@ def open_settings_window(app):
         btn_switch_u.pack(side=tk.LEFT, padx=8)
         ToolTip(btn_switch_u, "Switch active profile and load its separate history archive and DMN state.", app=app)
 
+        user_identity_frame = tk.Frame(user_section, bg=THEME["bg_color"])
+        user_identity_frame.pack(fill=tk.X, padx=10, pady=(0, 6))
+
+        lbl_pref_name = tk.Label(user_identity_frame, text="Preferred Name / Call Sign:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"])
+        lbl_pref_name.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(lbl_pref_name, "Name that Serenity, Sage, and Cecilia will use when addressing you.", app=app)
+        
+        user_pref_name_var = tk.StringVar(value=app.config.get("user_preferred_name", ""))
+        user_pref_name_entry = tk.Entry(user_identity_frame, textvariable=user_pref_name_var, 
+                                        bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
+                                        insertbackground=THEME.get("electric_blue", THEME["fg_color"]),
+                                        font=app.fonts.get("ui_entry", app.fonts.get("ui_label", app.fonts.get("main"))), width=14)
+        bind_entry_limit(user_pref_name_entry, max_len=32)
+        user_pref_name_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(user_pref_name_entry, "Set your custom name or call sign for this profile.", app=app)
+
+        lbl_addr_style = tk.Label(user_identity_frame, text="Addressing Style:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"])
+        lbl_addr_style.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(lbl_addr_style, "Configure how personas refer to you in dialogue.", app=app)
+
+        ADDRESS_STYLES = ["Direct / Plain", "Warm / Familiar", "Formal / Respectful", "Silent / Unnamed"]
+        curr_addr_style = app.config.get("user_address_style", "Direct / Plain")
+        user_addr_style_var = tk.StringVar(value=curr_addr_style if curr_addr_style in ADDRESS_STYLES else "Direct / Plain")
+        addr_style_combo = ttk.Combobox(user_identity_frame, textvariable=user_addr_style_var, values=ADDRESS_STYLES, state="readonly", width=16)
+        addr_style_combo.pack(side=tk.LEFT, padx=0)
+        ToolTip(addr_style_combo, "Select how Serenity/Cecilia should address you.", app=app)
+
         user_opts_frame = tk.Frame(user_section, bg=THEME["bg_color"])
         user_opts_frame.pack(fill=tk.X, padx=10, pady=(0, 6))
 
@@ -941,6 +1038,93 @@ def open_settings_window(app):
                                 state="normal" if is_logged_in else "disabled")
         cb_pub.pack(side=tk.LEFT, padx=5)
         ToolTip(cb_pub, "Toggle visibility of Public profile in switcher (requires logged in user).", app=app)
+
+        # --- MULTI-AGENT DELEGATION & SUBAGENTS SECTION ---
+        delegation_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
+        delegation_section.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        del_header = tk.Frame(delegation_section, bg=THEME["widget_bg_color"])
+        del_header.pack(fill=tk.X, padx=0, pady=0)
+        lbl_del_hdr = tk.Label(del_header, text="👥 Multi-Agent Delegation & Subagents (Lvls 6 & 7)", bg=THEME["widget_bg_color"], 
+                               fg=THEME["electric_blue"], font=app.fonts["bold"])
+        lbl_del_hdr.pack(side=tk.LEFT, padx=8, pady=4)
+        ToolTip(lbl_del_hdr, "Configure subagent task delegation, handoffs, and orchestration across Levels 1-6.", app=app)
+
+        del_body = tk.Frame(delegation_section, bg=THEME["bg_color"])
+        del_body.pack(fill=tk.X, padx=10, pady=6)
+
+        del_left = tk.Frame(del_body, bg=THEME["bg_color"])
+        del_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+
+        delegation_enabled_var = tk.BooleanVar(value=app.config.get("delegation_enabled", False))
+        cb_del_enable = tk.Checkbutton(del_left, text="Enable Delegation & Subagents (Lvls 6 & 7)", variable=delegation_enabled_var,
+                                       bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"],
+                                       font=app.fonts["ui_label"])
+        cb_del_enable.pack(anchor="w", pady=(0, 4))
+        ToolTip(cb_del_enable, "Allows Transcendent (Lvl 6) and Cecilia (Lvl 7) to task subagents and orchestrate handoffs.", app=app)
+
+        lbl_cecilia_mode = tk.Label(del_left, text="Cecilia Mode (Lvl 7):", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+        lbl_cecilia_mode.pack(anchor="w", pady=(2, 0))
+        ToolTip(lbl_cecilia_mode, "Choose between Shadow Wizard (full subagent orchestration) or Divine Judgement (direct omniscience).", app=app)
+
+        cecilia_mode_var = tk.StringVar(value=app.config.get("cecilia_delegation_mode", "shadow_wizard"))
+        cecilia_mode_frame = tk.Frame(del_left, bg=THEME["bg_color"])
+        cecilia_mode_frame.pack(anchor="w", pady=(1, 4))
+        for c_val, c_lbl in [("shadow_wizard", "Shadow Wizard (Subagent Orchestration)"), ("divine_judgement", "Divine Judgement (Direct Omniscience)")]:
+            rb_c = tk.Radiobutton(cecilia_mode_frame, text=c_lbl, variable=cecilia_mode_var, value=c_val,
+                                  bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"],
+                                  font=app.fonts["ui_small"])
+            rb_c.pack(anchor="w", pady=1)
+            ToolTip(rb_c, f"Set Cecilia operating mode to {c_lbl}.", app=app)
+
+        lbl_sub_density = tk.Label(del_left, text="Subagent Density / Selection:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+        lbl_sub_density.pack(anchor="w", pady=(2, 0))
+        ToolTip(lbl_sub_density, "Control whether the orchestrator utilizes only the minimum required subagents or engages all desired agents.", app=app)
+        subagent_density_var = tk.StringVar(value=app.config.get("subagent_selection_mode", "minimal"))
+        density_frame = tk.Frame(del_left, bg=THEME["bg_color"])
+        density_frame.pack(anchor="w", pady=(1, 4))
+        for d_val, d_lbl in [("minimal", "Uses minimum required subagents"), ("all", "Use as many subagents as you want")]:
+            rb_d = tk.Radiobutton(density_frame, text=d_lbl, variable=subagent_density_var, value=d_val,
+                                  bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"],
+                                  font=app.fonts["ui_small"])
+            rb_d.pack(anchor="w", pady=1)
+            ToolTip(rb_d, f"Configure subagent density to: {d_lbl}.", app=app)
+
+        del_right = tk.Frame(del_body, bg=THEME["bg_color"])
+        del_right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15)
+
+        lbl_engine_mode = tk.Label(del_right, text="Execution Engine Model:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+        lbl_engine_mode.pack(anchor="w")
+        ToolTip(lbl_engine_mode, "Choose whether to run all subagents with the active Lvl 6/7 model or dynamically swap to each subagent's assigned model.", app=app)
+        delegation_model_mode_var = tk.StringVar(value=app.config.get("delegation_model_mode", "lvl6_7_model"))
+        model_mode_frame = tk.Frame(del_right, bg=THEME["bg_color"])
+        model_mode_frame.pack(anchor="w", pady=(1, 4))
+        for m_val, m_lbl in [("lvl6_7_model", "Use model selected for Lvl 6 / 7"), ("per_subagent_model", "Use model selected for specific subagent")]:
+            rb_m = tk.Radiobutton(model_mode_frame, text=m_lbl, variable=delegation_model_mode_var, value=m_val,
+                                  bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"],
+                                  font=app.fonts["ui_small"])
+            rb_m.pack(anchor="w", pady=1)
+            ToolTip(rb_m, f"Engine execution mode: {m_lbl}.", app=app)
+
+        lbl_chain = tk.Label(del_right, text="Delegation Chain Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+        lbl_chain.pack(anchor="w")
+        ToolTip(lbl_chain, "Select default subagent execution and reporting pipeline.", app=app)
+        chain_preset_var = tk.StringVar(value=app.config.get("delegation_chain_preset", "standard"))
+        chain_combo = ttk.Combobox(del_right, textvariable=chain_preset_var, 
+                                   values=["standard (L2 Search -> L3 Store -> L5 Reason -> L6/7 Approve)", "direct_strike (L2 Search -> L6/7 Approve)"], 
+                                   state="readonly", width=36)
+        chain_combo.pack(anchor="w", pady=(2, 6))
+        ToolTip(chain_combo, "Select pipeline order for subagent handoffs.", app=app)
+
+        lbl_handoff = tk.Label(del_right, text="Handoff Reporting Target:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+        lbl_handoff.pack(anchor="w")
+        ToolTip(lbl_handoff, "Where subagents report their intermediary outputs.", app=app)
+        handoff_target_var = tk.StringVar(value=app.config.get("delegation_handoff_target", "lvl3_compiler"))
+        handoff_combo = ttk.Combobox(del_right, textvariable=handoff_target_var,
+                                     values=["lvl3_compiler (Staging & Aggregation)", "taskmaster_direct (Direct to Lvl 6/7)"],
+                                     state="readonly", width=36)
+        handoff_combo.pack(anchor="w", pady=(2, 4))
+        ToolTip(handoff_combo, "Select whether intermediate results stage in Level 3 memory or return directly to orchestrator.", app=app)
 
         # --- LOADING BAR & STATUS AREA CONFIGURATION ---
         status_bar_section = tk.Frame(main, bg=THEME["bg_color"], highlightbackground=THEME["electric_blue"], highlightthickness=1, bd=0)
@@ -1063,17 +1247,26 @@ def open_settings_window(app):
             row_idx = 0
             if is_already_enabled:
                 tk.Label(fields_frame, text="Current Password:", bg=THEME["bg_color"], fg=THEME["fg_color"]).grid(row=row_idx, column=0, sticky="w", pady=4)
-                curr_entry = tk.Entry(fields_frame, textvariable=curr_pwd_var, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+                curr_entry = tk.Entry(fields_frame, textvariable=curr_pwd_var, show="*", width=24, 
+                                      bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                      insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+                bind_entry_limit(curr_entry, max_len=64)
                 curr_entry.grid(row=row_idx, column=1, padx=6, pady=4)
                 row_idx += 1
 
             tk.Label(fields_frame, text="New Master Password:", bg=THEME["bg_color"], fg=THEME["fg_color"]).grid(row=row_idx, column=0, sticky="w", pady=4)
-            new_entry = tk.Entry(fields_frame, textvariable=new_pwd_var, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+            new_entry = tk.Entry(fields_frame, textvariable=new_pwd_var, show="*", width=24, 
+                                 bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                 insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+            bind_entry_limit(new_entry, max_len=64)
             new_entry.grid(row=row_idx, column=1, padx=6, pady=4)
             row_idx += 1
 
             tk.Label(fields_frame, text="Confirm Password:", bg=THEME["bg_color"], fg=THEME["fg_color"]).grid(row=row_idx, column=0, sticky="w", pady=4)
-            conf_entry = tk.Entry(fields_frame, textvariable=confirm_pwd_var, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+            conf_entry = tk.Entry(fields_frame, textvariable=confirm_pwd_var, show="*", width=24, 
+                                  bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                  insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+            bind_entry_limit(conf_entry, max_len=64)
             conf_entry.grid(row=row_idx, column=1, padx=6, pady=4)
 
             def _apply_new_password():
@@ -1123,7 +1316,9 @@ def open_settings_window(app):
             tk.Label(dis_win, text="Enter Master Password to Decrypt All Histories:", 
                      bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"]).pack(padx=12, pady=10)
             
-            pwd_ent = tk.Entry(dis_win, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+            pwd_ent = tk.Entry(dis_win, show="*", width=24, bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                               insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+            bind_entry_limit(pwd_ent, max_len=64)
             pwd_ent.pack(padx=12, pady=6)
             pwd_ent.focus_set()
 
@@ -1177,7 +1372,10 @@ def open_settings_window(app):
         lbl_alock.pack(side=tk.LEFT, padx=(0, 6))
         ToolTip(lbl_alock, "Automatically locks vault after a period of user inactivity (0 = disabled).", app=app)
 
-        sec_entry = tk.Entry(inactivity_frame, textvariable=auto_lock_var, width=6, bg=THEME["widget_bg_color"], fg=THEME["fg_color"])
+        sec_entry = tk.Entry(inactivity_frame, textvariable=auto_lock_var, width=6, 
+                             bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                             insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+        bind_entry_limit(sec_entry, max_len=6)
         sec_entry.pack(side=tk.LEFT, padx=4)
         ToolTip(sec_entry, "Auto-lock timeout in seconds.", app=app)
         tk.Label(inactivity_frame, text="sec", bg=THEME["bg_color"], fg="#888888").pack(side=tk.LEFT, padx=(0, 8))
@@ -1293,7 +1491,8 @@ def open_settings_window(app):
             app.config["show_tooltips"] = show_tooltips_var.get()
             app.state["streaming_mode"] = stream_var.get()
             app.config["max_token_ratio"] = ratio_var.get()
-            app.config["image_handling"] = image_handling_var.get()
+            app.config["multimedia_handling"] = multimedia_handling_var.get()
+            app.config["image_handling"] = multimedia_handling_var.get()
             app.config["muse_reasoning_strength"] = muse_reasoning_var.get()
             app.config["dmn_timeout"] = dmn_ent.get().strip()
             app.config["stt_device_index"] = dev_id_map.get(stt_dev_var.get(), None)
@@ -1341,8 +1540,10 @@ def open_settings_window(app):
             theme_k = THEME_MAP.get(theme_display_var.get(), "apex")
             tex_k = TEXTURE_MAP.get(tex_display_var.get(), "default")
             d_mode = dark_mode_var.get()
+            tex_int = float(tex_int_var.get()) / 100.0
             app.config["theme"] = theme_k
             app.config["texture_style"] = tex_k
+            app.config["texture_intensity"] = tex_int
             app.config["dark_mode"] = d_mode
 
             # User Profile & Status Bar config
@@ -1355,6 +1556,17 @@ def open_settings_window(app):
                     app.switch_user(new_un)
             else:
                 app.config["username"] = new_un
+            
+            app.config["user_preferred_name"] = user_pref_name_var.get().strip()
+            app.config["user_address_style"] = user_addr_style_var.get().strip()
+
+            # Multi-Agent Delegation Config
+            app.config["delegation_enabled"] = delegation_enabled_var.get()
+            app.config["cecilia_delegation_mode"] = cecilia_mode_var.get()
+            app.config["subagent_selection_mode"] = subagent_density_var.get()
+            app.config["delegation_model_mode"] = delegation_model_mode_var.get()
+            app.config["delegation_chain_preset"] = chain_preset_var.get()
+            app.config["delegation_handoff_target"] = handoff_target_var.get()
             
             app.config["status_bar_mode"] = status_mode_var.get()
             app.config["status_bar_anim_style"] = anim_style_var.get()
@@ -1377,7 +1589,7 @@ def open_settings_window(app):
 
             try:
                 from serenity_resources import apply_theme_to_global
-                apply_theme_to_global(theme_k, tex_k, d_mode, getattr(app, "active_persona_level", 3), (app.model is not None))
+                apply_theme_to_global(theme_k, tex_k, d_mode, getattr(app, "active_persona_level", 3), (app.model is not None), tex_int)
                 if hasattr(app, "apply_current_theme"):
                     app.apply_current_theme()
                 if hasattr(app, "_update_hw_indicator"):
@@ -1521,7 +1733,7 @@ def open_text_scaling_center(app, parent_win=None):
             _update_preview_tags()
 
         scale_slider = tk.Scale(ctrl_lf, from_=70, to=250, orient=tk.HORIZONTAL, variable=scale_var,
-                                command=_on_scale_slider_move, showvalue=0, bg=THEME["widget_bg_color"],
+                                command=_on_scale_slider_move, showvalue=False, bg=THEME["widget_bg_color"],
                                 fg=THEME["fg_color"], activebackground=THEME["electric_blue"],
                                 highlightthickness=0, bd=0)
         scale_slider.pack(fill=tk.X, pady=(0, 4))
@@ -1552,20 +1764,20 @@ def open_text_scaling_center(app, parent_win=None):
         fonts_grid.grid_columnconfigure(3, weight=1)
         
         UI_FONT_OPTIONS = [
-            "Segoe UI", "Arial", "Calibri", "Verdana", "Tahoma",
-            "Trebuchet MS", "Times New Roman", "Georgia", "Cambria",
-            "Palatino Linotype", "Comic Sans MS", "Franklin Gothic Medium",
-            "Impact", "Lucida Sans Unicode"
+            "Segoe UI", "Verdana", "Tahoma", "Cambria",
+            "Comic Sans MS", "Gothic A1", "Modiableic",
+            "Comfortaa", "YU Gothic UI", "Segoe UI Variable",
+            "Modern Antiqua", "Quicksand", "UnifrakturMaguntia",
         ]
         MONO_FONT_OPTIONS = [
-            "Consolas", "Courier New", "Lucida Console",
-            "Cascadia Code", "Cascadia Mono"
+            "Doto", "Inconsolata", "Noto Sans Mono", "Lucida Sans Console",
+            "Palatino Linotype", "Tajawal", "MV Boli", "Didact Gothic",
         ]
 
         curr_ui_font = app.config.get("ui_font", "Segoe UI") if (hasattr(app, 'config') and app.config) else "Segoe UI"
         curr_mono_font = app.config.get("mono_font", "Consolas") if (hasattr(app, 'config') and app.config) else "Consolas"
         ui_font_var = tk.StringVar(value=curr_ui_font if curr_ui_font in UI_FONT_OPTIONS else "Segoe UI")
-        mono_font_var = tk.StringVar(value=curr_mono_font if curr_mono_font in MONO_FONT_OPTIONS else "Consolas")
+        mono_font_var = tk.StringVar(value=curr_mono_font if curr_mono_font in MONO_FONT_OPTIONS else MONO_FONT_OPTIONS[0])
 
         tk.Label(fonts_grid, text="UI Font:", bg=THEME["bg_color"], fg=THEME["fg_color"],
                  font=app.fonts["ui_label"]).grid(row=0, column=0, sticky="w", padx=(0, 4))
@@ -1660,7 +1872,7 @@ def open_text_scaling_center(app, parent_win=None):
                 return _cmd
                 
             s = tk.Scale(f, from_=-4, to=8, orient=tk.HORIZONTAL, variable=cat_vars[cat_key],
-                         command=_make_cat_cmd(cat_key, v_lbl), showvalue=0, bg=THEME["widget_bg_color"],
+                         command=_make_cat_cmd(cat_key, v_lbl), showvalue=False, bg=THEME["widget_bg_color"],
                          fg=THEME["fg_color"], activebackground=THEME["electric_blue"],
                          highlightthickness=0, bd=0)
             s.pack(fill=tk.X)

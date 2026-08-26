@@ -2,31 +2,31 @@
 # Reference: See VERSIONING.md for versioning scheme details (even = minor features, odd = bug patches, -alpha = internal mid-releases).
 
 Needs fixing:
-- Dark Mode vs off, blackened UI vs dark background border colors. ensure visual indicator of persona-color in outlines of prompt/response boxes when persona is loaded. 
-   - dark mode: black background, colored response/prompt box borders when persona loaded. 
-   - dark mode off: midnight persona color background if loaded, colored border always.
-- Texture modifier, and 6 texture styles: gloss, metallic, muted, iridescent, pearlescent, default original. It doesn't work. Add an intensity slider
-   - add a custom name to be referred to by Serenity/Cecilia.
-   - update tutorial to correctly describe how to unleash her.
-   - Test Repetition Detection & Loop Handling [hyper, lazy, off].
-   - Verify Vision & Image Recognition Alignment
-   - Verify Multi-Modal Thought Channel Splitting & Tag Cleanup. 
-   - Test Dynamic Parameter Auto-Adjustment (for Coding, Math, Creative, and Factual tasks; user config; Settings toggle).
-   - Verify Real-Time Diffusion Visual Denoising & Time-Grounding.  
-   - Test Overfill (off/respond/wrapup/autocont).
-   - Verify RLHF DMN state logging.
-   - Test Wringer (t/s) telemetry, prefill/decode/overall metrics, speed outlier detection, speed highscore separation, speed/accuracy weighting, and comparison graph generation.
-   - Test Debate Arena (Canvas LoadingSpinner, Speedy/Simmer pacing, and multi-round role alternation).   
-- Investigate Muse-Glimmer token degradation / pseudogibberish during generation:
-   - Verify llama.cpp forward graph alignment for Muse-Glimmer (SWA window masking, Global NoPE layer RoPE exclusion, logit softcapping = 30.0, output projection bias `bo`, `f_attention_scale`).
-   - Profile sampling defaults (temperature: 1.0, top_p: 0.95, top_k: 64, min_p: 0.0) vs sampler overrides.
-   - Test Jinja chat template variable injection (`reasoning_strength: high`) vs raw tokenized inputs to isolate prefill prompt vs decoding kernel degradation.
--  Lvl 6 electric blue text/accents
+- Security hardening:
+  - Add OS permission checks/hardening for lore_book.py invocation in launch_lore_book
+  - ReDoS protection: Limit input string length & regex complexity in _parse_and_stage_filename_imports
+  - DoS mitigation: Add worker/semaphore cap for _async_deep_history_search thread spawning
+  - Tool execution sandboxing: Restrict _run_tool_loop file operations outside Users/ & Logs/
+
 Completed Log: (Verification Needed)
+- Dynamic Agent Orchestration & Subagent Delegation Engine (`orchestration_manager.py`, toggleable in Settings)
+- Shadow Wizard & Divine Judgement Modes for Cecilia (Level 7)
+- Search bloat filter (`clean_search_bloat`) in `tool_registry.py`
+- KV Cache Footprint & Context Scaling Calibration (removed 35% cap in dynamic GPU layer calculation, 64k-256k headroom)
+- Dark Mode vs off outline synchronization: black bg + colored borders on Dark Mode, midnight persona bg on Dark Mode off
+- Texture intensity slider (0-100%) and texture styles
+- Custom user profile preferred name and addressing styles
+- Tutorial unleash instructions alignment for Level 7 dual triggers
+- Level 6 Electric Blue palette update (`#00D4FF` accents, `#001a2e` bg, `#00FFFF` cyan text)
+- Chat tab header & system status label theme background alignment
+- Console log & UI typography overhaul (Doto, Inconsolata, Noto Sans Mono, Modern Antiqua, etc.)
+- UI entry limits & safeguards (`bind_entry_limit`)
+- Theme-aware typing cursor colorization (`insertbackground`)
+- Multimodal projector (`.mmproj`) lookup hierarchy and fallback selection
 - Require password entry to swap to a locked profile in settings
 - Cecilia persona theme to a dark emerald / neon green, Lvl 7 color to dark emerald
 - Fix mid split sash position and font scalings persistence across startups and profile switches
-- Move the Dynamic status bar (Hybrid/smart with finish t/s, custom animations, fallback telemetry). 3-lines tall above buttons: settings - begin - video - pulse - clear
+- Move the Dynamic status bar (Hybrid/smart with finish t/s, custom animations, fallback telemetry)
 - Separate thoughts/reasoning into collapsible dropdowns in response window
 - Automate stop tag handling and remove manual stop tokens from Settings UI
 - Verify Thought Channel splitting and demuxing across Gemma 4, ATEM, and DeepSeek
@@ -79,7 +79,24 @@ V2.1.6 [Feature] https://github.com/MoonshotAI/Attention-Residuals
 
 V2.1.8 Overhaul tool calling
 
+The Backburner:
+
+- Test Repetition Detection & Loop Handling [hyper, lazy, off].
+- Verify Vision & Image Recognition Alignment
+- Verify Multi-Modal Thought Channel Splitting & Tag Cleanup. 
+- Test Dynamic Parameter Auto-Adjustment (for Coding, Math, Creative, and Factual tasks; user config; Settings toggle).
+- Verify Real-Time Diffusion Visual Denoising & Time-Grounding.  
+- Test Overfill (off/respond/wrapup/autocont).
+- Verify RLHF DMN state logging.
+- Test Wringer (t/s) telemetry, prefill/decode/overall metrics, speed outlier detection, speed highscore separation, speed/accuracy weighting, and comparison graph generation.
+- Test Debate Arena (Canvas LoadingSpinner, Speedy/Simmer pacing, and multi-round role alternation).   
+- Verify llama.cpp forward graph alignment for Muse-Glimmer (SWA window masking, Global NoPE layer RoPE exclusion, logit softcapping = 30.0, output projection bias `bo`, `f_attention_scale`).
+- Profile sampling defaults (temperature: 1.0, top_p: 0.95, top_k: 64, min_p: 0.0) vs sampler overrides.
+- Test Jinja chat template variable injection (`reasoning_strength: high`) vs raw tokenized inputs to isolate prefill prompt vs decoding kernel degradation.
+
 TBD / Future Roadmap:
 - Fix UI scaling
 - Model Fetching Architecture: Design and implement Hugging Face / remote repository model fetcher with resumable chunks, sha256 checksums, and auto-routing to target model directories (S:/LLM / Models).
 - Avatar `serenity_frustrated`.
+- Add Halt options, (off, wrapup, autocont...)
+- Add scroll-lock setting

@@ -14,7 +14,10 @@ import time
 import traceback
 import threading
 import faulthandler
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 import warnings
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", category=FutureWarning)
@@ -25,6 +28,20 @@ with warnings.catch_warnings():
 from PIL import Image, ImageTk
 from serenity_resources import ANIMATION_SEQUENCE, MEDIA_DIR, THEME
 import struct
+
+def bind_entry_limit(entry_widget: tk.Entry, max_len: int = 64):
+    """
+    Binds a character length constraint to a Tkinter Entry widget
+    to prevent UI overflow and scaling issues with long names/paths.
+    """
+    try:
+        def _validate_limit(new_text):
+            return len(new_text) <= max_len
+        vcmd = (entry_widget.register(_validate_limit), '%P')
+        entry_widget.config(validate='key', validatecommand=vcmd)
+    except Exception:
+        pass
+    return entry_widget
 
 def enable_high_dpi_awareness():
     """
@@ -398,11 +415,7 @@ class HardwareProfile:
         if os.path.exists(base_install):
             versions = glob.glob(os.path.join(base_install, "v*")) 
             if versions:
-                v12 = [v for v in versions if os.path.basename(v).startswith("v12")]
-                if v12:
-                    cuda_path = os.path.join(sorted(v12)[-1], "bin")
-                else:
-                    cuda_path = os.path.join(sorted(versions)[-1], "bin")
+                cuda_path = os.path.join(sorted(versions)[-1], "bin")
         
         if not cuda_path:
             cuda_path = os.environ.get('CUDA_PATH') or os.environ.get('CUDA_HOME')
@@ -1535,7 +1548,7 @@ TUTORIAL_SCREENS = [
             "• Lvl 1 - 2: Concise, direct utility and rapid facts.\n"
             "• Lvl 3 - 5: Balanced reasoning, thoughtful synthesis, and deep technical mastery.\n"
             "• Lvl 6: The Transcendent One — comprehensive multi-angle philosophical synthesis.\n"
-            "• Lvl 7 (Secret): Click the 'Persona:' header 6 times to evolve the interface into Cecilia."
+            "• Lvl 7 (Secret): Double-click the space between 'Persona:' and the slider to evolve the interface into Cecilia."
         ),
         "hint": "Each persona maintains separate dialogue history and memory context."
     },
