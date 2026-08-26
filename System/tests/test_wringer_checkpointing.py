@@ -14,7 +14,7 @@ import unittest
 
 test_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(test_dir))
-wringer_dir = os.path.join(test_dir, "benchmarks", "wringer")
+wringer_dir = os.path.join(project_root, "benchmarks", "wringer")
 
 if project_root not in sys.path:
     sys.path.insert(0, project_root)

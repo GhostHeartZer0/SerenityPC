@@ -30,11 +30,14 @@ class MockApp:
 
     # Bind the exact lookup method from main.py
     from main import ChatbotApp
+    _is_native_encoder_decoder_model = ChatbotApp._is_native_encoder_decoder_model
     _find_projector_for_model = ChatbotApp._find_projector_for_model
+    _ensure_chat_handler = ChatbotApp._ensure_chat_handler
 
 class TestMmprojLookup(unittest.TestCase):
     def setUp(self):
         self.app = MockApp()
+        self.app.model = object() # Dummy model instance
 
     def test_e4b_model_matches_e4b_projector(self):
         """Verify E4B model automatically matches adjacent or size-matched E4B projector."""
@@ -53,6 +56,13 @@ class TestMmprojLookup(unittest.TestCase):
         proj = self.app._find_projector_for_model(self.app.model_paths["med"], interactive=False)
         # Since 12B directory has no mmproj, it should return None rather than a broken 4B projector
         self.assertIsNone(proj)
+
+    def test_12b_detected_as_native_encoder_decoder(self):
+        """Verify 12B model is detected as native encoder/decoder and passes chat handler check without mmproj."""
+        is_native = self.app._is_native_encoder_decoder_model(self.app.model_paths["med"])
+        self.assertTrue(is_native)
+        self.app.model_path = self.app.model_paths["med"]
+        self.assertTrue(self.app._ensure_chat_handler(interactive=False))
 
     def test_persistent_mapping_takes_priority(self):
         """Verify user manual mapping in mmproj_mapping is prioritized."""

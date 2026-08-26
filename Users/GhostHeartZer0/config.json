@@ -1,6 +1,6 @@
 {
     "username": "GhostHeartZer0",
-    "main_window": "960x730+650+164",
+    "main_window": "1000x730+583+189",
     "model_paths": {
         "fast": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
@@ -170,10 +170,10 @@
         "mid": 64,
         "transcendent": 64
     },
-    "sash_pos": 562,
+    "sash_pos": 595,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 5,
+    "active_persona_level": 1,
     "max_persona_level": 6.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
@@ -482,7 +482,7 @@
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
     "history_usage": "all",
-    "ghost_mode": false,
+    "ghost_mode": true,
     "dynamic_params_enabled": false,
     "startup_count": 1,
     "offline_mode": false,
@@ -490,8 +490,8 @@
     "texture_style": "iridescent",
     "frosted_glass": false,
     "repeat_detection_mode": "lazy",
-    "status_bar_mode": "percentage",
-    "status_bar_anim_style": "pulse",
+    "status_bar_mode": "hybrid",
+    "status_bar_anim_style": "orbit",
     "status_bar_dmn_idle": false,
     "status_bar_fallback_info": false,
     "benchmark_enabled": false,
@@ -500,10 +500,10 @@
     "monitor_graph_mode": false,
     "tutorial_completed": true,
     "glitch_animation": "warp",
-    "turbovec_mode": "fallback",
+    "turbovec_mode": "off",
     "thinking_checkbox": true,
     "show_tooltips": true,
-    "image_handling": "auto",
+    "image_handling": "native",
     "muse_reasoning_strength": "off",
     "dmn_timeout": "05:00",
     "stt_device_index": 1,
@@ -519,21 +519,22 @@
         "stats": -1,
         "ui": 0
     },
-    "dark_mode": false,
+    "dark_mode": true,
     "mtp_mapping": {
         "S:/LLM/Qwen3.8/Qwen3.8-27B-UD-Q4_K_XL.gguf": "S:/LLM/Qwen3.8/mmproj-F16.gguf"
     },
-    "multimedia_handling": "auto",
+    "multimedia_handling": "native",
     "texture_intensity": 1.0,
     "user_preferred_name": "Chris",
     "user_address_style": "Direct / Plain",
     "mmproj_mapping": {
-        "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B\\mmproj-BF16.gguf"
+        "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B\\mmproj-BF16.gguf",
+        "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B\\mmproj-BF16.gguf"
     },
     "delegation_enabled": true,
     "cecilia_delegation_mode": "shadow_wizard",
     "delegation_chain_preset": "direct_strike (L2 Search -> L6/7 Approve)",
-    "delegation_handoff_target": "taskmaster_direct (Direct to Lvl 6/7)",
+    "delegation_handoff_target": "lvl3_compiler (Staging & Aggregation)",
     "subagent_selection_mode": "minimal",
     "delegation_model_mode": "lvl6_7_model"
 }

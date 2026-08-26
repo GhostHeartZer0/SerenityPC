@@ -21,16 +21,20 @@ class GgufDraftModel:
                 verbose=False
             )
         except Exception as err:
-            from System.serenity_utils import patch_gguf_architecture
-            if patch_gguf_architecture(draft_model_path, new_arch="llama"):
-                self.draft_llm = Llama(
-                    model_path=draft_model_path,
-                    n_gpu_layers=n_gpu_layers,
-                    n_ctx=n_ctx,
-                    n_threads=draft_threads,
-                    n_batch=512,
-                    verbose=False
-                )
+            is_gemma_draft = "gemma" in str(draft_model_path).lower()
+            if not is_gemma_draft:
+                from System.serenity_utils import patch_gguf_architecture
+                if patch_gguf_architecture(draft_model_path, new_arch="llama"):
+                    self.draft_llm = Llama(
+                        model_path=draft_model_path,
+                        n_gpu_layers=n_gpu_layers,
+                        n_ctx=n_ctx,
+                        n_threads=draft_threads,
+                        n_batch=512,
+                        verbose=False
+                    )
+                else:
+                    raise err
             else:
                 raise err
         self.num_pred_tokens = 5  # Standard speculative sequence length
