@@ -8,7 +8,6 @@ import glob
 import math
 import tempfile
 import numpy as np
-import torch
 import psutil
 from llama_cpp import Llama
 
@@ -41,11 +40,8 @@ class VisionHandler:
             
         # 2. Force hardware flush before loading
         import gc
-        import torch
         import time
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
             
         print("[APEX] VRAM Flush Complete. Initiating 3.0s 'Breath'...")
         time.sleep(3.0) # THE BREATH: Give 3050 time to forget
@@ -88,7 +84,6 @@ class VisionHandler:
         # 2. Force System & GPU to breathe
         import gc
         import time
-        import torch
         try:
             import pynvml as nvidia_ml
             nvidia_ml.nvmlInit()
@@ -99,8 +94,6 @@ class VisionHandler:
         start_wait = time.time()
         while True:
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
             
             # 3. VERIFICATION GATE: Confirm 2.2GB floor (Allow OS/Display overhead)
             # A 6GB card usually idles at 1.5GB - 1.8GB on Windows with dual displays.
@@ -299,14 +292,6 @@ class VisionHandler:
                 print("[HYGIENE] LLM Context Reset.")
             
             gc.collect()
-            
-            # If using torch/cuda
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    # print("[HYGIENE] VRAM Flush Complete.")
-            except ImportError: pass
             
         except Exception as e:
             print(f"[HYGIENE] Cleanup encountered a non-fatal issue: {e}")
@@ -534,7 +519,7 @@ class VisionHandler:
 
         # Verify extension support
         ext = os.path.splitext(audio_path)[1].lower()
-        if ext not in [".mp3", ".wav", ".flac"]:
+        if ext not in [".mp3", ".wav", ".flac", ".ogg", ".m4a"]:
             print(f"[APEX] Unsupported audio format: {ext}")
             return []
 
@@ -663,4 +648,69 @@ class VisionHandler:
             count += 1
         video.release()
         return sampled
+
+    @staticmethod
+    def split_thoughts_and_answer(raw_output: str):
+        """
+        Splits internal reasoning/thinking tags from the actual response text.
+        Guarantees thoughts do not leak into final answer buffers.
+        """
+        import re
+        if not raw_output:
+            return "", ""
+
+        closers = [
+            r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
+            r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+            r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
+            r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
+        ]
+        all_splits = []
+        for tag_pattern in closers:
+            for m in re.finditer(tag_pattern, raw_output, re.IGNORECASE):
+                all_splits.append(m.end())
+
+        t_lower = raw_output.lower().strip()
+        openers_exact = (
+            "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
+            "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self<|message|>",
+            "<|start|>assistant to=self", "to=self"
+        )
+        is_opener = any(op in t_lower for op in openers_exact) or raw_output.lower().lstrip().startswith("thought")
+
+        if not all_splits and is_opener:
+            all_splits.append(len(raw_output))
+
+        all_splits.sort()
+        best_split = -1
+        if all_splits:
+            for split in all_splits:
+                remaining = raw_output[split:].strip()
+                if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self', remaining, re.IGNORECASE):
+                    continue
+                best_split = split
+                break
+            if best_split == -1:
+                best_split = all_splits[-1]
+
+        if best_split != -1:
+            think_log = raw_output[:best_split].strip()
+            final_answer = raw_output[best_split:].strip()
+        else:
+            has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+', raw_output, re.IGNORECASE))
+            if has_thought_openers or is_opener:
+                think_log = raw_output
+                final_answer = ""
+            else:
+                think_log = ""
+                final_answer = raw_output.strip()
+
+        tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>'
+        think_log = re.sub(tag_clean_pattern, '', think_log).strip()
+        think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
+        final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+        final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
+
+        return think_log, final_answer
+
 

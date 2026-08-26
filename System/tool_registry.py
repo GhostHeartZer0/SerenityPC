@@ -397,6 +397,16 @@ root.mainloop()"""
                 except: pass
             return json.dumps(stats)
 
+        def _is_sandboxed_path(target_p: str) -> bool:
+            """Ensure target path is within workspace root or designated data subdirectories."""
+            base_dir = os.path.abspath(getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd())
+            abs_p = os.path.abspath(target_p)
+            try:
+                # Must reside inside base workspace directory
+                return os.path.commonpath([base_dir, abs_p]) == base_dir
+            except Exception:
+                return False
+
         @self.registry.register("read_file")
         def handle_read_file(args: Dict[str, Any]) -> str:
             path = args.get("path")
@@ -404,12 +414,13 @@ root.mainloop()"""
                 return "Notice: No file path provided."
             
             target_path = path
-            if not os.path.exists(target_path):
+            if not os.path.isabs(target_path):
                 base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
-                alt_path = os.path.join(base_dir, path)
-                if os.path.exists(alt_path):
-                    target_path = alt_path
+                target_path = os.path.join(base_dir, path)
             
+            if not _is_sandboxed_path(target_path):
+                return f"[SECURITY RESTRICTION] File operations outside Serenity workspace directories are blocked: '{path}'."
+
             if not os.path.exists(target_path):
                 return f"Notice: File '{path}' was not found. Please proceed to answer based on available context and inform user that the path was not found."
             
@@ -438,11 +449,12 @@ root.mainloop()"""
                 return "Notice: Start and end must define a valid 1-based inclusive line range."
 
             target_path = path
-            if not os.path.exists(target_path):
+            if not os.path.isabs(target_path):
                 base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
-                alt_path = os.path.join(base_dir, path)
-                if os.path.exists(alt_path):
-                    target_path = alt_path
+                target_path = os.path.join(base_dir, path)
+
+            if not _is_sandboxed_path(target_path):
+                return f"[SECURITY RESTRICTION] File operations outside Serenity workspace directories are blocked: '{path}'."
 
             if not os.path.exists(target_path):
                 return f"Notice: File '{path}' was not found."

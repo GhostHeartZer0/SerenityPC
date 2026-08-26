@@ -306,10 +306,11 @@ def open_settings_window(app):
         cb_vram.pack(anchor="w", pady=2)
         ToolTip(cb_vram, "Automatically flushes inactive model layers from VRAM to prevent memory exhaustion.", app=app)
 
-        cb_spec = tk.Checkbutton(auto_vram_f, text="Speculative MTP Drafting", variable=spec_draft_var,
+        # TODO (Reference: TODO.txt Line 37): For the restructured settings window, ensure MTP Speculative Drafting enforces the 4GB minimum model size limit.
+        cb_spec = tk.Checkbutton(auto_vram_f, text="Speculative MTP Drafting (>= 4GB Models)", variable=spec_draft_var,
                        bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
         cb_spec.pack(anchor="w", pady=2)
-        ToolTip(cb_spec, "Accelerates token generation using assistant drafter speculative decoding.", app=app)
+        ToolTip(cb_spec, "Accelerates token generation using assistant drafter speculative decoding (automatically bypassed for models < 4GB).", app=app)
 
         cb_ghost = tk.Checkbutton(auto_vram_f, text="Ghost Mode", variable=ghost_var,
                        bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
