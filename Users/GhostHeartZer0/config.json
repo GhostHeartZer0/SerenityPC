@@ -482,7 +482,7 @@
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
     "history_usage": "all",
-    "ghost_mode": false,
+    "ghost_mode": true,
     "dynamic_params_enabled": false,
     "startup_count": 1,
     "offline_mode": false,
