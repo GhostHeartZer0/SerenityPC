@@ -166,8 +166,11 @@ def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_ar
             if "muse" in orig_arch_lower or "glimmer" in orig_arch_lower:
                 target_arch = orig_arch
             elif "gemma" in orig_arch_lower:
-                # Ensure gemma-4 stays gemma-4 (prevent misrouting to llama)
-                target_arch = orig_arch
+                # If specific new_arch is explicitly requested (e.g. for standalone drafter adapter), honor it
+                if new_arch and new_arch.lower() != orig_arch_lower:
+                    target_arch = new_arch
+                else:
+                    target_arch = orig_arch
             elif detected_prefix == "llama":
                 target_arch = "llama"
             else:

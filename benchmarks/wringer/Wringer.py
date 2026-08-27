@@ -3,8 +3,10 @@ import sys
 import subprocess
 
 def _bootstrap_venv():
+    if __name__ != "__main__":
+        return
     current_dir = os.path.abspath(os.path.dirname(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, "..", "..", "..", ".."))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
     
     scripts_dir = os.path.join(project_root, ".venv", "Scripts") if sys.platform == "win32" else os.path.join(project_root, ".venv", "bin")
     venv_py = os.path.join(scripts_dir, "python.exe" if sys.platform == "win32" else "python")
