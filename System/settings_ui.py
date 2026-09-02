@@ -271,7 +271,7 @@ def open_settings_window(app):
         lbl_proj_disp.pack(side=tk.LEFT)
         ToolTip(btn_proj_pick, "Manually map a multimodal projector (.mmproj / GGUF) to the currently loaded model.", app=app)
 
-        lbl_muse = tk.Label(left_header, text="Muse Reasoning:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_muse = tk.Label(left_header, text="Reasoning:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
         lbl_muse.pack(anchor="w", pady=(5, 0))
         ToolTip(lbl_muse, "Reasoning effort level for Muse-Glimmer thought cycles.", app=app)
         muse_reasoning_var = tk.StringVar(value=app.config.get("muse_reasoning_strength", "xhigh"))
@@ -281,7 +281,7 @@ def open_settings_window(app):
             rb = tk.Radiobutton(muse_reasoning_frame, text=opt.capitalize(), variable=muse_reasoning_var, value=opt,
                            bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
             rb.pack(side=tk.LEFT, padx=2)
-            ToolTip(rb, f"Set Muse reasoning strength to {opt}.", app=app)
+            ToolTip(rb, f"Set Reasoning strength to {opt}.", app=app)
 
         # Checkboxes in left column
         offline_mode_var = tk.BooleanVar(value=app.config.get("offline_mode", False))

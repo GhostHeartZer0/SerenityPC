@@ -6,8 +6,9 @@ def _is_thought_opening(text):
     t_raw_lower = text.lower().lstrip()
     openers_exact = (
         "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
-        "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self<|message|>",
-        "<|start|>assistant to=self", "to=self"
+        "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]",
+        "to=self<|message|>", "<|start|>assistant to=self", "to=self",
+        "here's a thinking process:", "here is a thinking process:", "\u27e6", "⟦"
     )
     if any(op in t_lower for op in openers_exact):
         return True
@@ -15,12 +16,16 @@ def _is_thought_opening(text):
         return True
     if t_raw_lower.startswith("thought") and len(t_raw_lower) <= 12 and ("\n" in text or len(text.strip()) == len("thought")):
         return True
+    if t_raw_lower.startswith("here's a thinking process") or t_raw_lower.startswith("here is a thinking process"):
+        return True
     return False
 
 def split_thoughts_and_answer(raw_output):
     closers = [
         r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
         r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+        r'\[\/thinking\]', r'\[\/thought\]', r'\[\/reasoning\]',
+        r'[\u27e7⟧]\s*<\/think>', r'[\u27e7⟧]',
         r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
         r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
     ]
@@ -30,7 +35,7 @@ def split_thoughts_and_answer(raw_output):
             all_splits.append(m.end())
 
     if not all_splits and (
-        any(t in raw_output.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self", "<|start|>assistant to=self"])
+        any(t in raw_output.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]", "to=self", "<|start|>assistant to=self", "here's a thinking process", "here is a thinking process", "\u27e6", "⟦"])
         or _is_thought_opening(raw_output)
     ):
         all_splits.append(len(raw_output))
@@ -40,7 +45,7 @@ def split_thoughts_and_answer(raw_output):
     if all_splits:
         for split in all_splits:
             remaining = raw_output[split:].strip()
-            if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self', remaining, re.IGNORECASE):
+            if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
                 continue
             best_split = split
             break
@@ -51,7 +56,7 @@ def split_thoughts_and_answer(raw_output):
         think_log = raw_output[:best_split].strip()
         final_answer = raw_output[best_split:].strip()
     else:
-        has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+', raw_output, re.IGNORECASE))
+        has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', raw_output, re.IGNORECASE))
         if has_thought_openers or _is_thought_opening(raw_output):
             think_log = raw_output
             final_answer = ""
@@ -59,7 +64,7 @@ def split_thoughts_and_answer(raw_output):
             think_log = ""
             final_answer = raw_output.strip()
 
-    tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>'
+    tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
     think_log = re.sub(tag_clean_pattern, '', think_log).strip()
     think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
     final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
@@ -136,9 +141,32 @@ def test_bare_thought_channel_only_thoughts():
     assert ans == ""
     print("[PASS] Bare thought\\n...<channel|> with only thoughts correctly isolated for synthesis")
 
+def test_granite42_thinking_split():
+    sample = "<think>\nLet me solve this problem step by step.\n1. Break down question\n2. Compute result.\n</think>\nThe answer is 42.<|im_end|>"
+    think, ans = split_thoughts_and_answer(sample)
+    assert "Let me solve this problem step by step." in think
+    assert ans == "The answer is 42."
+    print("[PASS] Granite 4.2 thinking mode split")
+
+def test_granite42_non_thinking_split():
+    sample = "<think></think>The capital of France is Paris.<|im_end|>"
+    think, ans = split_thoughts_and_answer(sample)
+    assert think == ""
+def test_nemotron_thought_split():
+    sample = "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - User says: \"Problem: Hi, how are you?\"\n\n2.  **Formulate Strategy:**\n   - Acknowledge greeting.\n\n   Let's produce it.⟧</think>**Core Logical Deduction:**\nHello! How can I assist you today?"
+    think, ans = split_thoughts_and_answer(sample)
+    assert "Analyze User Input" in think, f"Expected thoughts in think_log, got: {think}"
+    assert "Hello! How can I assist you today?" in ans, f"Expected answer in final_answer, got: {ans}"
+    assert "Here's a thinking process" not in ans
+    assert "⟧" not in ans and "</think>" not in ans
+    print("[PASS] Nemotron Here's a thinking process...</think> correctly split")
+
 if __name__ == "__main__":
     test_qwen_thought_split()
     test_deepseek_think_split()
+    test_granite42_thinking_split()
+    test_granite42_non_thinking_split()
+    test_nemotron_thought_split()
     test_gemma_channel_split()
     test_chatml_thought_split()
     test_muse_atem_thought_split()

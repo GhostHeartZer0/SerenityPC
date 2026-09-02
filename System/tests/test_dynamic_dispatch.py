@@ -124,7 +124,7 @@ class TestDynamicDispatch(unittest.TestCase):
 
         statuses = [e.get("status") for e in events]
         self.assertIn("diag_log_update", statuses, "Decision trace must be logged to diagnostics log")
-        self.assertIn("thought_stream", statuses, "Intermediate progression must be logged to thought stream")
+        self.assertIn("agentic_stream", statuses, "Intermediate progression must be logged to agentic stream")
         self.assertIn("tool_log_update", statuses, "Subagent taskings must be logged to tool log")
         self.assertNotIn("streaming", statuses, "Subagent communications must NOT leak into chat response buffer")
 
@@ -154,7 +154,25 @@ class TestDynamicDispatch(unittest.TestCase):
         # Should have called model_swap during subagent steps and at finish to restore
         self.assertTrue(self.app.model_swap.called, "model_swap should be called in per_subagent_model mode")
 
+    def test_delegation_dynamic_model_swap_synchronous(self):
+        """Verify synchronous model swap is prioritized when available."""
+        self.app.config["delegation_model_mode"] = "per_subagent_model"
+        self.app.model_paths = {
+            "fast": "S:/LLM/fast.gguf",
+            "search": "S:/LLM/search.gguf",
+            "low": "S:/LLM/collab.gguf",
+            "med": "S:/LLM/confidant.gguf",
+            "high": "S:/LLM/brains.gguf",
+            "transcendent": "S:/LLM/transcendent.gguf"
+        }
+        self.app.model_path = "S:/LLM/transcendent.gguf"
+        self.app.model_swap_synchronous = MagicMock(return_value=True)
+
+        self.mgr.execute_delegation_chain(6, "Solve complex physics calculus", {})
+        self.assertTrue(self.app.model_swap_synchronous.called, "model_swap_synchronous should be called")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

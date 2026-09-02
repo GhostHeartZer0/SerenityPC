@@ -121,7 +121,7 @@ class TestDelegationSettingsAndCecilia(unittest.TestCase):
         while not self.app.process_queue.empty():
             statuses.append(self.app.process_queue.get().get("status"))
 
-        self.assertIn("thought_stream", statuses)
+        self.assertIn("agentic_stream", statuses)
 
     def test_cecilia_divine_judgement_bypasses_subagents(self):
         """Verify Divine Judgement mode does not spawn or aggregate subagent reports."""
