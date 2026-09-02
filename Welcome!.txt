@@ -1,86 +1,156 @@
-This is SerenityPC Local Legacy, a version made for legacy hardware.
+================================================================================
+SERENITYPC - USER GUIDE & GETTING STARTED
+================================================================================
 
+Welcome to SerenityPC: a local-first, privacy-respecting intelligent desktop 
+interface and multi-agent orchestration engine. Runs open-weight LLMs directly on 
+consumer hardware with zero cloud telemetry, full offline capability, and multimodal 
+ingestion.
 
-System Requirements:
+--------------------------------------------------------------------------------
+1. SYSTEM REQUIREMENTS
+--------------------------------------------------------------------------------
+
+Minimum:
+  - OS: Windows 10/11 (64-bit)
+  - CPU: 4 cores
+  - RAM: 8 GB
+  - GPU: 4 GB VRAM (NVIDIA recommended)
+  - Storage: 8 GB free space
+
 Recommended:
-At least 6GB of VRAM, 12-24GB preferred.
-16GB of RAM, 32 preferred.
-A CPU with at least 8 logical cores
-At Least 20GB storage
-Required:
-4GB VRAM
-8GB RAM
-a CPU with at least 4 cores.
-At least 8GB storage.
-LLMs run from memory, so
-(VRAM - Sys Use) + (RAM - Sys Use)
+  - CPU: 8+ logical cores
+  - RAM: 16–32 GB
+  - GPU: 6–24 GB VRAM (NVIDIA CUDA Compute Capability sm_75+)
+  - Storage: 20+ GB SSD space
 
-  How to get started:
-1. Check your CUDA version and update if needed by navigating to Misc > CUDA and running that installer. 
-you can select the advanced installer to select only what you need.
-2. run setup.py. you will need to do this to build the virtual environment (.venv folder) for your specific system.
-3. To load the UI, you can open the desktop shortcut, run.bat, or main.py.
-4. Navigating The UI
-	First, set the Models up. In settings, select the LLM you want for each lvl or engine you intend to use.
-	Second, set the params. To make it easy, you can either search for recommended settings, or use a template. On the Templating Engine, click Write, them click the Engine box you intend to write to. a good template to start with is bottom left for gemma-4. Modiy views and edits them.
-Layers is how much of the model is loaded on GPU. for max, set it to 99. you can reduce this if you notice shared VRAM spikes.
-	Third, set the rest up, Save & Apply to close.
-Most of this is self-explanatory, but you can leave alone what you don't get.
-	Lastly, select persona or knock twice on the door to Lvl 7, and Begin! Type a prompt at any time during this process, it'll save as long as the chat window remains. Enter/Send sends the prompt (and loads model if needed).
+Memory Formula:
+  Total Usable Capacity ≈ (VRAM - OS/Display Overhead) + (RAM - System Overhead)
 
-Have fun exploring the interface, if you have any questions, please feel free to ask.
+--------------------------------------------------------------------------------
+2. QUICK START & SETUP
+--------------------------------------------------------------------------------
 
-Context size also matters. You can adjust this in settings. It is the combined size limit of the prompt, history, system overhead and reasoning that go into making the final response. Here is a cheat sheet:
-k*1024
-256k= 262,144, 192k= 196,608,160k= 163,840
-128k= 131,072, 96k = 98,304, 64k = 65,536
-48k = 49,152,  32k = 32,768, 16k = 16,384
-12k = 12,288,  8k  = 8192,   4k  = 4096
+Step 1: Check CUDA & Build Environment
+  - Verify NVIDIA CUDA 12.6+ / 13.x is installed (Misc > CUDA installer if needed).
+  - Ensure Microsoft Visual C++ Build Tools (MSVC 2019/2022) are installed.
 
-In System/tests/benchmarks, you'll find two apps.
+Step 2: Install Environment
+  - Run setup:
+      python SETUPfile.py
+    (Developers can run 'python setup.py' for manual component inspection).
 
-In the main SerenityPC UI,
-  Settings:
-Deep Cook Behavior has two functions:
-One-Shot loads the deep cook model for a single prompt, activated by clicking its respective button right next to send.
-Toggle Mode changes that button to turn the Deep Cook model and mode on or off.
-Manual VRAM override adjusts Auto-detect, do you don't ha e to mess with layers and context size.
-Rich Media Rendering details how images and video are displayed.
-Global Overrides:
-Global KV Cache relates to the KV Translator Map up top. It details the level of compression that the Key-Value cache goes thru, which doesn't affect the result much. Its mainly used to prevent context bloating your memory and for compatibility purposes.
-Video Processing Sub-Chunk Size details how many frames the AI can gobble at once, which ultimately results in the compiled descriptions (temporarily stored in memory), which then get considered for the final response.
-Video inferencing is real slow, limited mostly by memory and model size.
-A Token can vary in size, from a symbol or syllable to a word.
-A parameter (B in A4B) is essentially a neuron connecting dots in thought during training. The A stands for active. 
-E in E4B stands for Effective, meaning it acts larger than it really is.
-As for the parameters:
-Layers dictates how many LLM layers are offloaded to the GPU, to be stored in VRAM. this dictates how fast the model can understand and respond, as VRAM on the GPU is much faster and recommended for fastest response time.
-The larger models (26B, 31B) are slower, as they usually can't fit entirely in VRAM, as they require expensive hardware with up to 24GB VRAM. instead, this is where layer offloading is crucial. Offloading just enough (-1 if all can fit), allows the model to split the layers better, resulting in faster loading times. However, the intelligence and accuracy of these models is much higher, at the cost of speed.
-Ctx is context size. 1024 x the number next to k (thousand) provides the value.
-4k is 4096, 8k 8192, 16k 16384, 32k 32768, 64k 65536, and so on.
-Response tuning:
-Batch is the chunk size in tokens sent to the model at once for evaluation. This effects memory during processing.
-256, 512, 1024, 1280, 1536, 1792, 2048.
-Temp:  increases or decreases the randomness. Low  Factual, precise, consistent (e.g., coding, summaries).High Creative, varied, unpredictable (e.g., brainstorming, poetry). 0, Deterministic (always chooses the highest probability).
-Top P: a value between 0-1 meaning percent (0%-100%).
-Adjusts the cumulative probability of the batch of tokens, so only the top that percent probability get considered.
-Min-P: controls hallucinations, cutting off tokens below a certain threshold. The higher the number, the wackier it can get. It takes the top token probability and multiplies it by the value, cutting off probability of the tokens below that being used. If the top token is 99% probable and this value is set to 0.1, it curs off tokens below a 9.9% probability. 
-Repetition Penalty: stops repeats. -2.0 to 2.0. Higher the number is more restricted.
+Step 3: Create Desktop Shortcut (Optional)
+  - Generate launcher:
+      python System/shortcuts.py
 
-Frequency Penalty: restricts tokens that appear frequently. -2.0 to 2.0. Higher number is more restriction.
-Top-K: restricts the next most likely tokens so only that many are considered.
-Begin! Starts the model. (Clicking on the level does the same)
-It turns to Offload, which frees up memory. 
-Set Vision in settings selects the vision model (not all support this)
-Projector: make sure to select the respective .mmproj proector file associated with the model so it can actually process the video. This feeds the llm the right data.
-BF16 is reccomended for NVIDIA graphics cards, 
-F16 is more universally compatible. If you have the wrong version, contact me.
-Pulse simulates a DMN (Default Mode Network), allowing Serenity to ponder recent histories, enhancing her understandings. This feeds prime.chronicles.txt.
-RGB, if supported, is a niche feature still under development, allowing lighting sync with its own little UI. It can allow automatic light switching or change the RGBs to the model color. Please not this is an experimental feature that probably doesn't work yet.
-Clean clears the selected media from memory (Video)
-The plus sign next to the level slider adds images, audio, or documents to the prompt.
-Halt attempts to stop a running model, useful if it gets caught.
+Step 4: Launch SerenityPC
+  - Double-click the desktop shortcut, run 'run.bat', or execute:
+      python main.py
 
-If you have any ideas, complaints, or notice something glaringly obvious that I should have caught, please reach out to me at ccrg69@gmail.com . I value input!
-Thanks for reading, 
--GhostHeartZer0
+--------------------------------------------------------------------------------
+3. UI NAVIGATION & WORKFLOW
+--------------------------------------------------------------------------------
+
+1. Set Up Models:
+   - Click Settings (gear icon, top-left).
+   - Assign GGUF model paths to respective persona levels or engines.
+
+2. Configure Parameters & Templates:
+   - Choose a preset template or manually tune inference parameters.
+   - In the Templating Engine: click 'Write', select target engine slot (e.g. Gemma-4).
+   - Use 'Modify' to view and inspect templates.
+
+3. Configure Layers (GPU Offloading):
+   - 'Layers' dictates how many transformer layers offload to VRAM.
+   - Set to maximum (e.g. 99 or -1) to fit entire model in VRAM for lowest latency.
+   - Lower layer count if system encounters shared VRAM spills or OOM errors.
+
+4. Select Persona & Chat:
+   - Slide persona trackbar to desired level (Lvl 1 Spark, Lvl 2 Serenity, etc.).
+   - Type prompt in the chat input at any time.
+   - Click 'Begin!' or press Enter to load weights and begin inference.
+   - 'Begin!' toggles to 'Offload' once active. Click 'Offload' to free VRAM/RAM.
+   - Click 'Halt' at any time to abort mid-stream.
+
+--------------------------------------------------------------------------------
+4. PERSONA MATRIX OVERVIEW
+--------------------------------------------------------------------------------
+
+  Lvl 1 - Spark:    Rapid short responses, low latency, lightweight queries.
+  Lvl 2 - Serenity: General daily assistant, automated web search, tool routing.
+  Lvl 3 - Forge:    Code synthesis, architecture, structured technical tasks.
+  Lvl 4 - Empathy:  Emotional reasoning, nuanced dialogue, reflective thought.
+  Lvl 5 - Sage:     Academic logic, mathematics, multi-step problem solving.
+  Lvl 6 - Horizon:  Long-horizon planning, iterative orchestration.
+  Lvl 7 - Abyss:    Unrestricted deep research and low-level synthesis.
+
+--------------------------------------------------------------------------------
+5. CONTEXT WINDOW (CTX) CHEAT SHEET
+--------------------------------------------------------------------------------
+
+Context limit encompasses prompt, history, multimodal artifacts, and reasoning.
+Formula: k * 1024 tokens.
+
+   4k =   4,096 tokens        32k =  32,768 tokens       160k = 163,840 tokens
+   8k =   8,192 tokens        48k =  49,152 tokens       192k = 196,608 tokens
+  12k =  12,288 tokens        64k =  65,536 tokens       256k = 262,144 tokens
+  16k =  16,384 tokens        96k =  98,304 tokens
+                              128k = 131,072 tokens
+
+--------------------------------------------------------------------------------
+6. PARAMETERS & RESPONSE TUNING
+--------------------------------------------------------------------------------
+
+- Batch Size:
+    Chunk size evaluated simultaneously (256, 512, 1024, 2048). Impacts peak memory.
+
+- Temperature (Temp):
+    Randomness control.
+    0.0 = Deterministic/exact. Low (0.1–0.4) = Factual, code. High (0.7–1.0+) = Creative.
+
+- Top-P (Nucleus Sampling):
+    Cumulative probability cutoff (0.0–1.0). Only tokens within top P% considered.
+
+- Min-P:
+    Dynamic cutoff scaling against top token probability. Cuts low-probability noise.
+
+- Top-K:
+    Limits candidate pool to the K most probable next tokens.
+
+- Repetition Penalty / Frequency Penalty:
+    Penalizes repeated tokens/phrases to prevent degenerative output loops.
+
+--------------------------------------------------------------------------------
+7. ADVANCED ENGINE FEATURES
+--------------------------------------------------------------------------------
+
+- Deep Cook:
+    Iterative reasoning pipeline.
+    - One-Shot: Runs deep cook on the immediate prompt via the adjacent button.
+    - Toggle Mode: Locks deep cook active for continuous reasoning cycles.
+
+- Global KV Cache:
+    - Manages Key-Value tensor quantization/compression to save VRAM on long contexts.
+    - Allows split KV cache with Flash Attention (eg. Q8_0, Q4_0)
+
+- Multimodal & Vision:
+    - Select projector (.mmproj) matching your vision model.
+    - Sub-chunk size controls frame ingestion density for video inference.
+    - Use '+' button next to level slider to attach images, audio, or documents.
+    Use 'Clean' to clear cached media from memory.
+
+- DMN (Pulse):
+    Default Mode Network background cycle. Reflects on recent conversational 
+    history into prime.chronicles.txt to maintain long-term contextual continuity.
+
+- Benchmarks:
+    Performance and diagnostic utilities located in System/tests/benchmarks.
+
+--------------------------------------------------------------------------------
+FEEDBACK & CONTACT
+--------------------------------------------------------------------------------
+Submit bug reports, feature suggestions, and feedback:
+Email: ccrg69@gmail.com
+Author: GhostHeartZer0
+================================================================================

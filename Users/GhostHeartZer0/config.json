@@ -1,13 +1,13 @@
 {
     "username": "GhostHeartZer0",
-    "main_window": "1000x730+366+222",
+    "main_window": "1225x880+0+16",
     "model_paths": {
         "fast": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "low": "C:/Users/ccrg6/Documents/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "med": "C:/Users/ccrg6/Documents/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "high": "C:/Users/ccrg6/Documents/SerenityPC/Models/26B-A4B/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
-        "secret": "S:/LLM/gemma-4-unc/gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.i1-Q4_K_M.gguf",
+        "secret": "S:/LLM/gemma-4-unc/26B/gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.i1-Q4_K_M.gguf",
         "deep_cook": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "vision_video": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "vision_video_projector": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/mmproj-BF16.gguf",
@@ -16,21 +16,21 @@
         "vision_multimodal": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "vision_multimodal_projector": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/mmproj-BF16.gguf",
         "mid": "S:/SerenityPC/Models/gemma-4-26B MoE/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-        "transcendent": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+        "transcendent": "S:/LLM/Granite granite granite/granite-4.2-30b-Q4_K_M.gguf"
     },
     "gpu_layer_config": {
         "fast": 99,
         "search": 99,
-        "low": 20,
-        "med": 20,
+        "low": 16,
+        "med": 16,
         "high": 5,
-        "secret": 8,
+        "secret": 7,
         "deep_cook": 99,
         "vision_video": 99,
         "vision_video_deep": 14,
         "vision_multimodal": 99,
         "mid": 99,
-        "transcendent": 99
+        "transcendent": 18
     },
     "context_size_config": {
         "fast": 32768,
@@ -44,7 +44,7 @@
         "vision_video_deep": 4096,
         "vision_multimodal": 32768,
         "mid": 32768,
-        "transcendent": 32768
+        "transcendent": 8192
     },
     "temp_config": {
         "fast": 0.8,
@@ -58,7 +58,7 @@
         "vision_video_deep": 0.1,
         "vision_multimodal": 1.0,
         "mid": 0.8,
-        "transcendent": 0.8
+        "transcendent": 1.0
     },
     "top_p_config": {
         "fast": 0.95,
@@ -168,12 +168,12 @@
         "vision_video_deep": 64,
         "vision_multimodal": 64,
         "mid": 64,
-        "transcendent": 64
+        "transcendent": 40
     },
-    "sash_pos": 607,
+    "sash_pos": 810,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 2,
+    "active_persona_level": 6,
     "max_persona_level": 6.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
@@ -293,7 +293,6 @@
         },
         "T9": {
             "name": "Lvl 1 E2B",
-            "stop": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
             "temp": 0.8,
             "top_p": 0.95,
             "min_p": 0.01,
@@ -321,7 +320,6 @@
         },
         "T11": {
             "name": "Lvl 3 12B",
-            "stop": "</turn>, <|turn>, <turn|>, <tool_call|>, <tool_response|>, <eos>",
             "temp": 0.8,
             "top_p": 0.95,
             "min_p": 0.05,
@@ -330,7 +328,7 @@
             "freq": 0.0,
             "top_k": 64,
             "batch": 512,
-            "layers": 20,
+            "layers": 16,
             "ctx": 49152
         },
         "T12": {
@@ -469,12 +467,38 @@
             "batch": 512,
             "layers": 13,
             "ctx": 65536
+        },
+        "T23": {
+            "name": "Granite-4.2",
+            "temp": 1,
+            "top_p": 0.95,
+            "min_p": 0.05,
+            "rep": 1.1,
+            "pres": 0.0,
+            "freq": 0.0,
+            "top_k": 40,
+            "batch": 512,
+            "layers": -1,
+            "ctx": 8192
+        },
+        "T22": {
+            "name": "Granite-4.2-30B",
+            "temp": 1.0,
+            "top_p": 0.95,
+            "min_p": 0.05,
+            "rep": 1.1,
+            "pres": 0.0,
+            "freq": 0.0,
+            "top_k": 40,
+            "batch": 512,
+            "layers": 18,
+            "ctx": 8192
         }
     },
     "streaming_mode": "Buffered",
     "max_token_ratio": 2,
     "auto_vram_offload": false,
-    "speculative_drafting": true,
+    "speculative_drafting": false,
     "history_lookup_mode": "level",
     "k_cache_type": "q8_0",
     "v_cache_type": "q5_1",
@@ -482,7 +506,7 @@
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
     "history_usage": "all",
-    "ghost_mode": true,
+    "ghost_mode": false,
     "dynamic_params_enabled": false,
     "startup_count": 1,
     "offline_mode": false,
@@ -506,9 +530,9 @@
     "image_handling": "native",
     "muse_reasoning_strength": "off",
     "dmn_timeout": "05:00",
-    "stt_device_index": 1,
+    "stt_device_index": null,
     "stt_language": "en-US",
-    "text_scale": 115,
+    "text_scale": 100,
     "ui_font": "Modern Antiqua",
     "mono_font": "Didact Gothic",
     "responsive_font_scaling": true,
@@ -526,15 +550,16 @@
     "multimedia_handling": "native",
     "texture_intensity": 1.0,
     "user_preferred_name": "Chris",
-    "user_address_style": "Direct / Plain",
+    "user_address_style": "Warm / Familiar",
     "mmproj_mapping": {
         "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B\\mmproj-BF16.gguf",
-        "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B\\mmproj-BF16.gguf"
+        "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B\\mmproj-BF16.gguf",
+        "S:/LLM/gemma-4-unc/26B/gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.i1-Q4_K_M.gguf": "S:/LLM/gemma-4-unc/26B\\gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.mmproj-f16.gguf"
     },
-    "delegation_enabled": true,
+    "delegation_enabled": false,
     "cecilia_delegation_mode": "shadow_wizard",
     "delegation_chain_preset": "direct_strike (L2 Search -> L6/7 Approve)",
-    "delegation_handoff_target": "lvl3_compiler (Staging & Aggregation)",
+    "delegation_handoff_target": "taskmaster_direct (Direct to Lvl 6/7)",
     "subagent_selection_mode": "minimal",
-    "delegation_model_mode": "lvl6_7_model"
+    "delegation_model_mode": "per_subagent_model"
 }
