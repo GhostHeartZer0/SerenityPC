@@ -36,7 +36,8 @@ def setup_shortcuts():
     base_dir = os.path.dirname(system_dir)
     
     python_exe = sys.executable
-    pythonw_exe = python_exe.lower().replace("python.exe", "pythonw.exe") if "python.exe" in python_exe.lower() else python_exe
+    import re
+    pythonw_exe = re.sub(r'python\.exe$', 'pythonw.exe', python_exe, flags=re.IGNORECASE) if "python.exe" in python_exe.lower() else python_exe
     main_py_path = os.path.join(base_dir, "main.py")
     
     icon_path = os.path.join(system_dir, "serenity.ico")

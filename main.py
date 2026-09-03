@@ -614,6 +614,7 @@ class ChatbotApp:
 
         self.log_update_buffer = ""
         self.thought_stream_buffer = ""
+        self.agentic_stream_buffer = ""
         self.last_log_dispatch = 0
         self.log_update_limit = 100 # Max messages per queue tick to prevent UI freeze
 
@@ -628,6 +629,7 @@ class ChatbotApp:
             "log_update": lambda msg: getattr(self, "_buffer_thought_log", lambda _content: None)(msg.get("content", "")),
             "thought_log_update": lambda msg: getattr(self, "_buffer_thought_log", lambda _content: None)(msg.get("content", "")),
             "thought_stream": lambda msg: getattr(self, "_buffer_thought_stream", lambda _content: None)(msg.get("content", "")),
+            "agentic_stream": lambda msg: getattr(self, "_buffer_agentic_stream", lambda _content: None)(msg.get("content", "")),
             "error_log_update": lambda msg: getattr(self, "_buffer_log", lambda _content: None)(msg.get("content", "")),
             "tool_log_update": lambda msg: self._buffer_tool_log(msg.get("content", "")),
             "diag_log_update": lambda msg: self._buffer_diag_log(msg.get("content", "")),
@@ -2955,6 +2957,99 @@ class ChatbotApp:
                 return False
         return False
 
+    def model_swap_synchronous(self, target_level=None, target_tier=None, timeout_sec=120.0):
+        """
+        Synchronously swaps model for multi-agent delegation without halting generation,
+        clearing the chat widget, or triggering UI state destruction.
+        """
+        raw_val = target_level if target_level is not None else 3
+        level = int(raw_val)
+        if not target_tier or (level == 6 and target_tier == "deep_cook"):
+            tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
+            target_tier = tier_map.get(level, "low")
+
+        path = self.model_paths.get(target_tier)
+        if path and not os.path.isabs(path):
+            path = os.path.join(self.script_dir, path)
+
+        if not path or not os.path.exists(path):
+            print(f"[MODEL SWAP SYNC WARNING] Model for {target_tier.upper()} not found at: {path}")
+            return False
+
+        self.load_params(target_tier)
+        if self.current_model_tier == target_tier and self.model and getattr(self, "loaded_persona_level", -1) == level and getattr(self, "model_path", None) == path:
+            print(f"[MODEL SWAP SYNC] Tier {target_tier.upper()} (Lvl {level}) already active.")
+            return True
+
+        # Soft Clear if exact same model path
+        soft_clear = False
+        if self.model and getattr(self, "model_path", None) == path and target_tier not in ("transcendent", "Live"):
+            soft_clear = True
+            if SYSTEM_MONITOR_LOADED and getattr(self, "gpu_handle", None):
+                try:
+                    mem = nvidia_ml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
+                    free_mb = mem.free / (1024**2)
+                    if free_mb < 600: soft_clear = False
+                except: pass
+
+        if soft_clear:
+            print(f"[APEX] VRAM HEALTHY: Soft-Clearing model for sync swap to {target_tier.upper()}.")
+            self.current_model_tier = target_tier
+            self.active_persona_level = int(level)
+            self.loaded_persona_level = int(level)
+            if TORCH_AVAILABLE:
+                try:
+                    if torch.cuda.is_available(): torch.cuda.empty_cache()
+                except: pass
+            import gc; gc.collect()
+            return True
+
+        # Evacuate old model VRAM
+        if self.model:
+            print(f"[APEX] Evacuating VRAM for synchronous model swap to {target_tier.upper()}...")
+            del self.model
+            self.model = None
+            import gc
+            gc.collect()
+            if TORCH_AVAILABLE:
+                try:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except: pass
+            time.sleep(0.5)
+
+        self.model_path = path
+        self.current_model_tier = target_tier
+        self.active_persona_level = int(level)
+
+        done_event = threading.Event()
+        success = [False]
+
+        def _sync_worker():
+            try:
+                res = self._load_model_worker(level, target_tier, is_subagent_swap=True)
+                if res:
+                    self.model = res
+                    self.loaded_persona_level = level
+                    self.active_persona_level = level
+                    self.current_model_tier = target_tier
+                    success[0] = True
+            except Exception as ex:
+                print(f"[MODEL SWAP SYNC ERROR] Failed loading model {path}: {ex}")
+            finally:
+                done_event.set()
+
+        loader_thread = threading.Thread(target=_sync_worker, daemon=True)
+        loader_thread.start()
+        done_event.wait(timeout=timeout_sec)
+
+        if not success[0] or self.model is None:
+            print(f"[MODEL SWAP SYNC WARNING] Failed or timed out loading {target_tier.upper()} model.")
+            return False
+
+        print(f"[MODEL SWAP SYNC SUCCESS] Model {target_tier.upper()} (Lvl {level}) loaded synchronously.")
+        return True
+
     def model_swap(self, value=None, target_level=None, target_tier=None):
         self.halt_process()
         
@@ -3550,7 +3645,7 @@ class ChatbotApp:
 
         return params_specs
 
-    def _load_model_worker(self, target_level, target_tier):
+    def _load_model_worker(self, target_level, target_tier, is_subagent_swap=False):
         try:
             if not self.model_path or not os.path.exists(self.model_path): raise FileNotFoundError(f"No file: {self.model_path}")
             specs = self._auto_tune_params(target_level, target_tier)
@@ -4071,8 +4166,11 @@ class ChatbotApp:
                     "content": f"[MTP] Speculative Decoding Active: Assistant={os.path.basename(assistant_path)}"
                 })
 
-            if self.stop_process.is_set(): return
+            if is_subagent_swap:
+                return model
+            if self.stop_process.is_set(): return None
             self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
+            return model
 
         except Exception as e:
             err_str = str(e)
@@ -4104,13 +4202,18 @@ class ChatbotApp:
                         eos_id = model.token_eos() if hasattr(model, 'token_eos') else -1
                         print(f"[ENGINE] Tokenizer BOS Verification (Retry): BOS ID={bos_id} (Valid: {bos_id != -1}), EOS ID={eos_id}")
                     except Exception: pass
-                    if self.stop_process.is_set(): return
+                    if is_subagent_swap:
+                        return model
+                    if self.stop_process.is_set(): return None
                     self.process_queue.put({"status": "load_success", "model": model, "level": target_level, "tier": target_tier})
-                    return
+                    return model
                 except Exception as retry_e:
                     err_str = f"Model load retry failed after GGUF architecture patch: {retry_e}"
 
+            if is_subagent_swap:
+                return None
             if not self.stop_process.is_set(): self.state["last_crash"] = True; self.process_queue.put({"status": "load_error", "content": err_str})
+            return None
 
     def _generation_worker(self, user_message, temp_messages):
         """Standard chat inference with Gemma-4 hardening."""
@@ -4283,13 +4386,14 @@ class ChatbotApp:
             stream_lead_buffer = ""
             streamed_draft_to_ui = False
             streamed_answer_chars = 0
-            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|<\|eom\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
+            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|[\u27e7⟧]\s*<\/think>|[\u27e7⟧]|<\|eom\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
             openers_exact = (
                 "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
-                "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self<|message|>",
-                "<|start|>assistant to=self", "to=self"
+                "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]",
+                "to=self<|message|>", "<|start|>assistant to=self", "to=self",
+                "here's a thinking process:", "here is a thinking process:", "\u27e6", "⟦"
             )
-            closers = ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "<|channel>text", "<|channel>assistant", "<|eom|>", "<|start|>assistant to=user", "to=user<|message|>"]
+            closers = ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "[/thinking]", "[/thought]", "[/reasoning]", "⟧</think>", "⟧", "<|channel>text", "<|channel>assistant", "<|eom|>", "<|start|>assistant to=user", "to=user<|message|>"]
 
             def _is_thought_opening(text):
                 if not text: return False
@@ -4300,6 +4404,8 @@ class ChatbotApp:
                 if t_raw_lower.startswith("thought\n") or t_raw_lower.startswith("thought\r\n") or t_raw_lower.startswith("thought ") or t_raw_lower.startswith("thought:"):
                     return True
                 if t_raw_lower.startswith("thought") and len(t_raw_lower) <= 12 and ("\n" in text or len(text.strip()) == len("thought")):
+                    return True
+                if t_raw_lower.startswith("here's a thinking process") or t_raw_lower.startswith("here is a thinking process") or t_raw_lower.startswith("\u27e6") or t_raw_lower.startswith("⟦"):
                     return True
                 return False
 
@@ -4410,6 +4516,8 @@ class ChatbotApp:
             closers_patterns = [
                 r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
                 r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+                r'\[\/thinking\]', r'\[\/thought\]', r'\[\/reasoning\]',
+                r'[\u27e7⟧]\s*<\/think>', r'[\u27e7⟧]',
                 r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
                 r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
             ]
@@ -4419,7 +4527,7 @@ class ChatbotApp:
                     all_splits.append(m.end())
             
             if not all_splits and (
-                any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self", "<|start|>assistant to=self"])
+                any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]", "to=self", "<|start|>assistant to=self", "here's a thinking process", "here is a thinking process", "\u27e6", "⟦"])
                 or _is_thought_opening(final_answer)
             ):
                 all_splits.append(len(final_answer))
@@ -4429,7 +4537,7 @@ class ChatbotApp:
             if all_splits:
                 for split in all_splits:
                     remaining = final_answer[split:].strip()
-                    if re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self', remaining, re.IGNORECASE):
+                    if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
                         continue
                     best_split = split
                     break
@@ -4440,7 +4548,7 @@ class ChatbotApp:
                 think_log = final_answer[:best_split].strip()
                 final_answer = final_answer[best_split:].strip()
             else:
-                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+', final_answer, re.IGNORECASE))
+                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', final_answer, re.IGNORECASE))
                 if has_thought_openers or _is_thought_opening(final_answer):
                     think_log = final_answer
                     final_answer = ""
@@ -4450,7 +4558,7 @@ class ChatbotApp:
                     final_answer = full_resp.strip()
 
             # Strip wrapper tags and residual tool markers
-            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>'
+            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
             think_log = re.sub(tag_clean_pattern, '', think_log).strip()
             think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
             final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
@@ -4894,6 +5002,9 @@ class ChatbotApp:
         """Ensures all buffers are flushed before calling _finalize_message."""
         print("[SYSTEM] Generation session finished. Finalizing buffers...")
         self._flush_log_buffer(force=True)
+        if self.agentic_stream_buffer:
+            self._update_agentic_dropdown(self.agentic_stream_buffer)
+            self.agentic_stream_buffer = ""
         if self.thought_stream_buffer:
             self._update_thought_dropdown(self.thought_stream_buffer)
             self.thought_stream_buffer = ""
@@ -4913,10 +5024,15 @@ class ChatbotApp:
         if not content: return
         self.thought_stream_buffer += content
 
-    def _ensure_thought_dropdown(self):
-        """Creates the thought dropdown in the chat history if not already initialized."""
+    def _buffer_agentic_stream(self, content):
+        """Buffers live agentic/delegation tokens into the agentic stream."""
+        if not content: return
+        self.agentic_stream_buffer += content
+
+    def _get_or_create_dropdown_frame(self):
+        """Retrieves or creates the horizontal button container frame for dropdowns."""
         hist = self.chat_history
-        if hist is None: return
+        if hist is None: return None
         
         if not self.state.get("response_started", False):
             self.state["response_start_idx"] = hist.index(tk.END + "-1c")
@@ -4925,6 +5041,24 @@ class ChatbotApp:
             think = self.thinking_display
             if think and think.winfo_exists():
                 think.set_phase("reasoning")
+
+        dd_frame = self.state.get("current_dropdown_frame")
+        if not dd_frame or not dd_frame.winfo_exists():
+            dd_frame = tk.Frame(hist, bg=THEME.get("bg_color", "#181410"))
+            self.state["current_dropdown_frame"] = dd_frame
+            hist.config(state='normal')
+            hist.insert(tk.END, "\n", ("ai",))
+            hist.window_create(tk.END, window=dd_frame)
+            hist.insert(tk.END, "\n", ("ai",))
+            hist.config(state='disabled')
+        return dd_frame
+
+    def _ensure_thought_dropdown(self):
+        """Creates the thought dropdown in the chat history if not already initialized."""
+        hist = self.chat_history
+        if hist is None: return
+        dd_frame = self._get_or_create_dropdown_frame()
+        if dd_frame is None: return
         
         if not self.state.get("current_think_tag"):
             think_tag = f"think_block_{int(time.time() * 1000)}"
@@ -4945,7 +5079,7 @@ class ChatbotApp:
             btn_active = THEME.get("button_active_color", "#382e24")
             accent_hl = THEME.get("accent_highlight", "#ff8800")
             
-            btn = tk.Button(hist, text="[-] Hide Thinking", bg=btn_bg, fg=accent, 
+            btn = tk.Button(dd_frame, text="[-] Hide Thinking", bg=btn_bg, fg=accent, 
                             activebackground=btn_active, activeforeground=accent_hl, 
                             relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
             btn.config(command=lambda t=think_tag, b=btn: toggle_thoughts(t, b))
@@ -4954,11 +5088,55 @@ class ChatbotApp:
             self.thought_dropdown_buttons.append(btn)
             self.state["current_think_btn"] = btn
             
+            # Place thoughts button on left
+            agentic_btn = self.state.get("current_agentic_btn")
+            if agentic_btn and agentic_btn.winfo_exists():
+                btn.pack(side=tk.LEFT, padx=(0, 4), before=agentic_btn)
+            else:
+                btn.pack(side=tk.LEFT, padx=(0, 4))
+            
             hist.config(state='normal')
-            hist.insert(tk.END, "\n", ("ai",))
-            hist.window_create(tk.END, window=btn)
-            hist.insert(tk.END, "\n", ("ai",))
             hist.tag_config(think_tag, elide=False, lmargin1=20, lmargin2=20)
+            hist.config(state='disabled')
+
+    def _ensure_agentic_dropdown(self):
+        """Creates the agentic / delegation dropdown positioned to the right of thoughts."""
+        hist = self.chat_history
+        if hist is None: return
+        dd_frame = self._get_or_create_dropdown_frame()
+        if dd_frame is None: return
+
+        if not self.state.get("current_agentic_tag"):
+            agentic_tag = f"agentic_block_{int(time.time() * 1000)}"
+            self.state["current_agentic_tag"] = agentic_tag
+            self.state["agentic_streamed"] = True
+
+            def toggle_agentic(tag=agentic_tag, b=None):
+                is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
+                if is_elided:
+                    hist.tag_config(tag, elide=False)
+                    if b: b.config(text="[-] Hide Agentic Actions")
+                else:
+                    hist.tag_config(tag, elide=True)
+                    if b: b.config(text="[+] View Agentic Actions")
+
+            btn_bg = THEME.get("button_bg_color", "#24201c")
+            accent = THEME.get("electric_blue", "#00bfff")
+            btn_active = THEME.get("button_active_color", "#382e24")
+            accent_hl = THEME.get("accent_highlight", "#ff8800")
+
+            btn = tk.Button(dd_frame, text="[-] Hide Agentic Actions", bg=btn_bg, fg=accent,
+                            activebackground=btn_active, activeforeground=accent_hl,
+                            relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
+            btn.config(command=lambda t=agentic_tag, b=btn: toggle_agentic(t, b))
+            if not hasattr(self, 'agentic_dropdown_buttons'):
+                self.agentic_dropdown_buttons = []
+            self.agentic_dropdown_buttons.append(btn)
+            self.state["current_agentic_btn"] = btn
+            btn.pack(side=tk.LEFT, padx=(4, 0))
+
+            hist.config(state='normal')
+            hist.tag_config(agentic_tag, elide=False, lmargin1=20, lmargin2=20)
             hist.config(state='disabled')
 
     def _update_thought_dropdown(self, chunk):
@@ -4993,6 +5171,21 @@ class ChatbotApp:
         is_at_bottom = hist.yview()[1] >= 0.98
         hist.config(state='normal')
         hist.insert(tk.END, clean_chunk, (tag, "md_thought"))
+        hist.config(state='disabled')
+        if is_at_bottom:
+            hist.yview_moveto(1.0)
+
+    def _update_agentic_dropdown(self, chunk):
+        """Inserts streamed agentic / delegation chunk into the chat dropdown."""
+        hist = self.chat_history
+        if hist is None or not chunk: return
+        self._ensure_agentic_dropdown()
+        tag = self.state.get("current_agentic_tag")
+        if not tag: return
+        
+        is_at_bottom = hist.yview()[1] >= 0.98
+        hist.config(state='normal')
+        hist.insert(tk.END, chunk, (tag, "md_thought"))
         hist.config(state='disabled')
         if is_at_bottom:
             hist.yview_moveto(1.0)
@@ -5085,6 +5278,10 @@ class ChatbotApp:
             # 2. Batch Log/Text Updates (The Performance Secret)
             self._flush_log_buffer()
 
+            if self.agentic_stream_buffer:
+                self._update_agentic_dropdown(self.agentic_stream_buffer)
+                self.agentic_stream_buffer = ""
+
             if self.thought_stream_buffer:
                 self._update_thought_dropdown(self.thought_stream_buffer)
                 self.thought_stream_buffer = ""
@@ -5152,6 +5349,21 @@ class ChatbotApp:
         if val >= 100 and self.progress_label is not None:
             self.progress_label.config(text="TIMELINE: ANALYSIS COMPLETE", fg="#ffffff")
 
+    def _get_persona_label(self) -> str:
+        """Returns the active persona display name with fallback."""
+        lvl = getattr(self, "active_persona_level", 2)
+        mapping = {
+            0: "Base",
+            1: "Assistant",
+            2: "Serenity",
+            3: "Architect",
+            4: "Philosopher",
+            5: "Oracle",
+            6: "Cecilia",
+            7: "Transcendent"
+        }
+        return mapping.get(lvl, "Serenity")
+
     def _display_user_message(self, msg): 
         hist = self.chat_history
         if hist is None: return
@@ -5161,10 +5373,9 @@ class ChatbotApp:
             self.prompt_display.pack_forget()
 
         hist.config(state='normal')
+        self._append_to_chat("\nYou: ", "user_lead")
         start_idx = hist.index(tk.END + "-1c")
-        
-        self._append_to_chat(f"\nYou: {msg}\n", "user")
-        
+        self._append_to_chat(f"{msg}\n", "user")
         end_idx = hist.index(tk.END + "-1c")
         self.state["response_start_idx"] = end_idx
         hist.config(state='disabled')
@@ -6743,17 +6954,18 @@ class ChatbotApp:
         hist = self.chat_history
         start_idx = self.state.get("response_start_idx")
         
+        if error:
+            self._append_to_chat(f"\n\n[System Error]: {final_answer}\n\n", "system")
+            self.set_avatar_state("apologetic")
+            try:
+                with open(self.error_log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"\n[{time.strftime('%H:%M:%S')}] [System Error]: {final_answer}\n")
+            except: pass
+            return
+
         # 4. Atomic Reset for Rendering / In-Place Markdown Application
         # Preserve already-streamed responses to prevent mass-dump flickering
         if self.state.get("response_started") and start_idx:
-            if error:
-                self._append_to_chat(f"\n\n[System Error]: {final_answer}\n\n", "system")
-                self.set_avatar_state("apologetic")
-                try:
-                    with open(self.error_log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"\n[{time.strftime('%H:%M:%S')}] [System Error]: {final_answer}\n")
-                except: pass
-                return
 
             if self.state.get("thought_streamed") and not self.state.get("deep_cook"):
                 hist.config(state='normal')
@@ -6761,21 +6973,23 @@ class ChatbotApp:
                 if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
                     self._append_to_chat(final_answer, "ai")
                 hist.config(state='disabled')
-            elif think_log and not self.state.get("deep_cook"):
-                # Atomic reset to prepend the expandable thought process block
-                hist.config(state='normal')
-                try:
-                    hist.delete(start_idx, tk.END)
-                except: pass
-                hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
-                hist.config(state='disabled')
             elif not self.state.get("deep_cook"):
                 hist.config(state='normal')
                 curr_text = hist.get(start_idx, tk.END).strip()
                 lead = f"{self._get_persona_label()}:"
-                # If the content already streamed cleanly, preserve it to prevent mass dump
-                if lead in curr_text and (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                # If agentic stream or clean stream already present in chat, preserve to prevent mass dump
+                if self.state.get("agentic_streamed"):
+                    if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                        self._append_to_chat(final_answer, "ai")
+                elif lead in curr_text and (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
                     pass # Stream already complete in-place
+                elif think_log:
+                    # Non-streamed thoughts present: reset cleanly only if no agentic dropdown was inserted
+                    if not self.state.get("agentic_streamed"):
+                        try:
+                            hist.delete(start_idx, tk.END)
+                        except: pass
+                        hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
                 else:
                     try:
                         hist.delete(start_idx, tk.END)
@@ -6813,7 +7027,21 @@ class ChatbotApp:
                     render_start = start_idx if start_idx else "1.0"
             else:
                 render_start = start_idx if start_idx else "1.0"
-        elif think_log and not self.state.get("deep_cook"):
+
+        # Finalize streamed agentic dropdown if present
+        if self.state.get("agentic_streamed"):
+            agentic_tag = self.state.get("current_agentic_tag")
+            agentic_btn = self.state.get("current_agentic_btn")
+            if agentic_tag:
+                hist.tag_config(agentic_tag, elide=True)
+                if agentic_btn and agentic_btn.winfo_exists():
+                    agentic_btn.config(text="[+] View Agentic Actions")
+                ranges = hist.tag_ranges(agentic_tag)
+                if ranges and len(ranges) >= 2 and render_mode > 0:
+                    self._apply_markdown(ranges[0], ranges[-1], (agentic_tag, "md_thought"), is_thought=True)
+
+        # Handle non-streamed thinking (independent of agentic actions)
+        if not self.state.get("thought_streamed") and think_log and not self.state.get("deep_cook"):
             think_tag = f"think_block_{int(time.time() * 1000)}"
             def toggle_thoughts(tag=think_tag, b=None):
                 is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
@@ -6829,7 +7057,8 @@ class ChatbotApp:
             btn_active = THEME.get("button_active_color", "#382e24")
             accent_hl = THEME.get("accent_highlight", "#ff8800")
             
-            btn = tk.Button(hist, text="[+] View Thinking Process", bg=btn_bg, fg=accent, 
+            dd_frame = self._get_or_create_dropdown_frame()
+            btn = tk.Button(dd_frame, text="[+] View Thinking Process", bg=btn_bg, fg=accent, 
                             activebackground=btn_active, activeforeground=accent_hl, 
                             relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
             btn.config(command=lambda t=think_tag, b=btn: toggle_thoughts(t, b))
@@ -6837,9 +7066,11 @@ class ChatbotApp:
                 self.thought_dropdown_buttons = []
             self.thought_dropdown_buttons.append(btn)
             
-            hist.insert(tk.END, "\n", ("ai",))
-            hist.window_create(tk.END, window=btn)
-            hist.insert(tk.END, "\n", ("ai",))
+            agentic_btn = self.state.get("current_agentic_btn")
+            if agentic_btn and agentic_btn.winfo_exists():
+                btn.pack(side=tk.LEFT, padx=(0, 4), before=agentic_btn)
+            else:
+                btn.pack(side=tk.LEFT, padx=(0, 4))
             
             thought_start = hist.index(tk.END + "-1c")
             hist.insert(tk.END, think_log + "\n\n", (think_tag, "md_thought"))
@@ -6851,9 +7082,9 @@ class ChatbotApp:
             
             hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
 
-            # Insert Final Answer after thoughts
-            render_start = hist.index(tk.END + "-1c")
-            if final_answer:
+            # Insert Final Answer after thoughts if not already present
+            curr_text = hist.get(start_idx, tk.END).strip()
+            if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
                 self._append_to_chat(final_answer, "ai")
         elif not self.state.get("response_started", False):
             # In unstarted streams, output message directly
@@ -6916,8 +7147,14 @@ class ChatbotApp:
         self.state["response_started"] = False
         self.state["thought_streamed"] = False
         self.state["current_think_tag"] = None
+        self.state["current_think_btn"] = None
+        self.state["agentic_streamed"] = False
+        self.state["current_agentic_tag"] = None
+        self.state["current_agentic_btn"] = None
+        self.state["current_dropdown_frame"] = None
         self.state["thought_stream_lead_cleaned"] = False
         self.thought_stream_buffer = ""
+        self.agentic_stream_buffer = ""
         self.root.after(1500, lambda *args: self.set_avatar_state("listening"))
 
     def _save_rlhf_log(self, prompt, answer, rating):
@@ -7599,7 +7836,20 @@ class ChatbotApp:
 
     def load_config(self):
         if os.path.exists(self.config_file):
-            with open(self.config_file, 'r') as f: self.config = ThreadSafeDict(json.load(f))
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    self.config = ThreadSafeDict(loaded)
+            except Exception as e:
+                print(f"[CONFIG] Error parsing {self.config_file}: {e}. Falling back to default configuration.")
+                default_p = os.path.join(self.dirs.get("Users", os.path.join(self.script_dir, "Users")), "Default", "config.json")
+                if os.path.exists(default_p) and default_p != self.config_file:
+                    try:
+                        with open(default_p, 'r', encoding='utf-8') as f:
+                            self.config = ThreadSafeDict(json.load(f))
+                    except Exception:
+                        pass
         
         # Track startup count to initialize blank logs upon 4th startup
         startup_count = self.config.get("startup_count", 0) + 1
@@ -7820,12 +8070,13 @@ class ChatbotApp:
                 if hasattr(self.thinking_display, 'prayer_label') and self.thinking_display.prayer_label and self.thinking_display.prayer_label.winfo_exists():
                     self.thinking_display.prayer_label.config(bg=bg, fg=accent)
 
-            # Chat History & Tags (Pure neon styling, no generic white text)
+            # Chat History & Tags (Pure neon styling, distinct user vs AI separation)
             if hasattr(self, 'chat_history') and self.chat_history and self.chat_history.winfo_exists():
                 self.chat_history.config(bg=chat_bg, fg=chat_fg)
                 self.chat_history.tag_config("user_lead", foreground=accent_sec)
-                self.chat_history.tag_config("user", foreground=accent)
-                self.chat_history.tag_config("ai_lead", foreground=accent_sec)
+                self.chat_history.tag_config("user", foreground=accent if accent != chat_fg else "#00aaff")
+                self.chat_history.tag_config("ai_lead", foreground=accent_hl)
+                self.chat_history.tag_config("ai", foreground=chat_fg)
                 self.chat_history.tag_config("md_header", foreground=accent_hl)
                 self.chat_history.tag_config("md_header_1", foreground=accent_hl)
                 self.chat_history.tag_config("md_header_2", foreground=accent_hl)
@@ -7846,8 +8097,9 @@ class ChatbotApp:
             if hasattr(self, 'past_history_view') and self.past_history_view and self.past_history_view.winfo_exists():
                 self.past_history_view.config(bg=chat_bg, fg=chat_fg)
                 self.past_history_view.tag_config("user_lead", foreground=accent_sec)
-                self.past_history_view.tag_config("user", foreground=accent)
-                self.past_history_view.tag_config("ai_lead", foreground=accent_sec)
+                self.past_history_view.tag_config("user", foreground=accent if accent != chat_fg else "#00aaff")
+                self.past_history_view.tag_config("ai_lead", foreground=accent_hl)
+                self.past_history_view.tag_config("ai", foreground=chat_fg)
                 self.past_history_view.tag_config("md_header", foreground=accent_hl)
                 self.past_history_view.tag_config("md_header_1", foreground=accent_hl)
                 self.past_history_view.tag_config("md_header_2", foreground=accent_hl)
@@ -7877,7 +8129,7 @@ class ChatbotApp:
                     if b and b.winfo_exists():
                         b.config(bg=btn_bg, fg=fg)
 
-            # Thought Dropdown Buttons Dynamic Theming
+            # Thought & Agentic Dropdown Buttons Dynamic Theming
             if hasattr(self, 'thought_dropdown_buttons') and self.thought_dropdown_buttons:
                 for tb in list(self.thought_dropdown_buttons):
                     try:
@@ -7885,6 +8137,15 @@ class ChatbotApp:
                             tb.config(bg=btn_bg, fg=accent, activebackground=btn_active, activeforeground=accent_hl)
                         else:
                             self.thought_dropdown_buttons.remove(tb)
+                    except: pass
+
+            if hasattr(self, 'agentic_dropdown_buttons') and self.agentic_dropdown_buttons:
+                for ab in list(self.agentic_dropdown_buttons):
+                    try:
+                        if ab and ab.winfo_exists():
+                            ab.config(bg=btn_bg, fg=accent, activebackground=btn_active, activeforeground=accent_hl)
+                        else:
+                            self.agentic_dropdown_buttons.remove(ab)
                     except: pass
 
             if hasattr(self, 'btn_active') and self.btn_active and self.btn_active.winfo_exists():

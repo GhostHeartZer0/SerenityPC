@@ -320,14 +320,14 @@ CHAT_BG_COLORS = {
 
 # --- CHAT FOREGROUND COLORS ---
 CHAT_FG_COLORS = {
-    0: "#28FF27",
-    1: "#FFF8E1", 
-    2: "#FFFFFF",
-    3: "#FFFFFF",
-    4: "#AFEEEE", 
-    5: "#FFFFFF",
-    6: "#00FFFF", # Electric Cyan
-    7: "#00ff66", 
+    0: "#28FF27", # Matrix Green
+    1: "#FFF8E1", # Lvl 1 Warm Cream/Gold
+    2: "#FFC299", # Lvl 2 Warm Coral/Orange
+    3: "#FF9999", # Lvl 3 Light Crimson/Rose
+    4: "#E0B0FF", # Lvl 4 Light Violet/Mauve
+    5: "#99FF99", # Lvl 5 Mint Green
+    6: "#00FFFF", # Lvl 6 Electric Cyan
+    7: "#00FF88", # Lvl 7 Dark Emerald / Cecilia Green
 }
 
 # --- INPUT TEXT COLORS ---

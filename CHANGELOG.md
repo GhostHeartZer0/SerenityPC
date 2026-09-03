@@ -27,6 +27,36 @@
 
 ## Current Version:
 
+### Version 1.6.1
+- **Tool Execution Security Hardening**:
+  - Replaced dynamic Python script generation and execution in `generate_image` tool with static HUD viewer script (`System/hud_viewer.py`) and JSON payload passing via scratch directory, eliminating on-the-fly Python script writes and arbitrary file execution surfaces.
+- **Documentation & User Guide Overhaul (Legacy Branch Alignment)**:
+  - Restructured `README.md` with streamlined setup flow, prerequisites, persona matrix, multi-modal features, and hardware tier references.
+  - Refactored `Welcome!.txt` tailored for legacy GPU architectures with dedicated hardware requirements, quick-start workflow, context size cheat sheets, parameter tuning guides, and engine controls.
+  - Aligned `README.txt` with GTX 1050 Ti & legacy GPU setup guidelines and fast `.venv` launch paths.
+- **AI / User Text Color Separation & Persona Prefix Fix**:
+  - Differentiated all persona levels in `serenity_resources.py` `CHAT_FG_COLORS` (`#28FF27` for Lvl 0, `#FFF8E1` for Lvl 1, `#FFC299` for Lvl 2, `#FF9999` for Lvl 3, `#E0B0FF` for Lvl 4, `#99FF99` for Lvl 5, `#00FFFF` for Lvl 6, `#00FF88` for Lvl 7), completely eliminating color collisions with user text.
+  - Updated `_display_user_message` in `main.py` to insert `You: ` under `user_lead` and message text under `user` tag, ensuring user text remains electric blue / cyan without inheriting base AI tag colors.
+  - Implemented `_get_persona_label` on `ChatbotApp` class and ensured `_update_ai_message`, `_finalize_message`, and `_display_ai_message` output proper persona name prefixes (e.g., `Serenity: ` on Lvl 2).
+  - Updated `_apply_theme_to_widgets` across `chat_history` and `past_history_view` to enforce high-contrast distinction between `user` and `ai` text.
+  - Added unit test suite `System/tests/test_chat_color_and_prefix.py` validating color uniqueness and persona mapping.
+- **Desktop Shortcut GUI Launch Fix**:
+  - Updated `shortcuts.py` to reliably resolve windowless `pythonw.exe` without case mismatch or path corruption, preventing blank console windows from spawning on desktop icon click.
+- **Granite 4.2 Alignment & Test Suite**:
+  - Added unit test suite `System/tests/test_granite_chat_template.py` verifying llama.cpp/Jinja2 template rendering across thinking, non-thinking, low-effort modes, and history thinking truncation.
+  - Added Granite 4.2 thinking and non-thinking output separation test cases to `System/tests/test_thought_isolation.py` and `System/vision_handler.py`, verifying zero thought leakage.
+- **Agentic Stream & Dedicated Dropdown Separation**:
+  - Isolated subagent delegation traces and dynamic dispatch progression from model reasoning into dedicated `agentic_stream` queue event in `System/orchestration_manager.py`.
+  - Implemented dual side-by-side dropdown buttons in `main.py` (`_ensure_agentic_dropdown` / `_ensure_thought_dropdown`) within a horizontal button frame container in `chat_history`, placing `[+] View Agentic Actions` to the right of `[+] View Thinking Process`.
+  - Enforced independent collapsible state management, tag isolation (`agentic_block_*` vs `think_block_*`), markdown styling, and dynamic palette theming across both dropdown widgets.
+- **Subagent Model Swapping & Orchestration Synchronization**:
+  - Implemented `model_swap_synchronous` in `main.py` with `threading.Event` done triggers for dynamic multi-agent delegation in `per_subagent_model` mode.
+  - Resolved blank response window bug: prevented subagent model loading from calling asynchronous GUI `model_swap()`, `halt_process()`, or `clear_chat_ui()`.
+  - Added `is_subagent_swap` isolation in `_load_model_worker` to avoid firing `load_success` history reload handlers during active generation.
+  - Updated `System/orchestration_manager.py` to prioritize `model_swap_synchronous` with automatic orchestrator model restoration before generating final responses.
+  - Hardened `_finalize_message` in `main.py` to unconditionally deliver system error messages to the chat interface even if generation failed prior to `response_started`.
+  - Added unit test `test_delegation_dynamic_model_swap_synchronous` to `System/tests/test_dynamic_dispatch.py`.
+
 ### Version 1.6.0
 - **Wringer Benchmark Test Import & Bootstrap Path Fix**:
   - Corrected `wringer_dir` resolution in `test_wringer_checkpointing.py` to point to `benchmarks/wringer`.

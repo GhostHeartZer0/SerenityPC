@@ -45,10 +45,3 @@ if exist "%~dp0.venv\Scripts\python.exe" (
 )
 
 if errorlevel 1 pause
-
-
-<<<<<<< HEAD
-=======
-set PYTHONPATH=.venv\Lib\site-packages
-pythonw.exe main.py
->>>>>>> a231121 (fixed: audio processing, mmproj lookup, tests, improved agents)

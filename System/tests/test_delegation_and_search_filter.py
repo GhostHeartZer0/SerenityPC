@@ -88,7 +88,7 @@ class TestDelegationAndSearchFilter(unittest.TestCase):
 
         statuses = [m.get("status") for m in messages]
         self.assertIn("tool_log_update", statuses)
-        self.assertIn("thought_stream", statuses)
+        self.assertIn("agentic_stream", statuses)
 
         # Ensure no direct streaming to chat output occurred from subagent chain
         self.assertNotIn("streaming", statuses)

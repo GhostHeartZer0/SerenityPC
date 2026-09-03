@@ -393,9 +393,9 @@ class OrchestrationManager:
                 try: pq.put({"status": "tool_log_update", "content": f"\n{msg}"})
                 except Exception: pass
 
-        def _log_thought(msg: str):
+        def _log_agentic(msg: str):
             if pq:
-                try: pq.put({"status": "thought_stream", "content": f"\n[DELEGATION] {msg}\n"})
+                try: pq.put({"status": "agentic_stream", "content": f"\n[DELEGATION] {msg}\n"})
                 except Exception: pass
 
         # Config Options
@@ -411,7 +411,7 @@ class OrchestrationManager:
         if orchestrator_level == 7 and cecilia_mode == "divine_judgement":
             _log_diag("=== [CECILIA DIVINE JUDGEMENT: DIRECT OMNISCIENCE] ===")
             _log_subagent("👁 [CECILIA: DIVINE JUDGEMENT] Bypassing subagents. Engaging direct omniscience...")
-            _log_thought("Cecilia Divine Judgement: Subagent delegation bypassed. Direct insight engaged.")
+            _log_agentic("Cecilia Divine Judgement: Subagent delegation bypassed. Direct insight engaged.")
 
             try:
                 from serenity_resources import DELEGATION_SYSTEM_PROMPTS
@@ -455,27 +455,46 @@ class OrchestrationManager:
         lvl_to_tier = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
 
         def _swap_for_step(target_lvl: int):
-            if model_mode == "per_subagent_model" and hasattr(self.app, "model_swap") and hasattr(self.app, "model_paths"):
+            if model_mode == "per_subagent_model" and hasattr(self.app, "model_paths"):
                 tier = lvl_to_tier.get(target_lvl)
                 target_path = self.app.model_paths.get(tier)
                 curr_path = getattr(self.app, "model_path", None)
                 if target_path and target_path != curr_path:
                     _log_subagent(f"[MODEL SWAP]: Offloading Orchestrator -> Loading Subagent Lvl {target_lvl} ({tier})...")
-                    try:
-                        self.app.model_swap(target_level=target_lvl, target_tier=tier)
-                    except Exception as e:
-                        _log_subagent(f"[MODEL SWAP WARNING]: Could not swap to Lvl {target_lvl}: {e}")
+                    if hasattr(self.app, "model_swap_synchronous"):
+                        try:
+                            ok = self.app.model_swap_synchronous(target_level=target_lvl, target_tier=tier)
+                            if not ok:
+                                _log_subagent(f"[MODEL SWAP WARNING]: Synchronous swap to Lvl {target_lvl} failed.")
+                        except Exception as e:
+                            _log_subagent(f"[MODEL SWAP WARNING]: Could not swap to Lvl {target_lvl}: {e}")
+                    elif hasattr(self.app, "model_swap"):
+                        try:
+                            self.app.model_swap(target_level=target_lvl, target_tier=tier)
+                        except Exception as e:
+                            _log_subagent(f"[MODEL SWAP WARNING]: Could not swap to Lvl {target_lvl}: {e}")
 
         def _restore_orchestrator():
-            if model_mode == "per_subagent_model" and hasattr(self.app, "model_swap"):
+            if model_mode == "per_subagent_model":
                 orch_tier = lvl_to_tier.get(orchestrator_level, "transcendent" if orchestrator_level == 6 else "secret")
                 curr_lvl = getattr(self.app, "active_persona_level", None)
-                if curr_lvl != orchestrator_level:
+                curr_tier = getattr(self.app, "current_model_tier", None)
+                curr_path = getattr(self.app, "model_path", None)
+                orch_path = getattr(self.app, "model_paths", {}).get(orch_tier) if hasattr(self.app, "model_paths") else None
+                if curr_lvl != orchestrator_level or curr_tier != orch_tier or (orch_path and curr_path != orch_path):
                     _log_subagent(f"[MODEL SWAP]: Restoring Orchestrator Model (Lvl {orchestrator_level})...")
-                    try:
-                        self.app.model_swap(target_level=orchestrator_level, target_tier=orch_tier)
-                    except Exception as e:
-                        _log_subagent(f"[MODEL SWAP WARNING]: Could not restore Lvl {orchestrator_level}: {e}")
+                    if hasattr(self.app, "model_swap_synchronous"):
+                        try:
+                            ok = self.app.model_swap_synchronous(target_level=orchestrator_level, target_tier=orch_tier)
+                            if not ok:
+                                _log_subagent(f"[MODEL SWAP WARNING]: Synchronous restore to Lvl {orchestrator_level} failed.")
+                        except Exception as e:
+                            _log_subagent(f"[MODEL SWAP WARNING]: Could not restore Lvl {orchestrator_level}: {e}")
+                    elif hasattr(self.app, "model_swap"):
+                        try:
+                            self.app.model_swap(target_level=orchestrator_level, target_tier=orch_tier)
+                        except Exception as e:
+                            _log_subagent(f"[MODEL SWAP WARNING]: Could not restore Lvl {orchestrator_level}: {e}")
 
         # 1. DYNAMIC DISPATCH & OBSERVABILITY TRACE
         trace = UtilityDispatchEngine.evaluate(orchestrator_level, user_query, selection_mode=selection_mode)
@@ -487,7 +506,7 @@ class OrchestrationManager:
         _log_diag("==========================================================")
 
         _log_subagent(f"👥 [ORCHESTRATOR LVL {orchestrator_level}] Dispatching subagents: {trace.selected_agent_ids} (Density: {selection_mode}, Model Mode: {model_mode})")
-        _log_thought(f"Dynamic Dispatch Profile: {trace.decision_summary}")
+        _log_agentic(f"Dynamic Dispatch Profile: {trace.decision_summary}")
 
         selected = trace.selected_agent_ids
         handoff_reports: List[HandoffReport] = []
@@ -531,7 +550,7 @@ class OrchestrationManager:
                     status="completed"
                 )
                 handoff_reports.append(report)
-                _log_thought(f"Step {step_idx} (Lvl 2): Factual data retrieved and offloaded to context.")
+                _log_agentic(f"Step {step_idx} (Lvl 2): Factual data retrieved and offloaded to context.")
                 step_idx += 1
 
             # Level 4: Emotional / Nuance Check (if selected)
@@ -549,7 +568,7 @@ class OrchestrationManager:
                     status="completed"
                 )
                 handoff_reports.append(report)
-                _log_thought(f"Step {step_idx} (Lvl 4): Tone alignment offloaded to context.")
+                _log_agentic(f"Step {step_idx} (Lvl 4): Tone alignment offloaded to context.")
                 step_idx += 1
 
             # Level 3: Collaborator Context Staging (if selected)
@@ -567,7 +586,7 @@ class OrchestrationManager:
                     status="completed"
                 )
                 handoff_reports.append(report)
-                _log_thought(f"Step {step_idx} (Lvl 3): Minimal state packaged ({len(offloaded_state)} bytes).")
+                _log_agentic(f"Step {step_idx} (Lvl 3): Minimal state packaged ({len(offloaded_state)} bytes).")
                 step_idx += 1
 
             # Level 5: Sage / Brains Logical Deduction (if selected)
@@ -588,18 +607,28 @@ class OrchestrationManager:
                 else:
                     reasoning_res = f"Deduction for '{user_query}' derived logically."
 
-                active_ctx.reasoning_steps.append(reasoning_res)
+                # Sanitize subagent thoughts to isolate internal reasoning from final deduction
+                try:
+                    from System.vision_handler import VisionHandler
+                    sub_think, sub_ans = VisionHandler.split_thoughts_and_answer(reasoning_res)
+                    if sub_think:
+                        _log_diag(f"[SUBAGENT LVL 5 THOUGHT LOG]:\n{sub_think}")
+                    clean_res = sub_ans if sub_ans else sub_think
+                except Exception:
+                    clean_res = reasoning_res
+
+                active_ctx.reasoning_steps.append(clean_res)
                 report = HandoffReport(
                     step_index=step_idx,
                     from_level=5,
                     to_level=orchestrator_level,
                     task_type="logical_deduction",
-                    summary=f"Formulated logical deductions ({len(reasoning_res)} chars).",
-                    reasoning_output=reasoning_res,
+                    summary=f"Formulated logical deductions ({len(clean_res)} chars).",
+                    reasoning_output=clean_res,
                     status="completed"
                 )
                 handoff_reports.append(report)
-                _log_thought(f"Step {step_idx} (Lvl 5): Logical deduction completed.")
+                _log_agentic(f"Step {step_idx} (Lvl 5): Logical deduction completed.")
                 step_idx += 1
 
             # Level 1: Speedy Format & Sanity Validation (if selected)
@@ -615,7 +644,7 @@ class OrchestrationManager:
                     status="completed"
                 )
                 handoff_reports.append(report)
-                _log_thought(f"Step {step_idx} (Lvl 1): Quick sanity check passed.")
+                _log_agentic(f"Step {step_idx} (Lvl 1): Quick sanity check passed.")
                 step_idx += 1
 
         finally:
