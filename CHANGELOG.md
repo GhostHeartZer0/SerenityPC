@@ -25,6 +25,10 @@
 ## Current Version:
 
 ### Version 1.6.1
+- **Security Hardening (AI Hacking Defense)**:
+  - Installed automated Git pre-commit hook (`Tools/pre_commit_secret_check.py` and `.git/hooks/pre-commit`) blocking secret leaks, private keys, API keys, and sensitive local files (`.env`, `System/vault/*`, `System/config.json`).
+  - Strict dependency pinning in `requirements.txt` to guard against AI dependency hallucination and upstream supply-chain poisoning.
+  - Hardened HUD overlay generation in `System/tool_registry.py` by removing runtime script generation in `scratch/temp_viewer.py` in favor of a static entry point (`System/hud_viewer.py`) with parameterized execution.
 - **Documentation & User Guide Overhaul**:
   - Refactored `Welcome!.txt` with structured sections, corrected typos, updated setup and launcher instructions (`SETUPfile.py`, `System/shortcuts.py`), and clarified inference tuning, persona matrix, multimodal projectors, and DMN descriptions.
   - Restructured `README.md` focusing first on quick description and purpose, quick setup guide, basic usage workflow, and decreasingly verbose feature/hardware specifications.
