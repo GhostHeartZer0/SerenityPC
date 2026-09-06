@@ -21,21 +21,24 @@ class GgufDraftModel:
                 verbose=False
             )
         except Exception as err:
-            is_gemma_draft = "gemma" in str(draft_model_path).lower()
-            if not is_gemma_draft:
-                from System.serenity_utils import patch_gguf_architecture
-                if patch_gguf_architecture(draft_model_path, new_arch="llama"):
-                    self.draft_llm = Llama(
-                        model_path=draft_model_path,
-                        n_gpu_layers=n_gpu_layers,
-                        n_ctx=n_ctx,
-                        n_threads=draft_threads,
-                        n_batch=512,
-                        verbose=False
-                    )
-                else:
-                    raise err
-            else:
+            err_str = str(err).lower()
+            self.draft_llm = None
+            if "unknown model architecture" in err_str or "architecture" in err_str:
+                try:
+                    from System.serenity_utils import patch_gguf_architecture
+                    target_arch = "llama"
+                    if patch_gguf_architecture(draft_model_path, new_arch=target_arch):
+                        self.draft_llm = Llama(
+                            model_path=draft_model_path,
+                            n_gpu_layers=n_gpu_layers,
+                            n_ctx=n_ctx,
+                            n_threads=draft_threads,
+                            n_batch=512,
+                            verbose=False
+                        )
+                except Exception as patch_err:
+                    print(f"[MTP] Drafter architecture patching failed: {patch_err}")
+            if self.draft_llm is None:
                 raise err
         self.num_pred_tokens = 5  # Standard speculative sequence length
 

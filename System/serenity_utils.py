@@ -1105,6 +1105,7 @@ class DynamicStatusWidget(tk.Frame):
         return default
 
     def set_phase(self, phase: str, details: str = "", tokens: int = 0, speed: float = 0.0, progress_val: float = -1):
+        if not self.winfo_exists(): return
         self._current_phase = phase
         if tokens > 0: self._token_count = tokens
         if speed > 0: self._tokens_per_sec = speed
@@ -1156,6 +1157,7 @@ class DynamicStatusWidget(tk.Frame):
         self._estimated_total_tokens = total
 
     def _update_multiline_tasks(self):
+        if not self.winfo_exists(): return
         lines = [
             f"• Phase: {self._current_phase.upper()}",
             f"• Tokens: {self._token_count} | Speed: {self._tokens_per_sec:.1f} t/s",
@@ -1165,6 +1167,7 @@ class DynamicStatusWidget(tk.Frame):
         self.task_lines_label.config(text="  ".join(lines))
 
     def _update_fallback_info(self):
+        if not self.winfo_exists(): return
         if not self._get_config("status_bar_fallback_info", True):
             self.telemetry_label.config(text="")
             return
@@ -1178,7 +1181,7 @@ class DynamicStatusWidget(tk.Frame):
                 ctx = self.app.context_size_config.get(tier, "Default")
                 parts.append(f"Ctx: {ctx}")
             if hasattr(self.app, 'config'):
-                quant = self.app.config.get("flash_attention_kv", "q8_0")
+                quant = self.app.config.get("flash_attention_kv", self.app.config.get("k_cache_type", "q8_0"))
                 parts.append(f"KV: {quant}")
         
         self.telemetry_label.config(text=" | ".join(parts))
@@ -1237,17 +1240,32 @@ class DynamicStatusWidget(tk.Frame):
             try: self.after_cancel(self._anim_job)
             except Exception: pass
             self._anim_job = None
+            
+        if hasattr(self, '_prayer_job') and self._prayer_job:
+            try: self.after_cancel(self._prayer_job)
+            except Exception: pass
+            self._prayer_job = None
+
+        if hasattr(self, '_linger_job') and self._linger_job:
+            try: self.after_cancel(self._linger_job)
+            except Exception: pass
+            self._linger_job = None
         
-        self.progress.stop()
+        try:
+            self.progress.stop()
+        except Exception: pass
         
         mode = self._get_config("status_bar_mode", "hybrid")
-        if mode == "hybrid" and self._tokens_per_sec > 0:
+        linger_sec = float(self._get_config("status_bar_linger_sec", 5.0))
+        linger_ms = max(500, int(linger_sec * 1000))
+        if mode == "hybrid":
             self.set_phase("complete")
-            self.after(2500, self._transition_to_idle)
+            self._linger_job = self.after(linger_ms, self._transition_to_idle)
         else:
             self._transition_to_idle()
 
     def _transition_to_idle(self):
+        if not self.winfo_exists(): return
         if self._is_active: return
         self.tasks_frame.pack_forget()
         self.prayer_label.pack_forget()
@@ -1267,6 +1285,7 @@ class DynamicStatusWidget(tk.Frame):
         self.label.config(text=text)
 
     def _start_canvas_animation(self):
+        if not self.winfo_exists(): return
         anim_style = self._get_config("status_bar_anim_style", "spinner")
         self.anim_canvas.delete("all")
         w, h = 24, 24
@@ -1295,6 +1314,7 @@ class DynamicStatusWidget(tk.Frame):
             self._anim_job = self.after(50, self._start_canvas_animation)
 
     def _start_prayer_animation(self):
+        if not self.winfo_exists(): return
         if not self._is_active: return
         lines = [
             "God, grant me the serenity to accept the things I cannot change,",
@@ -1332,7 +1352,7 @@ class DynamicStatusWidget(tk.Frame):
                 self._prayer_idx = (self._prayer_idx + 1) % len(lines)
                 self._prayer_direction = 1
 
-        self.after(50, self._start_prayer_animation)
+        self._prayer_job = self.after(50, self._start_prayer_animation)
 
     def _start_idle_loop(self):
         self._update_idle_display()
@@ -1343,7 +1363,7 @@ class DynamicStatusWidget(tk.Frame):
         if not self.winfo_exists(): return
         
         show_dmn = self._get_config("status_bar_dmn_idle", True)
-        if not show_dmn: return
+        mode = self._get_config("status_bar_mode", "hybrid")
 
         # DMN State: Track actual time in DMN state
         dmn_active = False
@@ -1370,28 +1390,74 @@ class DynamicStatusWidget(tk.Frame):
                     dmn_status = "[DMN Simmering]"
 
             self.label.config(text=f"{dmn_status} Time in DMN: {time_str}")
-        else:
-            timeout_sec = 300
-            if self.app and hasattr(self.app, '_parse_dmn_timeout_sec'):
-                timeout_sec = self.app._parse_dmn_timeout_sec()
-            
-            idle_sec = int(time.time() - self._idle_start_time)
-            rem_sec = max(0, timeout_sec - idle_sec)
-            m, s = divmod(rem_sec, 60)
-            self.label.config(text=f"[Idle] Next DMN in: {m:02d}:{s:02d}")
+            self._update_fallback_info()
+            return
 
+        # Rotating information cycle in Hybrid/Smart Mode during normal idle
+        if mode == "hybrid":
+            self._rotation_cycle = getattr(self, "_rotation_cycle", 0) + 1
+            step = (self._rotation_cycle // 3) % 4
+            
+            if step == 1:
+                lvl = getattr(self.app, 'active_persona_level', 3) if self.app else 3
+                tier = getattr(self.app, 'current_model_tier', 'low') if self.app else 'low'
+                m_p = getattr(self.app, 'model_path', '') if self.app else ''
+                m_name = os.path.basename(m_p) if m_p else 'None'
+                self.label.config(text=f"[Lvl {lvl}] {tier.upper()} | Model: {m_name}")
+                self._update_fallback_info()
+                return
+            elif step == 2:
+                ctx = "Default"
+                quant = "q8_0"
+                if self.app:
+                    if hasattr(self.app, 'context_size_config') and hasattr(self.app, 'current_model_tier'):
+                        ctx = self.app.context_size_config.get(self.app.current_model_tier, "Default")
+                    if hasattr(self.app, 'config'):
+                        quant = self.app.config.get("k_cache_type", "q8_0")
+                self.label.config(text=f"[Context / Cache] Ctx: {ctx} | KV: {quant}")
+                self._update_fallback_info()
+                return
+            elif step == 3 and (self._tokens_per_sec > 0 or self._ttft > 0):
+                ttft_txt = f"Last TTFT: {self._ttft:.2f}s" if self._ttft > 0 else ""
+                spd_txt = f"Speed: {self._tokens_per_sec:.1f} t/s" if self._tokens_per_sec > 0 else ""
+                stats_str = " | ".join([p for p in [ttft_txt, spd_txt] if p])
+                self.label.config(text=f"[Telemetry] {stats_str}")
+                self._update_fallback_info()
+                return
+
+        if not show_dmn:
+            self.label.config(text="System: Ready")
+            self.gauge_label.config(text="")
+            self._update_fallback_info()
+            return
+
+        timeout_sec = 300
+        if self.app and hasattr(self.app, '_parse_dmn_timeout_sec'):
+            timeout_sec = self.app._parse_dmn_timeout_sec()
+        
+        idle_sec = int(time.time() - self._idle_start_time)
+        rem_sec = max(0, timeout_sec - idle_sec)
+        m, s = divmod(rem_sec, 60)
+        self.label.config(text=f"[Idle] Next DMN in: {m:02d}:{s:02d}")
         self._update_fallback_info()
 
-
     def destroy(self):
-        if self._idle_timer_job:
+        if getattr(self, '_idle_timer_job', None):
             try: self.after_cancel(self._idle_timer_job)
             except Exception: pass
             self._idle_timer_job = None
-        if self._anim_job:
+        if getattr(self, '_anim_job', None):
             try: self.after_cancel(self._anim_job)
             except Exception: pass
             self._anim_job = None
+        if getattr(self, '_prayer_job', None):
+            try: self.after_cancel(self._prayer_job)
+            except Exception: pass
+            self._prayer_job = None
+        if getattr(self, '_linger_job', None):
+            try: self.after_cancel(self._linger_job)
+            except Exception: pass
+            self._linger_job = None
         super().destroy()
 
 
@@ -1616,15 +1682,16 @@ TUTORIAL_SCREENS = [
         "target_key": "settings",
         "badge": "8 / 9",
         "title": "⚙️ Complete Settings Walkthrough",
-        "subtitle": "Hardware Allocations, Sampling Presets, Themes & Cryptographic Vault",
+        "subtitle": "Modular 6-Tab Architecture, Sampling Presets, Themes & Cryptographic Vault",
         "desc": (
-            "The Settings Window (click [Settings] in the top bar) provides full system control:\n\n"
-            "• Engine Tiers & Auto-Detect: Configure GPU Layers, Ctx size, Batch, and samplers per tier. Click [Auto-Detect] to benchmark and allocate VRAM automatically.\n"
-            "• Templating Engine: 32 instant slots to Save, Write, or Modify parameter presets across tiers.\n"
-            "• Global Overrides: Select KV Cache formats (FP16, Q8_0, Q5_0, Q4_0, etc.), SWA offload, Dynamic Auto-Tune, and response headroom.\n"
-            "• Themes & Textures: Switch between Apex Dark, Goth Obsidian, Crystal Cavern, Fractal Logic, and 6 texture finishes + Frosted Glass.\n"
-            "• Vault & Profiles: Set a Master Password with auto-lock timer to encrypt archives, and manage user profile workspaces.\n"
-            "• Instant [Apply]: Test changes live without closing Settings, or click [Save & Close] to persist."
+            "The Settings Window (click [Settings] in the top bar) is organized into 6 dedicated tabs:\n\n"
+            "• Models & Params: Balanced 2-column engine tier setup with 32-slot Templating Engine below (Write requires 'Copy', auto-returns to Modify).\n"
+            "• Inference: Push-radio controls for HAO, Overfill Behavior, separate Halt options, KV cache, History Mode (TurboVec, Keyword, Off), and Muse Reasoning.\n"
+            "• Agents: Single-column pipeline delegation chain, subagent density, Cecilia mode, and handoff reporting.\n"
+            "• Additional Settings: Offline mode, hardware/multimedia inputs, and dedicated Loading Bar & Status Area configuration.\n"
+            "• Users & Security: Multi-user profiles, identity personalization, and AES-256-GCM Secure Vault encryption.\n"
+            "• Personalize: Live theme preview swatches, side-by-side UI/Log typography, texture finishes & intensity, Dark Mode, and Scaling Center.\n"
+            "• Generation Guard: Remains accessible during generation with model weights safely locked."
         ),
         "hint": "Click [Settings] in the top bar anytime to access hardware tuning and visual customization."
     },

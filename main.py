@@ -716,17 +716,48 @@ class ChatbotApp:
     def switch_user(self, new_username: str):
         clean_un = "".join(c for c in new_username.strip() if c.isalnum() or c in ("-", "_", " ")).strip()
         if not clean_un: clean_un = "Default"
-        
+        old_un = self.get_active_username()
+
+        # Rule: If switching from a locked profile, lock it.
+        if old_un not in ("Default", "Public") and hasattr(self, 'vault_manager') and self.vault_manager and self.vault_manager.is_lock_enabled():
+            self.vault_manager.lock()
+
+        # If switching to a locked profile, prompt for password
+        if clean_un not in ("Default", "Public") and hasattr(self, 'vault_manager') and self.vault_manager and self.vault_manager.is_lock_enabled() and self.vault_manager.is_locked():
+            from tkinter import simpledialog
+            pwd = simpledialog.askstring("Vault Unlock Required", f"Profile '{clean_un}' is protected by Serenity Vault.\nEnter master password:", show="*", parent=getattr(self, 'root', None))
+            if not pwd:
+                print(f"[USER] Switching to protected profile '{clean_un}' cancelled.")
+                return False
+            if not self.vault_manager.unlock(pwd):
+                messagebox.showerror("Authentication Failed", "Incorrect master password for vault.", parent=getattr(self, 'root', None))
+                return False
+
         # Save active config before switching
         save_config = getattr(self, "save_config", None)
         if callable(save_config):
             try: save_config()
             except Exception: pass
-            
+
+        # Clear existing conversation and UI to guarantee user isolation
+        if hasattr(self, "messages"):
+            self.messages = []
+        if hasattr(self, "chat_history") and self.chat_history:
+            self.chat_history.config(state=tk.NORMAL)
+            self.chat_history.delete("1.0", tk.END)
+            self.chat_history.config(state=tk.DISABLED)
+
         self.config["username"] = clean_un
         user_dir = self.get_user_dir(clean_un)
-        self.get_user_history_dir(clean_un)
-        
+        user_hist_dir = self.get_user_history_dir(clean_un)
+        if hasattr(self, 'vault_manager') and self.vault_manager:
+            self.vault_manager.history_dir = user_hist_dir
+
+        # Reset profile-specific fields before merging target
+        self.config["user_preferred_name"] = ""
+        self.config["user_address_style"] = "Direct / Plain"
+        self.config["user_notes"] = ""
+
         # Load user profile config if exists
         u_cfg_p = os.path.join(user_dir, "config.json")
         if os.path.exists(u_cfg_p):
@@ -741,7 +772,7 @@ class ChatbotApp:
             if callable(save_config):
                 save_config()
 
-        # Apply profile-specific theme, scale, fonts
+        # Apply profile-specific theme, scale, fonts, sash
         try:
             from serenity_resources import apply_theme_to_global
             apply_theme_to_global(
@@ -770,14 +801,6 @@ class ChatbotApp:
         except Exception as e:
             print(f"[USER] Failed to apply user theme settings: {e}")
 
-        # Default profile: start with a fresh ephemeral session
-        if clean_un == "Default" and hasattr(self, "messages"):
-            self.messages = []
-            if hasattr(self, "chat_history") and self.chat_history:
-                self.chat_history.config(state=tk.NORMAL)
-                self.chat_history.delete("1.0", tk.END)
-                self.chat_history.config(state=tk.DISABLED)
-
         self._load_dmn_backbone()
         load_history = getattr(self, 'load_history', None)
         if callable(load_history) and clean_un != "Default":
@@ -788,6 +811,7 @@ class ChatbotApp:
         log_and_display = getattr(self, "_log_and_display", None)
         if callable(log_and_display):
             log_and_display(f"Switched user profile to: {clean_un}")
+        return True
 
     def _load_dmn_backbone(self) -> None:
         """Load the active profile's optional DMN backbone into application state."""
@@ -1521,6 +1545,7 @@ class ChatbotApp:
                     return
                 target_x = max(100, min(max_w - 100, pos))
                 self.paned.sash_place(0, target_x, 0)
+                self.config['sash_pos'] = target_x
                 self._position_canvas_elements()
         except Exception:
             pass
@@ -2647,7 +2672,10 @@ class ChatbotApp:
 
     # ================= LOGIC & OPERATIONS =================
     def halt_process(self):
-        if self.state["running"]: self.stop_process.set(); self._log_and_display("Stopping...")
+        if self.state["running"]:
+            halt_mode = self.config.get("halt_behavior_mode", "off")
+            self._log_and_display(f"Halt triggered ({halt_mode})...")
+            self.stop_process.set()
 
     def _sync_deep_cook_ui(self):
         """Centralized source of truth for the Deep Cook button appearance."""
@@ -3330,7 +3358,7 @@ class ChatbotApp:
                        if hasattr(self, "attachment_frame"): self.attachment_frame.pack_forget()
 
                     self._display_ai_message(is_streaming=True)
-                    self.set_avatar_state("meditating")
+                    self._set_prefill_avatar_state()
                     self._prep_generation()
                     
                     # Construct multimodal content
@@ -3422,7 +3450,7 @@ class ChatbotApp:
             return
 
         self._display_ai_message(is_streaming=True)
-        self.set_avatar_state("meditating")
+        self._set_prefill_avatar_state()
         
         self._prep_generation()
         is_hist_off = (self.config.get("history_usage", "all") == "off")
@@ -3456,7 +3484,7 @@ class ChatbotApp:
             return
 
         self._display_ai_message(is_streaming=True)
-        self.set_avatar_state("meditating")
+        self._set_prefill_avatar_state()
         
         self._prep_generation()
         threading.Thread(target=self._generation_worker_deep_cook, args=(user_msg,), daemon=True).start()
@@ -3969,31 +3997,9 @@ class ChatbotApp:
                                     assistant_path = cand_path
                                     break
                     
-                    # 3. Drafter MTPicker (Registration Wizard)
+                    # 3. Automatic detection fallback (no blocking UI dialogs from worker thread)
                     if not assistant_path and self.model_path:
-                        import tkinter.messagebox
-                        from tkinter import filedialog
-                        try:
-                            msg_kwargs = {"parent": self.root} if getattr(self, 'root', None) is not None else {}
-                            response = tkinter.messagebox.askyesno(
-                                "MTP Drafter Required", 
-                                f"No MTP assistant model was automatically found for:\n{os.path.basename(self.model_path)}\n\nWould you like to locate the Assistant model file manually?",
-                                **msg_kwargs
-                            )
-                            if response:
-                                selected_path = filedialog.askopenfilename(
-                                    title="Select MTP Assistant Model",
-                                    filetypes=[("GGUF Models", "*.gguf")],
-                                    initialdir=os.path.dirname(self.model_path)
-                                )
-                                if selected_path and os.path.normcase(os.path.abspath(selected_path)) != norm_main:
-                                    assistant_path = selected_path
-                                    mtp_mapping[self.model_path] = assistant_path
-                                    self.config["mtp_mapping"] = mtp_mapping
-                                    if hasattr(self, 'save_config'):
-                                        self.save_config()
-                        except Exception as gui_err:
-                            print(f"[ENGINE] MTPicker GUI failed: {gui_err}")
+                        print(f"[ENGINE] No assistant drafter automatically found for {os.path.basename(self.model_path)}. Speculative drafting bypassed.")
                 
                 if assistant_path and os.path.exists(assistant_path) and os.path.normcase(os.path.abspath(assistant_path)) != norm_main:
                     try:
@@ -4395,7 +4401,18 @@ class ChatbotApp:
                 fitting_msgs = []
                 for msg in reversed(temp_messages):
                     cnt = msg.get("content", "")
-                    tok_est = max(1, len(str(cnt)) // 4)
+                    if isinstance(cnt, list):
+                        tok_est = 0
+                        for part in cnt:
+                            if isinstance(part, dict):
+                                if part.get("type") in ("image_url", "input_audio"):
+                                    tok_est += 576
+                                elif part.get("type") == "text":
+                                    tok_est += max(1, len(str(part.get("text", ""))) // 4)
+                            else:
+                                tok_est += max(1, len(str(part)) // 4)
+                    else:
+                        tok_est = max(1, len(str(cnt)) // 4)
                     if accumulated + tok_est > budget_tokens and fitting_msgs:
                         break
                     fitting_msgs.append(msg)
@@ -5494,7 +5511,10 @@ class ChatbotApp:
         hist.insert(tk.END, chunk, (tag_name, "ai"))
         hist.config(state='disabled')
         
-        if is_at_bottom:
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
+        if scroll_locked:
+            hist.see("end-1c")
+        elif is_at_bottom:
             hist.yview_moveto(1.0)
             
         bg = hist.cget("bg")
@@ -5532,7 +5552,10 @@ class ChatbotApp:
         if text:
             hist.insert(tk.END, text, ("ai",))
         hist.config(state='disabled')
-        if is_at_bottom:
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
+        if scroll_locked:
+            hist.see("end-1c")
+        elif is_at_bottom:
             hist.yview_moveto(1.0)
     
     def _display_ai_message(self, msg="", is_streaming=True):
@@ -5559,8 +5582,12 @@ class ChatbotApp:
             
         hist.config(state='disabled')
         
-        if (is_at_bottom and not user_scrolled) or tag in ["user", "system"]:
-            hist.yview_moveto(1.0)
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
+        if scroll_locked or (is_at_bottom and not user_scrolled) or tag in ["user", "system"]:
+            if scroll_locked:
+                hist.see("end-1c")
+            else:
+                hist.yview_moveto(1.0)
         
         bg = hist.cget("bg")
         if tag == "user": fg = "#007acc"
@@ -6706,11 +6733,30 @@ class ChatbotApp:
                         )
                         
                         final_analysis = ""
+                        in_thought_ch = False
+                        thought_stream_buf = ""
+                        self.process_queue.put({"status": "thinking_status", "content": f"Analyzing {filename}..."})
                         for chunk in stream:
                             if self.stop_process.is_set(): break
                             delta = chunk.get('choices', [{}])[0].get('delta', {})
                             content = delta.get('content', '')
-                            if content: final_analysis += content
+                            if not content: continue
+                            final_analysis += content
+                            
+                            lower_c = content.lower()
+                            if any(op in lower_c for op in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "to=self"]):
+                                in_thought_ch = True
+                            
+                            if in_thought_ch:
+                                thought_stream_buf += content
+                                if any(cl in lower_c for cl in ["</think>", "</thought>", "</|think|>", "<channel|>", "<|channel>text", "<|channel>assistant", "to=user"]):
+                                    in_thought_ch = False
+                                    self.process_queue.put({"status": "thought_stream", "content": thought_stream_buf})
+                                    thought_stream_buf = ""
+                                else:
+                                    self.process_queue.put({"status": "thought_stream", "content": content})
+                            else:
+                                self.process_queue.put({"status": "streaming", "content": content})
 
                         if final_analysis:
                             # Split thoughts and answer cleanly to guarantee channel isolation
@@ -6718,10 +6764,18 @@ class ChatbotApp:
                             clean_text_to_save = final_analysis
                             
                             # Save strategic analysis output file
-                            output_txt = video_path.replace(os.path.splitext(video_path)[1], f"_STRATEGIC_analysis.txt")
+                            output_txt = os.path.splitext(video_path)[0] + "_STRATEGIC_analysis.txt"
                             with open(output_txt, "w", encoding="utf-8") as f:
                                 f.write(clean_text_to_save)
                             results.append(output_txt)
+
+                            logs_dir = self.dirs.get("Logs") if hasattr(self, "dirs") else os.path.join(self.script_dir, "Logs")
+                            try:
+                                os.makedirs(logs_dir, exist_ok=True)
+                                with open(os.path.join(logs_dir, "vision_analysis.txt"), "a", encoding="utf-8") as vf:
+                                    vf.write(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [{filename} - STRATEGIC]\n{clean_text_to_save}\n")
+                            except Exception as vle:
+                                print(f"[VISION LOG] Error writing to vision_analysis.txt: {vle}")
                             
                             # Clean answer goes to chat segment results, thoughts go to thought log
                             delivery_ans = final_ans if final_ans.strip() else think_log
@@ -6805,21 +6859,48 @@ class ChatbotApp:
                         )
                         
                         final_analysis = ""
+                        in_thought_ch = False
+                        thought_stream_buf = ""
+                        self.process_queue.put({"status": "thinking_status", "content": f"Analyzing {filename}..."})
                         for chunk in stream:
                             if self.stop_process.is_set(): break
                             delta = chunk.get('choices', [{}])[0].get('delta', {})
                             content = delta.get('content', '')
-                            if content: final_analysis += content
+                            if not content: continue
+                            final_analysis += content
+                            
+                            lower_c = content.lower()
+                            if any(op in lower_c for op in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "to=self"]):
+                                in_thought_ch = True
+                            
+                            if in_thought_ch:
+                                thought_stream_buf += content
+                                if any(cl in lower_c for cl in ["</think>", "</thought>", "</|think|>", "<channel|>", "<|channel>text", "<|channel>assistant", "to=user"]):
+                                    in_thought_ch = False
+                                    self.process_queue.put({"status": "thought_stream", "content": thought_stream_buf})
+                                    thought_stream_buf = ""
+                                else:
+                                    self.process_queue.put({"status": "thought_stream", "content": content})
+                            else:
+                                self.process_queue.put({"status": "streaming", "content": content})
                             
                         if final_analysis:
                             # Split thoughts and answer cleanly to guarantee channel isolation
                             think_log, final_ans = VisionHandler.split_thoughts_and_answer(final_analysis)
                             clean_text_to_save = final_analysis
 
-                            output_txt = video_path.replace(os.path.splitext(video_path)[1], f"_MULTIMODAL_analysis.txt")
+                            output_txt = os.path.splitext(video_path)[0] + "_MULTIMODAL_analysis.txt"
                             with open(output_txt, "w", encoding="utf-8") as f:
                                 f.write(clean_text_to_save)
                             results.append(output_txt)
+
+                            logs_dir = self.dirs.get("Logs") if hasattr(self, "dirs") else os.path.join(self.script_dir, "Logs")
+                            try:
+                                os.makedirs(logs_dir, exist_ok=True)
+                                with open(os.path.join(logs_dir, "vision_analysis.txt"), "a", encoding="utf-8") as vf:
+                                    vf.write(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [{filename} - MULTIMODAL]\n{clean_text_to_save}\n")
+                            except Exception as vle:
+                                print(f"[VISION LOG] Error writing to vision_analysis.txt: {vle}")
                             
                             # Clean answer goes to chat segment results, thoughts go to thought log
                             delivery_ans = final_ans if final_ans.strip() else think_log
@@ -7971,6 +8052,16 @@ class ChatbotApp:
              
         self.set_avatar_state("off")
 
+    def _set_prefill_avatar_state(self):
+        """Sets prefill avatar according to active persona level (Option B)."""
+        lvl = getattr(self, "active_persona_level", 3)
+        if lvl == 6:
+            self.set_avatar_state("meditating")
+        elif lvl == 7:
+            self.set_avatar_state("cecilia_alt")
+        else:
+            self.set_avatar_state("thinking")
+
     def set_avatar_state(self, state):
         if not self.right_panel: return
         self.state["avatar_current"] = state 
@@ -8188,8 +8279,15 @@ class ChatbotApp:
             self.config["benchmark_enabled"] = False
         if "inline_markdown" not in self.config:
             self.config["inline_markdown"] = True
+        if "overfill_behavior_mode" not in self.config:
+            self.config["overfill_behavior_mode"] = self.config.get("budget_recovery_mode", "wrapup")
         if "budget_recovery_mode" not in self.config:
-            self.config["budget_recovery_mode"] = "wrapup"
+            self.config["budget_recovery_mode"] = self.config["overfill_behavior_mode"]
+        if "halt_behavior_mode" not in self.config:
+            self.config["halt_behavior_mode"] = "off"
+        if "history_mode" not in self.config:
+            t_mode = self.config.get("turbovec_mode", "fallback")
+            self.config["history_mode"] = "TurboVec" if t_mode == "on" else ("Off" if t_mode == "off" else "Keyword")
         if "monitor_graph_mode" not in self.config:
             self.config["monitor_graph_mode"] = False
 
@@ -8243,6 +8341,7 @@ class ChatbotApp:
                     with open(u_cfg_p, 'r', encoding='utf-8') as f:
                         u_data = json.load(f)
                     self.config.update(u_data)
+                    self.sash_pos = self.config.get('sash_pos', -1)
                 except Exception as e:
                     print(f"[USER] Could not merge user config: {e}")
 
@@ -8570,6 +8669,12 @@ class ChatbotApp:
             'status_bar_anim_style': self.config.get("status_bar_anim_style", "spinner"),
             'status_bar_dmn_idle': self.config.get("status_bar_dmn_idle", True),
             'status_bar_fallback_info': self.config.get("status_bar_fallback_info", True),
+            'status_bar_linger_sec': float(self.config.get("status_bar_linger_sec", 5.0)),
+            'settings_window_geometry': self.config.get("settings_window_geometry", "860x950"),
+            'scroll_lock_enabled': bool(self.config.get("scroll_lock_enabled", False)),
+            'user_preferred_name': str(self.config.get("user_preferred_name", "")),
+            'user_address_style': str(self.config.get("user_address_style", "Direct / Plain")),
+            'user_notes': str(self.config.get("user_notes", "")),
             'tutorial_completed': self.config.get("tutorial_completed", False),
             'text_scale': self.config.get("text_scale", 100),
             'ui_font': self.config.get("ui_font", "Segoe UI"),
@@ -8754,7 +8859,7 @@ class ChatbotApp:
         
         try:
             if btn_load is not None:
-                btn_load.config(state='disabled' if (is_loading or is_gen) else 'normal')
+                btn_load.config(state='disabled' if is_loading else 'normal')
             
             if btn_act is not None:
                 if is_loading: btn_act.config(text="Loading...", state="disabled")
@@ -8806,7 +8911,8 @@ class ChatbotApp:
             self.past_history_view.config(state='disabled')
 
     def open_settings_window(self):
-        open_settings_window(self)
+        is_gen = self.state.get("generating", False) if hasattr(self, "state") else False
+        open_settings_window(self, is_generating=is_gen)
 
     def open_text_scaling_center(self):
         open_text_scaling_center(self)
