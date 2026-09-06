@@ -322,6 +322,8 @@ class ChatbotApp:
         btn_image: Optional['Button']
         btn_video: Optional['Button']
         btn_watch: Optional['Button']
+        btn_sizes: Optional['Button']
+        sizes_popup: Optional['tk.Toplevel']
         btn_history: Optional['Button']
         timeline_frame: Optional['tk.Frame']
         progress_label: Optional['tk.Label']
@@ -595,6 +597,8 @@ class ChatbotApp:
         self.btn_image = None
         self.btn_video = None
         self.btn_watch = None
+        self.btn_sizes = None
+        self.sizes_popup = None
         self.btn_clear_queue = None
         self.btn_active = None
         self.btn_history = None
@@ -1250,10 +1254,10 @@ class ChatbotApp:
         self.btn_video = btn_vid
         ToolTip(btn_vid, "Initiate video multimodal frame analysis.", app=self)
         
-        # Replace the old Watch button
-        btn_wat = self._add_btn(top, "[🧠] Pulse", self.toggle_auto_watch)
-        self.btn_watch = btn_wat
-        ToolTip(btn_wat, "Toggle background Pulse & idle observation.", app=self)
+        # Sizes Button (Replaces Pulse Button)
+        btn_sizes = self._add_btn(top, "[📐] Sizes", self.toggle_sizes_popup)
+        self.btn_sizes = btn_sizes
+        ToolTip(btn_sizes, "Configure Reasoning Strength and Response Length target sizes.", app=self)
         
         btn_clr = self._add_btn(top, "Clear", self._reset_multimodal_ui)
         self.btn_clear_queue = btn_clr
@@ -1485,15 +1489,15 @@ class ChatbotApp:
         
         # Bind sash movement & release events for automatic mid resize persistence
         self.paned.bind("<ButtonRelease-1>", self._on_sash_released, add="+")
-        self.root.bind("<ButtonRelease-1>", self._on_sash_released, add="+")
+        self.root.bind_all("<ButtonRelease-1>", self._on_sash_released, add="+")
 
         # Restore Sash Position
         saved_sash = self.config.get('sash_pos', -1)
         if isinstance(saved_sash, (int, float)) and saved_sash > 50:
-            self.root.after(300, lambda: self._apply_sash_pos(int(saved_sash)))
+            self.root.after(150, lambda: self._apply_sash_pos(int(saved_sash)))
         else:
             # Default split (3:2 approx)
-            self.root.after(300, lambda: self._apply_sash_pos(int(self.root.winfo_width() * 0.6)))
+            self.root.after(150, lambda: self._apply_sash_pos(int(self.root.winfo_width() * 0.6) if self.root.winfo_width() > 200 else 800))
             
         self.root.after(250, lambda *args: self._position_canvas_elements())
 
@@ -1507,27 +1511,32 @@ class ChatbotApp:
             pass
         return self.config.get('sash_pos', -1) if hasattr(self, 'config') and self.config else -1
 
-    def _apply_sash_pos(self, pos):
+    def _apply_sash_pos(self, pos, retries=12):
         try:
             if hasattr(self, 'paned') and self.paned:
-                max_w = self.root.winfo_width()
-                target_x = max(100, min(max_w - 100, pos)) if max_w > 200 else pos
+                max_w = self.paned.winfo_width()
+                if max_w <= 200:
+                    if retries > 0:
+                        self.root.after(50, lambda: self._apply_sash_pos(pos, retries - 1))
+                    return
+                target_x = max(100, min(max_w - 100, pos))
                 self.paned.sash_place(0, target_x, 0)
-                if hasattr(self, 'config') and self.config is not None:
-                    self.config['sash_pos'] = target_x
                 self._position_canvas_elements()
         except Exception:
             pass
 
     def _on_sash_released(self, event=None):
-        try:
-            pos = self._get_current_sash_pos()
-            if pos and pos > 50:
-                self.config['sash_pos'] = pos
-                self.save_config()
-                self._position_canvas_elements()
-        except Exception:
-            pass
+        def _deferred_check():
+            try:
+                pos = self._get_current_sash_pos()
+                if pos and pos > 50 and pos != self.config.get('sash_pos'):
+                    self.config['sash_pos'] = pos
+                    self.save_config()
+                    self._position_canvas_elements()
+            except Exception:
+                pass
+        if hasattr(self, 'root') and self.root:
+            self.root.after(50, _deferred_check)
 
     def _update_hw_indicator(self):
         """Updates the Hardware Mode indicator based on CPU specs and offline status."""
@@ -3366,7 +3375,8 @@ class ChatbotApp:
                         modified_user_msg = f"You are looking at a sequence of frames sampled from a video at 1 frame per second. {user_msg}"
                     content_list.append({"type": "text", "text": modified_user_msg})
                                 
-                    temp_msgs = self.messages + [{"role": "user", "content": content_list}]
+                    is_hist_off = (self.config.get("history_usage", "all") == "off")
+                    temp_msgs = [{"role": "user", "content": content_list}] if is_hist_off else (self.messages + [{"role": "user", "content": content_list}])
                     threading.Thread(target=self._generation_worker, args=(user_msg, temp_msgs), daemon=True).start()
                     self.root.after(100, self.check_process_queue)
                     return
@@ -3415,7 +3425,8 @@ class ChatbotApp:
         self.set_avatar_state("meditating")
         
         self._prep_generation()
-        temp_msgs = self.messages + [{"role": "user", "content": user_msg}]
+        is_hist_off = (self.config.get("history_usage", "all") == "off")
+        temp_msgs = [{"role": "user", "content": user_msg}] if is_hist_off else (self.messages + [{"role": "user", "content": user_msg}])
         threading.Thread(target=self._generation_worker, args=(user_msg, temp_msgs), daemon=True).start()
         self.root.after(100, self.check_process_queue)
 
@@ -4246,9 +4257,12 @@ class ChatbotApp:
                     sys_content = PERSONA_PROMPTS.get(7, "You are Cecilia.")
             else:
                 sys_content = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
+            r_strength = str(self.config.get("reasoning_strength", self.config.get("muse_reasoning_strength", "medium"))).lower().strip()
+            if r_strength == "minimal": r_strength = "low"
+            elif r_strength == "maximum": r_strength = "xhigh"
             if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
-                r_str = self.config.get("muse_reasoning_strength", "xhigh")
-                if r_str != "off": sys_content += f"\nReasoning strength: {r_str}"
+                if r_strength != "off":
+                    sys_content += f"\nReasoning strength: {r_strength}"
             time_grounding = f"\n[TIME GROUNDING]: Current local date and time is {datetime.now().strftime('%Y-%m-%d %H:%M:%S (%A)')}."
             sys_content += time_grounding
             if any(c.isdigit() for c in user_message) and re.search(r'\d{4,}', user_message):
@@ -4312,21 +4326,59 @@ class ChatbotApp:
             is_deepseek = any(k in model_name_lower for k in ["deepseek", "r1", "qwq"])
             is_muse = any(k in model_name_lower for k in ["muse", "glimmer", "onyx", "atem"])
 
-            if not is_diffusion and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
+            reasoning_directives = {
+                "low": "\n[REASONING LEVEL: LOW]: Keep internal reasoning brief before reaching your conclusion.",
+                "medium": "\n[REASONING LEVEL: MEDIUM]: Provide balanced, step-by-step reasoning.",
+                "high": "\n[REASONING LEVEL: HIGH]: Analyze the query thoroughly, exploring edge cases and reasoning step-by-step.",
+                "xhigh": "\n[REASONING LEVEL: XHIGH]: Perform deep multi-step analysis, validating reasoning steps and evaluating alternative hypotheses."
+            }
+
+            if not is_diffusion and r_strength != "off" and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
                 if is_gemma:
                     sys_clean = f"<|think|>\n{sys_clean}"
+                    if r_strength in reasoning_directives:
+                        sys_clean += reasoning_directives[r_strength]
                 elif is_nemotron:
-                    sys_clean += "\n[REASONING]: Provide clear, direct, and rigorous answers without conversational meta-commentary."
+                    sys_clean += f"\n[REASONING]: Provide clear, direct, and rigorous answers without conversational meta-commentary.{reasoning_directives.get(r_strength, '')}"
                 elif is_qwen or is_deepseek:
-                    sys_clean += "\n[REASONING]: Analyze the query thoroughly and provide a direct, precise answer."
+                    sys_clean += f"\n[REASONING]: Analyze the query thoroughly and provide a direct, precise answer.{reasoning_directives.get(r_strength, '')}"
                 elif is_muse:
                     pass # Native ATEM Jinja template handles reasoning_strength
                 else:
-                    sys_clean += "\n[REASONING]: Think step by step before answering and provide a clear, accurate response."
+                    sys_clean += f"\n[REASONING]: Think step by step before answering and provide a clear, accurate response.{reasoning_directives.get(r_strength, '')}"
             elif self.active_persona_level == 2:
                 sys_clean += "\n[SEARCH PROTOCOL]: If you need live information, invoke a search tool immediately."
+
+            # Configurable Response Target Length
+            resp_length_mode = str(self.config.get("response_length", "natural")).lower().strip()
+            if resp_length_mode == "natural":
+                sys_clean += "\n[RESPONSE LENGTH DIRECTIVE]: Natural conversational flow. Answer proportionally—direct and concise for simple questions, expansive only when depth required."
+            elif resp_length_mode == "mini":
+                sys_clean += "\n[RESPONSE LENGTH DIRECTIVE]: Restrict your final answer to at most two concise sentences."
+            elif resp_length_mode == "short":
+                sys_clean += "\n[RESPONSE LENGTH DIRECTIVE]: Keep your final answer brief and concise, approximately 1 to 2 short paragraphs."
+            elif resp_length_mode == "medium":
+                sys_clean += "\n[RESPONSE LENGTH DIRECTIVE]: Provide a standard, moderately detailed final answer."
+            elif resp_length_mode == "long":
+                sys_clean += "\n[RESPONSE LENGTH DIRECTIVE]: Provide a comprehensive, detailed, and in-depth final answer."
+            elif resp_length_mode == "matched":
+                raw_user = user_message.strip() if user_message else ""
+                word_count = len(raw_user.split())
+                if word_count <= 25:
+                    matched_desc = "brief, at most two concise sentences"
+                elif word_count <= 80:
+                    matched_desc = "short, approximately one to two paragraphs"
+                elif word_count <= 250:
+                    matched_desc = "moderate, balanced in depth and length"
+                else:
+                    matched_desc = f"detailed and comprehensive (matching user's ~{word_count} word query)"
+                sys_clean += f"\n[RESPONSE LENGTH DIRECTIVE]: Match the length and scale of the user's prompt in your final answer ({matched_desc})."
             
             sys_content = sys_clean
+
+            # History Usage Check
+            if self.config.get("history_usage", "all") == "off":
+                temp_messages = [temp_messages[-1]]
 
             # TriAttention KV Pruning
             if is_diffusion:
@@ -4386,6 +4438,7 @@ class ChatbotApp:
             stream_lead_buffer = ""
             streamed_draft_to_ui = False
             streamed_answer_chars = 0
+            streamed_thought_chars = 0
             closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|[\u27e7⟧]\s*<\/think>|[\u27e7⟧]|<\|eom\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
             openers_exact = (
                 "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
@@ -4408,6 +4461,8 @@ class ChatbotApp:
                 if t_raw_lower.startswith("here's a thinking process") or t_raw_lower.startswith("here is a thinking process") or t_raw_lower.startswith("\u27e6") or t_raw_lower.startswith("⟦"):
                     return True
                 return False
+
+            thinking_enabled = (r_strength != "off") and bool(self.config.get("thinking_checkbox", True))
 
             t_gen_start = time.time()
             ttft_recorded = False
@@ -4445,7 +4500,23 @@ class ChatbotApp:
                                 self.process_queue.put({"status": "streaming_replace", "content": ""})
                                 streamed_draft_to_ui = False
                             stream_lead_buffer = ""
-                            self.process_queue.put({"status": "thought_stream", "content": txt})
+                            m_close = re.search(closers_regex, full_resp, flags=re.IGNORECASE)
+                            if m_close:
+                                in_thought_channel = False
+                                thought_part = full_resp[:m_close.start()]
+                                clean_t = re.sub(r'(?i)<think>|<thought>|<\|think\|>|<\|channel>thought|<channel\|thought>|<\|im_start\|>thought|to=self<\|message\|>|<\|start\|>assistant to=self|to=self|\[draft\]|\[thinking\]|\[thought\]|\[reasoning\]|^thought[\s:]+|here\'s a thinking process:?|here is a thinking process:?|[\u27e6⟦]', '', thought_part).strip()
+                                if clean_t and thinking_enabled:
+                                    self.process_queue.put({"status": "thought_stream", "content": clean_t})
+                                streamed_thought_chars = len(thought_part)
+                                ans_after = full_resp[m_close.end():]
+                                if ans_after:
+                                    self.process_queue.put({"status": "streaming", "content": ans_after})
+                                    streamed_answer_chars = len(ans_after)
+                            else:
+                                clean_t = re.sub(r'(?i)<think>|<thought>|<\|think\|>|<\|channel>thought|<channel\|thought>|<\|im_start\|>thought|to=self<\|message\|>|<\|start\|>assistant to=self|to=self|\[draft\]|\[thinking\]|\[thought\]|\[reasoning\]|^thought[\s:]+|here\'s a thinking process:?|here is a thinking process:?|[\u27e6⟦]', '', full_resp)
+                                if clean_t and thinking_enabled:
+                                    self.process_queue.put({"status": "thought_stream", "content": clean_t})
+                                streamed_thought_chars = len(full_resp)
                         elif (full_resp.strip().startswith("<") or full_resp.strip().startswith("to=") or full_resp.strip().lower().startswith("thought") or full_resp.strip().startswith("[")) and len(full_resp.strip()) < 40:
                             stream_lead_buffer += txt
                         else:
@@ -4457,15 +4528,22 @@ class ChatbotApp:
                             streamed_draft_to_ui = True
                     else:
                         if in_thought_channel:
-                            self.process_queue.put({"status": "thought_stream", "content": txt})
-                            if any(c in lower_resp for c in closers) or re.search(closers_regex, full_resp, flags=re.IGNORECASE):
+                            m_close = re.search(closers_regex, full_resp, flags=re.IGNORECASE)
+                            if m_close:
                                 in_thought_channel = False
-                                parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
-                                if len(parts) > 1 and parts[-1]:
-                                    ans_chunk = parts[-1][streamed_answer_chars:]
-                                    if ans_chunk:
-                                        self.process_queue.put({"status": "streaming", "content": ans_chunk})
-                                        streamed_answer_chars += len(ans_chunk)
+                                thought_part = full_resp[:m_close.start()]
+                                new_t = thought_part[streamed_thought_chars:]
+                                if new_t and thinking_enabled:
+                                    self.process_queue.put({"status": "thought_stream", "content": new_t})
+                                streamed_thought_chars = len(thought_part)
+                                ans_after = full_resp[m_close.end():]
+                                if ans_after:
+                                    self.process_queue.put({"status": "streaming", "content": ans_after})
+                                    streamed_answer_chars = len(ans_after)
+                            else:
+                                if thinking_enabled:
+                                    self.process_queue.put({"status": "thought_stream", "content": txt})
+                                streamed_thought_chars += len(txt)
                         else:
                             parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
                             if len(parts) > 1 and parts[-1]:
@@ -4563,6 +4641,9 @@ class ChatbotApp:
             think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
             final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
             final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
+
+            if not thinking_enabled:
+                think_log = ""
 
             # Synthesis fallback: if thoughts exist but model did not output final answer
             if think_log and not final_answer:
@@ -5143,9 +5224,6 @@ class ChatbotApp:
         """Inserts streamed thought chunk into the chat dropdown."""
         hist = self.chat_history
         if hist is None or not chunk: return
-        self._ensure_thought_dropdown()
-        tag = self.state.get("current_think_tag")
-        if not tag: return
         
         clean_chunk = re.sub(
             r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>',
@@ -5167,6 +5245,9 @@ class ChatbotApp:
                 self.state["thought_stream_lead_cleaned"] = True
 
         if not clean_chunk: return
+        self._ensure_thought_dropdown()
+        tag = self.state.get("current_think_tag")
+        if not tag: return
         
         is_at_bottom = hist.yview()[1] >= 0.98
         hist.config(state='normal')
@@ -6216,15 +6297,198 @@ class ChatbotApp:
                 self._add_staged_attachment(f, "video")
             self.set_ui_state()
 
+    def toggle_sizes_popup(self):
+        """Toggles the dual-dropdown overlay popup for Reasoning Strength and Response Length."""
+        if hasattr(self, 'sizes_popup') and self.sizes_popup and self.sizes_popup.winfo_exists():
+            if hasattr(self, '_sizes_save_and_close'):
+                self._sizes_save_and_close()
+            else:
+                self.sizes_popup.destroy()
+                self.sizes_popup = None
+            return
+
+        popup = tk.Toplevel(self.root)
+        self.sizes_popup = popup
+        popup.overrideredirect(True)
+        popup.attributes("-topmost", True)
+        popup.lift()
+        popup.config(bg=THEME["widget_bg_color"], padx=2, pady=2)
+
+        border_frame = tk.Frame(popup, bg=THEME["bg_color"], padx=8, pady=6, 
+                                highlightthickness=1, highlightbackground=THEME.get("accent_highlight", "#00ffcc"))
+        border_frame.pack(fill=tk.BOTH, expand=True)
+
+        content_frame = tk.Frame(border_frame, bg=THEME["bg_color"])
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Left Column: Reasoning Strength (stacked title)
+        left_col = tk.Frame(content_frame, bg=THEME["bg_color"])
+        left_col.pack(side=tk.LEFT, padx=(2, 8), fill=tk.Y)
+
+        lbl_r1 = tk.Label(left_col, text="Reasoning", font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff"))
+        lbl_r1.pack(anchor="center")
+        lbl_r2 = tk.Label(left_col, text="Strength", font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff"))
+        lbl_r2.pack(anchor="center")
+
+        reasoning_opts = ["off", "low", "medium", "high", "xhigh"]
+        curr_reason = self.config.get("reasoning_strength", self.config.get("muse_reasoning_strength", "medium")).lower()
+        if curr_reason == "minimal": curr_reason = "low"
+        elif curr_reason == "maximum": curr_reason = "xhigh"
+        elif curr_reason not in reasoning_opts:
+            curr_reason = "medium"
+
+        reason_var = tk.StringVar(value=curr_reason)
+
+        def _on_reason_change(val):
+            if val not in reasoning_opts: return
+            self.config["reasoning_strength"] = val
+            self.config["muse_reasoning_strength"] = val
+            self.save_config()
+            self._log_and_display(f"Reasoning Strength: {val.upper()}")
+
+        def _on_reason_trace(*args):
+            v = reason_var.get()
+            if v and v in reasoning_opts:
+                _on_reason_change(v)
+
+        reason_var.trace_add("write", _on_reason_trace)
+
+        reason_menu = ttk.Combobox(left_col, textvariable=reason_var, values=reasoning_opts, state="readonly", width=9)
+        reason_menu.pack(anchor="center", pady=(4, 0))
+        reason_menu.bind("<<ComboboxSelected>>", lambda e: _on_reason_change(reason_menu.get() or reason_var.get()))
+
+        # Separator Line
+        sep = tk.Frame(content_frame, width=1, bg=THEME["widget_bg_color"])
+        sep.pack(side=tk.LEFT, fill=tk.Y, padx=4)
+
+        # Right Column: Response Length (stacked title)
+        right_col = tk.Frame(content_frame, bg=THEME["bg_color"])
+        right_col.pack(side=tk.LEFT, padx=(8, 2), fill=tk.Y)
+
+        lbl_l1 = tk.Label(right_col, text="Response", font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff"))
+        lbl_l1.pack(anchor="center")
+        lbl_l2 = tk.Label(right_col, text="Length", font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff"))
+        lbl_l2.pack(anchor="center")
+
+        length_opts = ["natural", "mini", "short", "medium", "long", "matched"]
+        curr_len = self.config.get("response_length", "natural").lower()
+        if curr_len not in length_opts:
+            curr_len = "natural"
+
+        len_var = tk.StringVar(value=curr_len)
+
+        def _on_len_change(val):
+            if val not in length_opts: return
+            self.config["response_length"] = val
+            self.save_config()
+            self._log_and_display(f"Response Target Length: {val.upper()}")
+
+        def _on_len_trace(*args):
+            v = len_var.get()
+            if v and v in length_opts:
+                _on_len_change(v)
+
+        len_var.trace_add("write", _on_len_trace)
+
+        len_menu = ttk.Combobox(right_col, textvariable=len_var, values=length_opts, state="readonly", width=9)
+        len_menu.pack(anchor="center", pady=(4, 0))
+        len_menu.bind("<<ComboboxSelected>>", lambda e: _on_len_change(len_menu.get() or len_var.get()))
+
+        popup.update_idletasks()
+        try:
+            bx = self.btn_sizes.winfo_rootx()
+            by = self.btn_sizes.winfo_rooty() + self.btn_sizes.winfo_height() + 2
+            popup.geometry(f"+{bx}+{by}")
+        except Exception:
+            pass
+
+        def _save_and_close():
+            if not (hasattr(self, 'sizes_popup') and self.sizes_popup and self.sizes_popup.winfo_exists()):
+                return
+            try:
+                vr = reason_menu.get() or reason_var.get()
+                vl = len_menu.get() or len_var.get()
+                changed = False
+                if vr and vr in reasoning_opts:
+                    if self.config.get("reasoning_strength") != vr or self.config.get("muse_reasoning_strength") != vr:
+                        self.config["reasoning_strength"] = vr
+                        self.config["muse_reasoning_strength"] = vr
+                        changed = True
+                if vl and vl in length_opts:
+                    if self.config.get("response_length") != vl:
+                        self.config["response_length"] = vl
+                        changed = True
+                if changed:
+                    self.save_config()
+            except Exception:
+                pass
+            try:
+                self.sizes_popup.destroy()
+            except Exception:
+                pass
+            self.sizes_popup = None
+
+        self._sizes_save_and_close = _save_and_close
+
+        popup.bind("<Escape>", lambda e: _save_and_close())
+
+        def _on_global_click(e):
+            if not (hasattr(self, 'sizes_popup') and self.sizes_popup and self.sizes_popup.winfo_exists()):
+                return
+            try:
+                w = e.widget
+                if hasattr(self, 'btn_sizes') and w == self.btn_sizes:
+                    return
+                if w and hasattr(w, 'winfo_toplevel'):
+                    top = w.winfo_toplevel()
+                    if top == self.sizes_popup:
+                        return
+                    top_str = str(top).lower()
+                    w_str = str(w).lower()
+                    if "popdown" in top_str or "popdown" in w_str or "combobox" in top_str or "combobox" in w_str or "listbox" in w_str:
+                        return
+            except Exception:
+                pass
+            self.root.after(100, _save_and_close)
+
+        self.root.bind_all("<ButtonPress-1>", _on_global_click, add="+")
+        self.root.bind_all("<ButtonPress-2>", _on_global_click, add="+")
+        self.root.bind_all("<ButtonPress-3>", _on_global_click, add="+")
+
+        def _on_focus_loss(e=None):
+            def _check():
+                if not (hasattr(self, 'sizes_popup') and self.sizes_popup and self.sizes_popup.winfo_exists()):
+                    return
+                try:
+                    f = self.root.focus_get()
+                    if f is not None:
+                        if f.winfo_toplevel() == self.sizes_popup or "popdown" in str(f).lower() or "combobox" in str(f).lower():
+                            return
+                    x, y = self.sizes_popup.winfo_pointerxy()
+                    px, py = self.sizes_popup.winfo_rootx(), self.sizes_popup.winfo_rooty()
+                    pw, ph = self.sizes_popup.winfo_width(), self.sizes_popup.winfo_height()
+                    if px <= x <= px + pw and py <= y <= py + ph:
+                        return
+                except Exception:
+                    pass
+                _save_and_close()
+            if hasattr(self, 'root') and self.root:
+                self.root.after(150, _check)
+
+        popup.bind("<FocusOut>", _on_focus_loss)
+        popup.bind("<Deactivate>", _on_focus_loss)
+
     def toggle_auto_watch(self):
         """Now functions as the Level 7 xMemory Aggregator Pulse."""
         if self.state.get("xmemory_active"):
             self.state["xmemory_active"] = False
-            self.btn_watch.config(text="[🧠] Pulse", bg=THEME["button_bg_color"])
+            if hasattr(self, 'btn_watch') and self.btn_watch and self.btn_watch.winfo_exists():
+                self.btn_watch.config(text="[🧠] Pulse", bg=THEME["button_bg_color"])
             self._log_and_display("Pulse Aggregator: Standby.")
         else:
             self.state["xmemory_active"] = True
-            self.btn_watch.config(text="[🔥] Aggregating", bg="#4a0000")
+            if hasattr(self, 'btn_watch') and self.btn_watch and self.btn_watch.winfo_exists():
+                self.btn_watch.config(text="[🔥] Aggregating", bg="#4a0000")
             self._log_and_display("xMemory active: Decoupling semantic math nodes...")
             threading.Thread(target=self._dmn_pondering_cycle, daemon=True).start()
 
@@ -6963,46 +7227,46 @@ class ChatbotApp:
             except: pass
             return
 
-        # 4. Atomic Reset for Rendering / In-Place Markdown Application
-        # Preserve already-streamed responses to prevent mass-dump flickering
-        if self.state.get("response_started") and start_idx:
+        r_str = str(self.config.get("reasoning_strength", self.config.get("muse_reasoning_strength", "medium"))).lower().strip()
+        thinking_enabled = (r_str != "off") and bool(self.config.get("thinking_checkbox", True))
+        if not thinking_enabled:
+            think_log = ""
 
-            if self.state.get("thought_streamed") and not self.state.get("deep_cook"):
-                hist.config(state='normal')
-                curr_text = hist.get(start_idx, tk.END).strip()
-                if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
-                    self._append_to_chat(final_answer, "ai")
-                hist.config(state='disabled')
-            elif not self.state.get("deep_cook"):
-                hist.config(state='normal')
-                curr_text = hist.get(start_idx, tk.END).strip()
-                lead = f"{self._get_persona_label()}:"
-                # If agentic stream or clean stream already present in chat, preserve to prevent mass dump
-                if self.state.get("agentic_streamed"):
-                    if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
-                        self._append_to_chat(final_answer, "ai")
-                elif lead in curr_text and (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
-                    pass # Stream already complete in-place
-                elif think_log:
-                    # Non-streamed thoughts present: reset cleanly only if no agentic dropdown was inserted
-                    if not self.state.get("agentic_streamed"):
-                        try:
-                            hist.delete(start_idx, tk.END)
-                        except: pass
-                        hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
-                else:
+        # Clean up empty thought button/frame if no thoughts exist
+        if not think_log:
+            btn = self.state.get("current_think_btn")
+            if btn and btn.winfo_exists():
+                try: btn.destroy()
+                except: pass
+            self.state["current_think_btn"] = None
+            dd_f = self.state.get("current_dropdown_frame")
+            if dd_f and dd_f.winfo_exists() and not dd_f.winfo_children():
+                try: dd_f.destroy()
+                except: pass
+                self.state["current_dropdown_frame"] = None
+
+        # 4. Atomic Reset for Rendering / In-Place Markdown Application
+        if self.state.get("response_started") and start_idx:
+            hist.config(state='normal')
+            curr_text = hist.get(start_idx, tk.END).strip()
+            has_leak = any(t in curr_text for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
+            
+            if not self.state.get("deep_cook"):
+                if has_leak:
+                    # Cleanly reset to eliminate leaked thought tags from response text
                     try:
                         hist.delete(start_idx, tk.END)
                     except: pass
                     hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
-                    if final_answer:
-                        hist.insert(tk.END, final_answer, ("ai",))
-                hist.config(state='disabled')
+                    self.state["thought_streamed"] = False
+                    self.state["current_think_tag"] = None
+                    self.state["current_think_btn"] = None
+                    self.state["current_dropdown_frame"] = None
+                elif final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                    self._append_to_chat(final_answer, "ai")
             else:
-                # Deep Cook: Ensure synthesis text starts clean but don't wipe reasoning
-                hist.config(state='normal')
                 hist.insert(tk.END, "\n", ("ai",))
-                hist.config(state='disabled')
+            hist.config(state='disabled')
 
         # 5. UI Rendering (Atomic & Pre-Processed)
         hist.config(state='normal')
@@ -7010,23 +7274,73 @@ class ChatbotApp:
         render_start = hist.index(tk.END + "-1c")
 
         # Suppress redundant generic thinking block if Deep Cook structure is already present
-        if self.state.get("thought_streamed") and not self.state.get("deep_cook"):
-            think_tag = self.state.get("current_think_tag")
-            btn = self.state.get("current_think_btn")
-            render_start = hist.index(tk.END + "-1c")
-            if think_tag:
-                hist.tag_config(think_tag, elide=True)
-                if btn and btn.winfo_exists():
-                    btn.config(text="[+] View Thinking Process")
-                ranges = hist.tag_ranges(think_tag)
-                if ranges and len(ranges) >= 2:
-                    if render_mode > 0:
-                        self._apply_markdown(ranges[0], ranges[-1], (think_tag, "md_thought"), is_thought=True)
-                    render_start = ranges[-1]
-                else:
-                    render_start = start_idx if start_idx else "1.0"
+        if think_log and thinking_enabled and not self.state.get("deep_cook"):
+            if self.state.get("thought_streamed"):
+                think_tag = self.state.get("current_think_tag")
+                btn = self.state.get("current_think_btn")
+                if think_tag:
+                    hist.tag_config(think_tag, elide=True)
+                    if btn and btn.winfo_exists():
+                        btn.config(text="[+] View Thinking Process")
+                    ranges = hist.tag_ranges(think_tag)
+                    if ranges and len(ranges) >= 2:
+                        if render_mode > 0:
+                            self._apply_markdown(ranges[0], ranges[-1], (think_tag, "md_thought"), is_thought=True)
+                        render_start = ranges[-1]
+                    else:
+                        # Fallback: re-insert if empty
+                        thought_start = hist.index(tk.END + "-1c")
+                        hist.insert(tk.END, think_log + "\n\n", (think_tag, "md_thought"))
+                        thought_end = hist.index(tk.END + "-1c")
+                        if render_mode > 0:
+                            self._apply_markdown(thought_start, thought_end, (think_tag, "md_thought"), is_thought=True)
+                        hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
+                        render_start = thought_end
             else:
-                render_start = start_idx if start_idx else "1.0"
+                think_tag = f"think_block_{int(time.time() * 1000)}"
+                def toggle_thoughts(tag=think_tag, b=None):
+                    is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
+                    if is_elided:
+                         hist.tag_config(tag, elide=False)
+                         if b: b.config(text="[-] Hide Thinking")
+                    else:
+                         hist.tag_config(tag, elide=True)
+                         if b: b.config(text="[+] View Thinking Process")
+                
+                btn_bg = THEME.get("button_bg_color", "#24201c")
+                accent = THEME.get("electric_blue", "#00bfff")
+                btn_active = THEME.get("button_active_color", "#382e24")
+                accent_hl = THEME.get("accent_highlight", "#ff8800")
+                
+                dd_frame = self._get_or_create_dropdown_frame()
+                btn = tk.Button(dd_frame, text="[+] View Thinking Process", bg=btn_bg, fg=accent, 
+                                activebackground=btn_active, activeforeground=accent_hl, 
+                                relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
+                btn.config(command=lambda t=think_tag, b=btn: toggle_thoughts(t, b))
+                if not hasattr(self, 'thought_dropdown_buttons'):
+                    self.thought_dropdown_buttons = []
+                self.thought_dropdown_buttons.append(btn)
+                
+                agentic_btn = self.state.get("current_agentic_btn")
+                if agentic_btn and agentic_btn.winfo_exists():
+                    btn.pack(side=tk.LEFT, padx=(0, 4), before=agentic_btn)
+                else:
+                    btn.pack(side=tk.LEFT, padx=(0, 4))
+                
+                thought_start = hist.index(tk.END + "-1c")
+                hist.insert(tk.END, think_log + "\n\n", (think_tag, "md_thought"))
+                thought_end = hist.index(tk.END + "-1c")
+                
+                if render_mode > 0:
+                    self._apply_markdown(thought_start, thought_end, (think_tag, "md_thought"), is_thought=True)
+                
+                hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
+                render_start = thought_end
+
+                # Insert Final Answer after thoughts if not already present
+                curr_text = hist.get(start_idx, tk.END).strip()
+                if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                    self._append_to_chat(final_answer, "ai")
 
         # Finalize streamed agentic dropdown if present
         if self.state.get("agentic_streamed"):
@@ -7040,58 +7354,14 @@ class ChatbotApp:
                 if ranges and len(ranges) >= 2 and render_mode > 0:
                     self._apply_markdown(ranges[0], ranges[-1], (agentic_tag, "md_thought"), is_thought=True)
 
-        # Handle non-streamed thinking (independent of agentic actions)
-        if not self.state.get("thought_streamed") and think_log and not self.state.get("deep_cook"):
-            think_tag = f"think_block_{int(time.time() * 1000)}"
-            def toggle_thoughts(tag=think_tag, b=None):
-                is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
-                if is_elided:
-                     hist.tag_config(tag, elide=False)
-                     if b: b.config(text="[-] Hide Thinking")
-                else:
-                     hist.tag_config(tag, elide=True)
-                     if b: b.config(text="[+] View Thinking Process")
-            
-            btn_bg = THEME.get("button_bg_color", "#24201c")
-            accent = THEME.get("electric_blue", "#00bfff")
-            btn_active = THEME.get("button_active_color", "#382e24")
-            accent_hl = THEME.get("accent_highlight", "#ff8800")
-            
-            dd_frame = self._get_or_create_dropdown_frame()
-            btn = tk.Button(dd_frame, text="[+] View Thinking Process", bg=btn_bg, fg=accent, 
-                            activebackground=btn_active, activeforeground=accent_hl, 
-                            relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
-            btn.config(command=lambda t=think_tag, b=btn: toggle_thoughts(t, b))
-            if not hasattr(self, 'thought_dropdown_buttons'):
-                self.thought_dropdown_buttons = []
-            self.thought_dropdown_buttons.append(btn)
-            
-            agentic_btn = self.state.get("current_agentic_btn")
-            if agentic_btn and agentic_btn.winfo_exists():
-                btn.pack(side=tk.LEFT, padx=(0, 4), before=agentic_btn)
-            else:
-                btn.pack(side=tk.LEFT, padx=(0, 4))
-            
-            thought_start = hist.index(tk.END + "-1c")
-            hist.insert(tk.END, think_log + "\n\n", (think_tag, "md_thought"))
-            thought_end = hist.index(tk.END + "-1c")
-            
-            if render_mode > 0:
-                # MISSION: Use the lightweight 'thought' renderer to prevent UI lock
-                self._apply_markdown(thought_start, thought_end, (think_tag, "md_thought"), is_thought=True)
-            
-            hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
-
-            # Insert Final Answer after thoughts if not already present
+        if not self.state.get("response_started", False):
+            self._display_ai_message(final_answer, is_streaming=False)
+            render_start = start_idx if start_idx else "1.0"
+        elif not (think_log and thinking_enabled):
+            # Ensure final answer is appended if not present
             curr_text = hist.get(start_idx, tk.END).strip()
             if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
                 self._append_to_chat(final_answer, "ai")
-        elif not self.state.get("response_started", False):
-            # In unstarted streams, output message directly
-            self._display_ai_message(final_answer, is_streaming=False)
-            render_start = start_idx if start_idx else "1.0"
-        else:
-            render_start = start_idx if start_idx else "1.0"
         
         render_end = hist.index(tk.END + "-1c")
         if render_mode > 0:
@@ -7551,18 +7821,18 @@ class ChatbotApp:
 
         self._initial_history_loaded = True
 
+        usage = self.config.get("history_usage", "all")
+        if usage == "off":
+            self.messages = []
+            self.clear_chat_ui()
+            return
+
         is_ghost = self.config.get("ghost_mode", False)
         if is_ghost:
             # Ghost mode: retain 2 replies (4 messages) in memory for context
             self.messages = self.messages[-4:] if hasattr(self, 'messages') and self.messages else []
             if render_active:
                 self._render_messages_to_active_chat(self.messages)
-            return
-
-        usage = self.config.get("history_usage", "all")
-        if usage == "off":
-            self.messages = []
-            self.clear_chat_ui()
             return
         if usage == "current_window":
             if self.messages:
@@ -7790,11 +8060,16 @@ class ChatbotApp:
             if getattr(self, "idle_timer_id", None) is not None:
                 self.root.after_cancel(self.idle_timer_id)
                 self.idle_timer_id = None
-            timeout_ms = self._parse_dmn_timeout_sec() * 1000
-            self.idle_timer_id = self.root.after(timeout_ms, lambda *args: self.set_avatar_state(f"dmn_lvl{self.active_persona_level}"))
+            timeout_sec = self._parse_dmn_timeout_sec()
+            if timeout_sec > 0:
+                self.idle_timer_id = self.root.after(timeout_sec * 1000, lambda *args: self.set_avatar_state(f"dmn_lvl{self.active_persona_level}"))
 
     def _parse_dmn_timeout_sec(self):
+        if not self.config.get("dmn_enabled", True):
+            return 0
         val = self.config.get("dmn_timeout", "05:00")
+        if str(val).strip().lower() in ("off", "0", "00:00", "none", "disabled", "false"):
+            return 0
         if isinstance(val, (int, float)):
             return max(1, int(val))
         try:
@@ -8109,7 +8384,7 @@ class ChatbotApp:
                 self.desc_container.config(bg=bg)
                 
             # Top Action Buttons
-            for btn_attr in ('load_model_button', 'action_button', 'btn_video', 'btn_watch', 
+            for btn_attr in ('load_model_button', 'action_button', 'btn_video', 'btn_watch', 'btn_sizes',
                              'btn_clear_queue', 'lock_button', 'rgb_button', 'lore_btn', 'mic_button'):
                 if hasattr(self, btn_attr):
                     b = getattr(self, btn_attr)
@@ -8301,6 +8576,7 @@ class ChatbotApp:
             'mono_font': self.config.get("mono_font", "Consolas"),
             'font_size_offsets': self.config.get("font_size_offsets", {"chat": 0, "headers": 0, "code_log": 0, "stats": 0, "ui": 0})
         })
+        self.config.update(data)
         with open(self.config_file, 'w') as f: json.dump(data, f, indent=4)
         
         # Also persist to user profile directory

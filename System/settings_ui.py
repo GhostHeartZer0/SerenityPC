@@ -204,7 +204,12 @@ def open_settings_window(app):
         dmn_val = app.config.get("dmn_timeout", "05:00")
         dmn_ent.insert(0, str(dmn_val))
         dmn_ent.pack(side=tk.LEFT, padx=5)
-        ToolTip(dmn_ent, "Idle duration (mm:ss) before triggering Default Mode Network simmer reflections.", app=app)
+        ToolTip(dmn_ent, "Idle duration (mm:ss) before triggering Default Mode Network simmer reflections. Type 'Off' or uncheck Active to disable.", app=app)
+        dmn_enabled_var = tk.BooleanVar(value=app.config.get("dmn_enabled", True))
+        cb_dmn = tk.Checkbutton(dmn_frame, text="Active", variable=dmn_enabled_var,
+                                bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"])
+        cb_dmn.pack(side=tk.LEFT, padx=(5, 0))
+        ToolTip(cb_dmn, "Enable or disable background Pulse / DMN idle reflection cycles. Uncheck to turn Off.", app=app)
         
 
 
@@ -271,17 +276,47 @@ def open_settings_window(app):
         lbl_proj_disp.pack(side=tk.LEFT)
         ToolTip(btn_proj_pick, "Manually map a multimodal projector (.mmproj / GGUF) to the currently loaded model.", app=app)
 
-        lbl_muse = tk.Label(left_header, text="Reasoning:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
-        lbl_muse.pack(anchor="w", pady=(5, 0))
-        ToolTip(lbl_muse, "Reasoning effort level for Muse-Glimmer thought cycles.", app=app)
-        muse_reasoning_var = tk.StringVar(value=app.config.get("muse_reasoning_strength", "xhigh"))
-        muse_reasoning_frame = tk.Frame(left_header, bg=THEME["bg_color"])
-        muse_reasoning_frame.pack(anchor="w", padx=10)
+        lbl_reason = tk.Label(left_header, text="Reasoning Strength / Thinking Level:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_reason.pack(anchor="w", pady=(5, 0))
+        ToolTip(lbl_reason, "Reasoning effort level for Gemma-4, Muse-Glimmer, and thinking models.", app=app)
+        init_reasoning = app.config.get("reasoning_strength", app.config.get("muse_reasoning_strength", "medium"))
+        if init_reasoning == "minimal": init_reasoning = "low"
+        elif init_reasoning == "maximum": init_reasoning = "xhigh"
+        reasoning_var = tk.StringVar(value=init_reasoning)
+        def _on_reasoning_change(*args):
+            val = reasoning_var.get()
+            app.config["reasoning_strength"] = val
+            app.config["muse_reasoning_strength"] = val
+            if hasattr(app, "save_config"):
+                app.save_config()
+        reasoning_var.trace_add("write", _on_reasoning_change)
+
+        reasoning_frame = tk.Frame(left_header, bg=THEME["bg_color"])
+        reasoning_frame.pack(anchor="w", padx=10)
         for opt in ["off", "low", "medium", "high", "xhigh"]:
-            rb = tk.Radiobutton(muse_reasoning_frame, text=opt.capitalize(), variable=muse_reasoning_var, value=opt,
+            rb = tk.Radiobutton(reasoning_frame, text=opt.capitalize(), variable=reasoning_var, value=opt,
                            bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
             rb.pack(side=tk.LEFT, padx=2)
             ToolTip(rb, f"Set Reasoning strength to {opt}.", app=app)
+
+        lbl_resp = tk.Label(left_header, text="Target Response Length:", bg=THEME["bg_color"], fg=THEME["electric_blue"])
+        lbl_resp.pack(anchor="w", pady=(5, 0))
+        ToolTip(lbl_resp, "Configurable target response length (natural uses proportional conversational pacing).", app=app)
+        resp_len_var = tk.StringVar(value=app.config.get("response_length", "natural"))
+        def _on_resp_len_change(*args):
+            val = resp_len_var.get()
+            app.config["response_length"] = val
+            if hasattr(app, "save_config"):
+                app.save_config()
+        resp_len_var.trace_add("write", _on_resp_len_change)
+
+        resp_len_frame = tk.Frame(left_header, bg=THEME["bg_color"])
+        resp_len_frame.pack(anchor="w", padx=10)
+        for opt in ["natural", "mini", "short", "medium", "long", "matched"]:
+            rb = tk.Radiobutton(resp_len_frame, text=opt.capitalize(), variable=resp_len_var, value=opt,
+                           bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"])
+            rb.pack(side=tk.LEFT, padx=2)
+            ToolTip(rb, f"Set Response length mode to {opt}.", app=app)
 
         # Checkboxes in left column
         offline_mode_var = tk.BooleanVar(value=app.config.get("offline_mode", False))
@@ -1494,7 +1529,10 @@ def open_settings_window(app):
             app.config["max_token_ratio"] = ratio_var.get()
             app.config["multimedia_handling"] = multimedia_handling_var.get()
             app.config["image_handling"] = multimedia_handling_var.get()
-            app.config["muse_reasoning_strength"] = muse_reasoning_var.get()
+            app.config["reasoning_strength"] = reasoning_var.get()
+            app.config["muse_reasoning_strength"] = reasoning_var.get()
+            app.config["response_length"] = resp_len_var.get()
+            app.config["dmn_enabled"] = dmn_enabled_var.get()
             app.config["dmn_timeout"] = dmn_ent.get().strip()
             app.config["stt_device_index"] = dev_id_map.get(stt_dev_var.get(), None)
             app.config["stt_language"] = stt_lang_var.get()
