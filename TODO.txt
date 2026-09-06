@@ -31,6 +31,11 @@ Completed Log: (Verification Needed)
 - Automate stop tag handling and remove manual stop tokens from Settings UI
 - Verify Thought Channel splitting and demuxing across Gemma 4, ATEM, and DeepSeek
 - Dynamic theming across all Backend Logs and Telemetry UI components
+- Settings window modular reorganization into 6 dedicated tabs (`settings_tabs.py` & `settings_ui.py`)
+- Response length and reasoning strength controls with popup dialog
+- History mode controls with History-Off isolation
+- Overfill and Halt behavior controls (off, wrapup, autocont, respond)
+- Scroll lock setting in Additional Settings tab
 
 V2.0 Roadmap:
 
@@ -98,5 +103,3 @@ TBD / Future Roadmap:
 - Fix UI scaling
 - Model Fetching Architecture: Design and implement Hugging Face / remote repository model fetcher with resumable chunks, sha256 checksums, and auto-routing to target model directories (S:/LLM / Models).
 - Avatar `serenity_frustrated`.
-- Add Halt options, (off, wrapup, autocont...)
-- Add scroll-lock setting
