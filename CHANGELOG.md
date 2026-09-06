@@ -27,6 +27,41 @@
 
 ## Current Version:
 
+### Version 1.7.0
+- **Stability & Defect Fixes (Needs Fixing Resolutions)**:
+  - **Sash & Window Geometry**: Persisted mid-split sash position (`sash_pos`) across restarts; persisted settings window size (`settings_window_geometry`) on close and apply.
+  - **Multimodal Token Streaming & Isolation**: Fixed token count estimation ballooning on base64 images; implemented token streaming for multimodal tasks with strict thought channel separation (`thought_stream` / `streaming`).
+  - **Status Bar & Linger Overhaul**: Added `winfo_exists()` checks to eliminate Tkinter background teardown errors; added configurable linger duration (`status_bar_linger_sec`); added smart info rotation during idle while preserving active DMN states.
+  - **Scroll Lock**: Added toggle in Settings -> Additional Settings; prevents forced autoscrolling when reviewing backlog text during inference.
+  - **Prefill Avatars**: Standardized prefill avatar transitions (Option B): Lvl 1-5 use `serenity_thinking.png`, Lvl 6 uses `Meditating_Serenity.png`, Lvl 7 uses `Cecilia_01.png`.
+  - **Vision Log Standardization**: Standardized vision log filenames (`_STRATEGIC_analysis.txt` / `_MULTIMODAL_analysis.txt` + `Logs/vision_analysis.txt`).
+  - **MTP Drafting Architecture Fallback**: Replaced crashing exception with architecture compatibility fallback and graceful degradation without freezing Tk event loops or worker threads.
+  - **Templating Engine**: Added explicit active mode buttons (`Save & Write`, `Save & Save`, `Save & Close`) and single-click return to modify mode upon tier write.
+  - **User Profile Isolation & Security**: Outgoing profile automatically locked on switch; locked private profiles require password verification before loading; usernames, themes, settings, and histories kept isolated.
+- **Settings Window Modular Reorganization**:
+  - Refactored monolithic settings dialog into 6 specialized tabs: `Models & Params`, `Inference`, `Agents`, `Additional Settings`, `Users & Security`, and `Personalize`.
+  - Decoupled tab UI construction into `System/settings_tabs.py` while keeping coordinator bindings in `System/settings_ui.py`.
+- **Models & Params Tab**:
+  - Implemented balanced 2-column layout with model path truncation preventing long filenames from overflowing column borders.
+  - Relocated dynamic parameter auto-tune toggle into the parameter control block.
+  - Positioned 32-slot Templating Engine below model tiers; write mode requires clicking '📋 Copy' on the target tier and automatically returns to 'Modify' mode.
+- **Inference Tab**:
+  - Renamed Global Engine & Memory Overrides to Inference with uniform 2-column HAO push-radio layout.
+  - Separated natural token context limit behavior (`Overfill Behavior`: `off`, `respond`, `wrapup`, `autocont`) from button interruption (`Halt Options`: `off` for immediate EOS injection cutoff, `wrapup`, `autocont`, `respond`).
+  - Added History Mode push-radios with `TurboVec`, `Keyword`, and `Off` options, maintaining bidirectional synchronization with legacy `turbovec_mode`.
+  - Added Deep Cook toggle mode, SWA offload, and quantized K/V cache formats.
+- **Agents, Additional Settings, Users & Personalize**:
+  - Agents: Single-column delegation pipeline controls (Enable toggle, Subagent Model, Subagent Density, Cecilia Mode, Delegation Chain, Handoff Reporting).
+  - Additional Settings: Offline mode to Enable Tooltips, response length, hardware/multimedia inputs, and dedicated Loading Bar & Status Area configuration.
+  - Users & Security: Multi-user selector, profile visibility toggles, user identity styling, and Cryptographic Secure Vault with auto-lock timer.
+  - Personalize: Theme selection cards with live color preview swatches, side-by-side UI & Log typography, side-by-side texture style & intensity, Dark Mode toggle, and button link to the Text Scaling Center.
+- **Generation-State Guarding**:
+  - Decoupled Settings window access from generation state in `main.py` (`btn_load` only disabled during `is_loading`), allowing settings to be inspected and configured while awaiting text responses.
+  - Selectively disabled generation-sensitive widgets (model paths, layer allocations, Auto-Detect) with an active warning banner while generation is in flight.
+- **Tutorial & Test Suite**:
+  - Updated Screen 8 in `TUTORIAL_SCREENS` (`System/serenity_utils.py`) to document all 6 modular settings tabs.
+  - Added unit test suite `System/tests/test_settings_reorganization.py` verifying tab rendering, radio options, template copy behavior, generation guarding, and persistence.
+
 ### Version 1.6.2
 - **Desktop.ini Purge & Repository Hygiene**:
   - Purged 13,306 orphaned Google Drive `desktop.ini` artifacts across the `Hub` tree and stripped legacy `ReadOnly` folder attributes across 18,725 directories.

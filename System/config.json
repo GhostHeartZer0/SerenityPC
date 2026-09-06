@@ -524,7 +524,8 @@
     "dark_mode": true,
     "mmproj_mapping": {
         "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B\\mmproj-BF16.gguf",
-        "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B\\mmproj-BF16.gguf"
+        "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B\\mmproj-BF16.gguf",
+        "S:/LLM/gemma-4-unc/26B/gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.i1-Q4_K_M.gguf": "S:/LLM/gemma-4-unc/26B\\gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.mmproj-f16.gguf"
     },
     "multimedia_handling": "auto",
     "texture_intensity": 1.0,
@@ -538,5 +539,12 @@
     "delegation_handoff_target": "lvl3_compiler",
     "reasoning_strength": "low",
     "response_length": "natural",
-    "dmn_enabled": true
+    "dmn_enabled": true,
+    "overfill_behavior_mode": "wrapup",
+    "halt_behavior_mode": "off",
+    "history_mode": "Keyword",
+    "status_bar_linger_sec": 5.0,
+    "settings_window_geometry": "860x950",
+    "scroll_lock_enabled": false,
+    "user_notes": ""
 }
