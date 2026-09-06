@@ -111,3 +111,5 @@ scratch/
 Misc/
 test files/
 /temp_zip
+Tools/purge_desktop_ini.py
+Tools/pre_commit_secret_check.py
