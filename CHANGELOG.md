@@ -27,6 +27,47 @@
 
 ## Current Version:
 
+### Version 1.6.2
+- **Desktop.ini Purge & Repository Hygiene**:
+  - Purged 13,306 orphaned Google Drive `desktop.ini` artifacts across the `Hub` tree and stripped legacy `ReadOnly` folder attributes across 18,725 directories.
+  - Added `desktop.ini` blocker pattern to `Tools/pre_commit_secret_check.py` to prevent staging and committing system metadata files.
+  - Added `Tools/purge_desktop_ini.py` utility for automated cleanup.
+- **Zero History Isolation When History Off**:
+  - Fixed `history_usage == "off"` across chat dispatch and inference generation (`send_chat_message`, `_generation_worker`), guaranteeing strictly zero past turns are injected into active inference context.
+  - Hardened `load_history` so that `history_usage == "off"` takes precedence over `ghost_mode`, preventing retained ghost messages from feeding past context into inference threads.
+- **Thought Channel Isolation & Vanishing/Leaking Fixes**:
+  - Stream demuxer in `_generation_worker` now isolates thought tokens from response tokens without premature lead flushing, routing thoughts strictly to `thought_stream` when thinking is active.
+  - Eliminated empty "vanished" thought dropdowns by destroying empty dropdown frames when `think_log` has no text and only rendering dropdown widgets when non-empty thought content arrives.
+  - Fixed thought leak in `_finalize_message` where matching thought tags caused an empty `pass`, leaving thoughts inside the visible answer buffer. Leaked thought openers and closers are wiped clean from final visible text.
+- **Reasoning Strength Options Refinement**:
+  - Removed `minimal` and `maximum` reasoning levels from UI dropdowns and settings radio buttons, standardizing on 5 levels: `off`, `low`, `medium`, `high`, `xhigh`.
+  - Added backward compatibility mapping (`minimal` -> `low`, `maximum` -> `xhigh`) for existing user configs.
+- **Sizes Popup & Settings Instant Auto-Persistence**:
+  - Added write traces on `reason_var` and `len_var` in the `[📐] Sizes` popup overlay and `reasoning_var` and `resp_len_var` in Settings UI to save changes immediately upon selection or click-away without requiring explicit dialog saves.
+  - Hardened click-away detection to prevent clicks on combobox drop-down popdowns from prematurely closing the popup without persisting values.
+- **Verification**:
+  - Created `System/tests/test_history_off_mode.py` and updated `System/tests/test_sizes_and_reasoning.py` and `System/tests/test_thought_isolation.py`.
+- **Reasoning Strength & Gemma-4 Thinking Expansion**:
+  - Expanded reasoning effort settings to 7 distinct granular levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `maximum`).
+  - Added strict `<|think|>` gate for Gemma-4 models: omitting the thinking tag entirely when set to `off`, and injecting calibrated reasoning depth directives for active thinking levels.
+  - Preserved backward compatibility with legacy `muse_reasoning_strength` config key.
+- **Configurable Target Response Length**:
+  - Implemented configurable response sizing: `natural` (injects proportional conversational pacing: direct and concise for simple questions, expansive only when depth required), `mini` (2 concise sentences maximum), `short` (1-2 paragraphs), `medium` (moderate standard depth), `long` (comprehensive depth), and `matched` (dynamically calibrates output scale against the user's prompt length).
+  - Protected Thought Channel Isolation: all response length directives explicitly target the final answer to prevent premature truncation of internal reasoning loops.
+- **Top Bar 'Sizes' Popup Overlay**:
+  - Swapped top-bar `Pulse` button for new `[📐] Sizes` button.
+  - Implemented dual-dropdown transient popup overlay featuring stacked titles (`Reasoning` above `Strength`, `Response` above `Length`) with combobox selectors, persistent config sync, and auto-dismissal.
+  - Hardened overlay z-order with `-topmost` and `lift()` to guarantee it stays in front of the main window without falling behind.
+  - Integrated click-away listener with combobox popdown protection, saving config and closing immediately upon clicks outside or focus loss.
+- **Mid-Split Sash Persistence Hardening**:
+  - Bound global release tracking (`bind_all("<ButtonRelease-1>")`) with deferred execution so user split adjustments are captured regardless of where the mouse is released.
+  - Removed config-clobbering side effects from `_apply_sash_pos` and added mapped-width retry checks, preventing premature clamping on startup from corrupting saved sash preferences.
+  - Synchronized in-memory `self.config` dictionary directly during `save_config`.
+- **DMN / Pulse Off-Mode in Settings**:
+  - Replaced top-bar Pulse trigger with dedicated `Active` toggle checkbox and disabled timeout detection (`Off`, `00:00`) inside Settings, keeping idle background simmer strictly in settings.
+- **Automated Verification**:
+  - Created `System/tests/test_sizes_and_reasoning.py` covering reasoning levels, Gemma-4 thought gating, response length modes, thought channel isolation, overlay click-away save logic, and mid-split sash persistence.
+
 ### Version 1.6.1
 - **Tool Execution Security Hardening**:
   - Replaced dynamic Python script generation and execution in `generate_image` tool with static HUD viewer script (`System/hud_viewer.py`) and JSON payload passing via scratch directory, eliminating on-the-fly Python script writes and arbitrary file execution surfaces.

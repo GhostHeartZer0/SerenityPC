@@ -1,11 +1,6 @@
 {
-<<<<<<< HEAD:System/config.json
     "username": "Default",
     "main_window": "960x600+114+227",
-=======
-    "username": "GhostHeartZer0",
-    "main_window": "1000x730+583+189",
->>>>>>> a231121 (fixed: audio processing, mmproj lookup, tests, improved agents):Users/GhostHeartZer0/config.json
     "model_paths": {
         "fast": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
@@ -29,7 +24,7 @@
         "low": 20,
         "med": 20,
         "high": 5,
-        "secret": 8,
+        "secret": 7,
         "deep_cook": 99,
         "vision_video": 99,
         "vision_video_deep": 14,
@@ -175,11 +170,7 @@
         "mid": 64,
         "transcendent": 64
     },
-<<<<<<< HEAD:System/config.json
     "sash_pos": 481,
-=======
-    "sash_pos": 595,
->>>>>>> a231121 (fixed: audio processing, mmproj lookup, tests, improved agents):Users/GhostHeartZer0/config.json
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
     "active_persona_level": 1,
@@ -502,31 +493,20 @@
     "frosted_glass": false,
     "repeat_detection_mode": "lazy",
     "status_bar_mode": "hybrid",
-<<<<<<< HEAD:System/config.json
     "status_bar_anim_style": "spinner",
     "status_bar_dmn_idle": true,
     "status_bar_fallback_info": true,
-=======
-    "status_bar_anim_style": "orbit",
-    "status_bar_dmn_idle": false,
-    "status_bar_fallback_info": false,
->>>>>>> a231121 (fixed: audio processing, mmproj lookup, tests, improved agents):Users/GhostHeartZer0/config.json
     "benchmark_enabled": false,
     "inline_markdown": true,
     "budget_recovery_mode": "wrapup",
     "monitor_graph_mode": false,
     "tutorial_completed": true,
     "glitch_animation": "warp",
-    "turbovec_mode": "off",
+    "turbovec_mode": "fallback",
     "thinking_checkbox": true,
     "show_tooltips": true,
-<<<<<<< HEAD:System/config.json
     "image_handling": "auto",
-    "muse_reasoning_strength": "medium",
-=======
-    "image_handling": "native",
-    "muse_reasoning_strength": "off",
->>>>>>> a231121 (fixed: audio processing, mmproj lookup, tests, improved agents):Users/GhostHeartZer0/config.json
+    "muse_reasoning_strength": "low",
     "dmn_timeout": "05:00",
     "stt_device_index": 1,
     "stt_language": "en-US",
@@ -542,34 +522,21 @@
         "ui": 0
     },
     "dark_mode": true,
-<<<<<<< HEAD:System/config.json
     "mmproj_mapping": {
         "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B\\mmproj-BF16.gguf",
         "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B\\mmproj-BF16.gguf"
-=======
-    "mtp_mapping": {
-        "S:/LLM/Qwen3.8/Qwen3.8-27B-UD-Q4_K_XL.gguf": "S:/LLM/Qwen3.8/mmproj-F16.gguf"
->>>>>>> a231121 (fixed: audio processing, mmproj lookup, tests, improved agents):Users/GhostHeartZer0/config.json
     },
-    "multimedia_handling": "native",
+    "multimedia_handling": "auto",
     "texture_intensity": 1.0,
     "user_preferred_name": "",
     "user_address_style": "Direct / Plain",
-<<<<<<< HEAD:System/config.json
     "delegation_enabled": false,
     "cecilia_delegation_mode": "shadow_wizard",
-=======
-    "mmproj_mapping": {
-        "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B\\mmproj-BF16.gguf",
-        "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B\\mmproj-BF16.gguf"
-    },
-    "delegation_enabled": true,
-    "cecilia_delegation_mode": "shadow_wizard",
-    "delegation_chain_preset": "direct_strike (L2 Search -> L6/7 Approve)",
-    "delegation_handoff_target": "lvl3_compiler (Staging & Aggregation)",
->>>>>>> a231121 (fixed: audio processing, mmproj lookup, tests, improved agents):Users/GhostHeartZer0/config.json
     "subagent_selection_mode": "minimal",
     "delegation_model_mode": "lvl6_7_model",
     "delegation_chain_preset": "standard",
-    "delegation_handoff_target": "lvl3_compiler"
+    "delegation_handoff_target": "lvl3_compiler",
+    "reasoning_strength": "low",
+    "response_length": "natural",
+    "dmn_enabled": true
 }

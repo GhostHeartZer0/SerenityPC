@@ -22,3 +22,5 @@ System/tests/tests - backup/
 
 # Environment configs & secrets
 .env
+Tools/purge_desktop_ini.py
+Tools/pre_commit_secret_check.py

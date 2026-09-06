@@ -24,7 +24,7 @@
         "low": 20,
         "med": 20,
         "high": 5,
-        "secret": 8,
+        "secret": 7,
         "deep_cook": 99,
         "vision_video": 99,
         "vision_video_deep": 14,
@@ -506,7 +506,7 @@
     "thinking_checkbox": true,
     "show_tooltips": true,
     "image_handling": "auto",
-    "muse_reasoning_strength": "medium",
+    "muse_reasoning_strength": "low",
     "dmn_timeout": "05:00",
     "stt_device_index": 1,
     "stt_language": "en-US",
@@ -535,5 +535,8 @@
     "subagent_selection_mode": "minimal",
     "delegation_model_mode": "lvl6_7_model",
     "delegation_chain_preset": "standard",
-    "delegation_handoff_target": "lvl3_compiler"
+    "delegation_handoff_target": "lvl3_compiler",
+    "reasoning_strength": "low",
+    "response_length": "natural",
+    "dmn_enabled": true
 }
