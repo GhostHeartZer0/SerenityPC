@@ -4,7 +4,6 @@ speechrecognition
 pyttsx3
 pystray
 Pillow
-accelerate
 fastapi
 uvicorn
 pydantic

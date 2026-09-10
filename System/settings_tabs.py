@@ -555,6 +555,11 @@ def build_additional_tab(parent, app, win, vars_dict):
         sb_linger_var = tk.DoubleVar(value=float(app.config.get("status_bar_linger_sec", 5.0)))
         vars_dict["sb_linger_var"] = sb_linger_var
 
+    format_prompt_md_var = vars_dict.get("format_prompt_md_var")
+    if format_prompt_md_var is None:
+        format_prompt_md_var = tk.BooleanVar(value=app.config.get("format_prompt_markdown", False))
+        vars_dict["format_prompt_md_var"] = format_prompt_md_var
+
     toggles_list = [
         ("Offline Mode (Block Net)", vars_dict["offline_mode_var"], "Blocks all outbound internet traffic while allowing local loopback."),
         ("Dynamic Auto-Offload", vars_dict["auto_vram_var"], "Automatically flushes inactive model layers from VRAM to prevent memory exhaustion."),
@@ -563,6 +568,7 @@ def build_additional_tab(parent, app, win, vars_dict):
         ("Thinking Process", vars_dict["thinking_var"], "Controls whether internal model thought logs and reasoning blocks are captured."),
         ("Loading Benchmark", vars_dict["benchmark_var"], "Runs a quick memory throughput benchmark upon model initialization."),
         ("Inline Markdown", vars_dict["inline_md_var"], "Enables real-time formatting for bold, italics, tables, and math equations."),
+        ("Format Prompts Markdown", vars_dict["format_prompt_md_var"], "Enables markdown formatting for user prompts. Disabled by default to preserve math notation (e.g. 3*3*5*5)."),
         ("Monitor Graph vs Line", vars_dict["monitor_graph_var"], "Switches hardware telemetry display between graphs and text lines."),
         ("Scroll Lock to Lines of Text", vars_dict["scroll_lock_var"], "Locks chat viewport strictly to latest lines of text during generation."),
         ("Enable Hover Tooltips / Help", vars_dict["show_tooltips_var"], "Displays helpful linger-hover information boxes across UI controls.")

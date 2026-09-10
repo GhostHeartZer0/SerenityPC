@@ -90,9 +90,9 @@ class MarkdownEngine:
         # 5. Spacing commands
         s = re.sub(r'\\(?:quad|qquad|,|;|!|\s)', ' ', s)
 
-        # 6. Replace symbols
-        for lat, uni in cls.LATEX_SYMBOLS.items():
-            s = s.replace(lat, uni)
+        # 6. Replace symbols (sorted by length descending so longer macros like \infty are not broken by \in)
+        for lat in sorted(cls.LATEX_SYMBOLS.keys(), key=len, reverse=True):
+            s = s.replace(lat, cls.LATEX_SYMBOLS[lat])
 
         # 7. Convert simple superscripts: x^2 -> x², x^{10} -> x¹⁰
         def replace_sup(m):
@@ -212,7 +212,7 @@ class MarkdownEngine:
         intervals = []
 
         # 1. Inline code (Highest priority)
-        for m in re.finditer(r'`([^`\n]+?)`', text):
+        for m in re.finditer(r'(?<!\`)\`([^\`\n]+?)\`(?!\`)', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_code",), 1))
 
         # 2. Math display inside text: $$...$$, \[...\]
@@ -229,24 +229,24 @@ class MarkdownEngine:
                 intervals.append((m.start(), m.end(), converted, base_tags + ("md_math_inline",), 3))
 
         # 4. Bold-italic
-        for m in re.finditer(r'\*\*\*(.+?)\*\*\*|___(.+?)___', text):
+        for m in re.finditer(r'(?<![\w\d\*])\*\*\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*\*\*(?![\w\d\*])|(?<![\w\d_])___([^_ \n](?:[^_\n]*?[^_ \n])?)___(?![\w\d_])', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
             intervals.append((m.start(), m.end(), inner, base_tags + ("md_bold_italic",), 4))
 
         # 5. Bold
-        for m in re.finditer(r'\*\*(.+?)\*\*|__(.+?)__', text):
+        for m in re.finditer(r'(?<![\w\d\*])\*\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*\*(?![\w\d\*])|(?<![\w\d_])__([^_ \n](?:[^_\n]*?[^_ \n])?)__(?![\w\d_])', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
             intervals.append((m.start(), m.end(), inner, base_tags + ("md_bold",), 5))
 
         # 6. Strike
-        for m in re.finditer(r'~~(.+?)~~', text):
+        for m in re.finditer(r'(?<![\w\d~])~~([^\n\s](?:[^\n]*?[^\n\s])?)~~(?![\w\d~])', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_strike",), 6))
 
         # 7. Italic
-        for m in re.finditer(r'\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*', text):
+        for m in re.finditer(r'(?<![\w\d\*])\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*(?![\w\d\*])', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_italic",), 7))
 
-        for m in re.finditer(r'(?<=\s)_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?=\s|[.,;:!?\)]|$)', text):
+        for m in re.finditer(r'(?<![\w\d_])_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?![\w\d_])', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_italic",), 7))
 
         # Resolve overlapping intervals by priority (lowest priority number wins)
@@ -453,3 +453,245 @@ class MarkdownEngine:
         """Parses inline formatting for a single line."""
         spans = cls._parse_inline_spans(line, base_tags)
         out_spans.extend(spans)
+
+    @classmethod
+    def parse_overlay_intervals(cls, text: str, is_thought: bool = False) -> List[Tuple[int, int, str]]:
+        """
+        Parses raw text and returns non-destructive formatting intervals as (start_char_idx, end_char_idx, tag_name).
+        Guarantees source text is never mutated or deleted.
+        Delimiters are tagged with 'md_syntax' (which Tkinter elides visually), while content spans receive semantic tags.
+        """
+        if not text:
+            return []
+
+        intervals: List[Tuple[int, int, str]] = []
+
+        if is_thought:
+            code_candidates = []
+            for m in re.finditer(r'```(\w*)\r?\n([\s\S]*?)```', text):
+                code_candidates.append((m.start(), m.end(), m))
+            for m in re.finditer(r'(?<!\`)\`([^\`\n]+?)\`(?!\`)', text):
+                code_candidates.append((m.start(), m.end(), m))
+            
+            code_candidates.sort(key=lambda x: (x[0], -x[1]))
+            non_overlap_code = []
+            last_end = 0
+            for s, e, m in code_candidates:
+                if s >= last_end:
+                    non_overlap_code.append((s, e, m))
+                    last_end = e
+
+            curr = 0
+            for s, e, m in non_overlap_code:
+                if s > curr:
+                    intervals.extend(cls._parse_inline_overlay_intervals(text[curr:s], base_offset=curr))
+                raw_match = m.group(0)
+                if raw_match.startswith('```') and raw_match.endswith('```'):
+                    lead_end = text.find('\n', s)
+                    if lead_end != -1 and lead_end < e:
+                        intervals.append((s, lead_end + 1, "md_syntax"))
+                        intervals.append((lead_end + 1, e - 3, "md_code"))
+                        intervals.append((e - 3, e, "md_syntax"))
+                    else:
+                        intervals.append((s, e, "md_code"))
+                else:
+                    intervals.append((s, s + 1, "md_syntax"))
+                    intervals.append((s + 1, e - 1, "md_code"))
+                    intervals.append((e - 1, e, "md_syntax"))
+                curr = e
+            if curr < len(text):
+                intervals.extend(cls._parse_inline_overlay_intervals(text[curr:], base_offset=curr))
+            return intervals
+
+        # 1. Identify Top-Level Block Intervals (Fenced Code, Math Display)
+        blocks = []
+        for m in re.finditer(r'```(\w*)\r?\n([\s\S]*?)```', text):
+            blocks.append((m.start(), m.end(), "code", m))
+
+        for m in re.finditer(r'\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]', text):
+            blocks.append((m.start(), m.end(), "math_block", m))
+
+        blocks.sort(key=lambda x: x[0])
+        resolved_blocks = []
+        last_block_end = 0
+        for b_start, b_end, b_type, b_m in blocks:
+            if b_start >= last_block_end:
+                resolved_blocks.append((b_start, b_end, b_type, b_m))
+                last_block_end = b_end
+
+        # 2. Inter-block text lines
+        pos = 0
+        for b_start, b_end, b_type, b_m in resolved_blocks:
+            if b_start > pos:
+                cls._parse_text_lines_overlay(text[pos:b_start], base_offset=pos, out_intervals=intervals)
+
+            if b_type == "code":
+                lead_end = text.find('\n', b_start)
+                if lead_end != -1 and lead_end < b_end:
+                    intervals.append((b_start, lead_end + 1, "md_syntax"))
+                    intervals.append((lead_end + 1, b_end - 3, "md_code"))
+                    intervals.append((b_end - 3, b_end, "md_syntax"))
+                else:
+                    intervals.append((b_start, b_end, "md_code"))
+            elif b_type == "math_block":
+                d_len = 2
+                intervals.append((b_start, b_start + d_len, "md_syntax"))
+                intervals.append((b_start + d_len, b_end - d_len, "md_math_block"))
+                intervals.append((b_end - d_len, b_end, "md_syntax"))
+
+            pos = b_end
+
+        if pos < len(text):
+            cls._parse_text_lines_overlay(text[pos:], base_offset=pos, out_intervals=intervals)
+
+        return intervals
+
+    @classmethod
+    def _parse_text_lines_overlay(cls, text_chunk: str, base_offset: int, out_intervals: List[Tuple[int, int, str]]) -> None:
+        """Parses a text chunk line by line for overlay intervals without modifying the text."""
+        if not text_chunk:
+            return
+
+        lines = text_chunk.split('\n')
+        line_offset = base_offset
+
+        for line in lines:
+            line_len = len(line)
+            stripped = line.strip()
+
+            if not stripped:
+                line_offset += line_len + 1
+                continue
+
+            # Headers: #, ##, ###
+            header_match = re.match(r'^(#{1,6})\s+(.*)$', line)
+            if header_match:
+                prefix_len = len(header_match.group(1)) + 1
+                level = len(header_match.group(1))
+                h_tag = "md_header_1" if level == 1 else "md_header_2" if level == 2 else "md_header_3"
+                out_intervals.append((line_offset, line_offset + prefix_len, "md_syntax"))
+                out_intervals.append((line_offset + prefix_len, line_offset + line_len, h_tag))
+                out_intervals.extend(cls._parse_inline_overlay_intervals(header_match.group(2), base_offset=line_offset + prefix_len))
+                line_offset += line_len + 1
+                continue
+
+            # Blockquotes: > quote
+            quote_match = re.match(r'^(\s*>\s*)(.*)$', line)
+            if quote_match:
+                prefix_len = len(quote_match.group(1))
+                out_intervals.append((line_offset, line_offset + prefix_len, "md_syntax"))
+                out_intervals.append((line_offset + prefix_len, line_offset + line_len, "md_quote"))
+                out_intervals.extend(cls._parse_inline_overlay_intervals(quote_match.group(2), base_offset=line_offset + prefix_len))
+                line_offset += line_len + 1
+                continue
+
+            # Horizontal rules
+            if re.match(r'^(?:---|\*\*\*|___)\s*$', stripped):
+                out_intervals.append((line_offset, line_offset + line_len, "md_table"))
+                line_offset += line_len + 1
+                continue
+
+            # Tables: lines with |
+            if '|' in line and re.match(r'^\s*\|.*\|\s*$', line):
+                out_intervals.append((line_offset, line_offset + line_len, "md_table"))
+                line_offset += line_len + 1
+                continue
+
+            # Lists: unordered or ordered
+            list_match = re.match(r'^(\s*[\*\-\+]|\s*\d+\.)\s+(.*)$', line)
+            if list_match:
+                out_intervals.append((line_offset, line_offset + line_len, "md_list"))
+                out_intervals.extend(cls._parse_inline_overlay_intervals(line, base_offset=line_offset))
+                line_offset += line_len + 1
+                continue
+
+            # Standard paragraph line
+            out_intervals.extend(cls._parse_inline_overlay_intervals(line, base_offset=line_offset))
+            line_offset += line_len + 1
+
+    @classmethod
+    def _parse_inline_overlay_intervals(cls, text: str, base_offset: int = 0) -> List[Tuple[int, int, str]]:
+        """Scans inline text for syntax and styled spans without altering text content."""
+        if not text:
+            return []
+
+        candidates = []
+
+        # 1. Inline code (highest priority)
+        for m in re.finditer(r'(?<!\`)\`([^\`\n]+?)\`(?!\`)', text):
+            candidates.append((
+                m.start(), m.end(),
+                [(m.start(), m.start() + 1, "md_syntax"), (m.start() + 1, m.end() - 1, "md_code"), (m.end() - 1, m.end(), "md_syntax")],
+                1
+            ))
+
+        # 2. Math display: $$...$$ or \[...\]
+        for m in re.finditer(r'(?s)\$\$(.+?)\$\$|\\\[(.+?)\\\]', text):
+            d_len = 2
+            candidates.append((
+                m.start(), m.end(),
+                [(m.start(), m.start() + d_len, "md_syntax"), (m.start() + d_len, m.end() - d_len, "md_math_block"), (m.end() - d_len, m.end(), "md_syntax")],
+                2
+            ))
+
+        # 3. Inline math: $...$, \(...\)
+        for m in re.finditer(r'(?<!\\)\$([^\$\n\s](?:[^\$\n]*?[^\$\n\s])?)\$|\\\((.+?)\\\)', text):
+            inner = m.group(1) if m.group(1) is not None else m.group(2)
+            if inner and not re.match(r'^\d+(?:\.\d+)?(?:\s*,\s*\d+)?$', inner.strip()):
+                d_len = 1 if m.group(1) is not None else 2
+                candidates.append((
+                    m.start(), m.end(),
+                    [(m.start(), m.start() + d_len, "md_syntax"), (m.start() + d_len, m.end() - d_len, "md_math_inline"), (m.end() - d_len, m.end(), "md_syntax")],
+                    3
+                ))
+
+        # 4. Bold-italic
+        for m in re.finditer(r'(?<![\w\d\*])\*\*\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*\*\*(?![\w\d\*])|(?<![\w\d_])___([^_ \n](?:[^_\n]*?[^_ \n])?)___(?![\w\d_])', text):
+            candidates.append((
+                m.start(), m.end(),
+                [(m.start(), m.start() + 3, "md_syntax"), (m.start() + 3, m.end() - 3, "md_bold_italic"), (m.end() - 3, m.end(), "md_syntax")],
+                4
+            ))
+
+        # 5. Bold
+        for m in re.finditer(r'(?<![\w\d\*])\*\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*\*(?![\w\d\*])|(?<![\w\d_])__([^_ \n](?:[^_\n]*?[^_ \n])?)__(?![\w\d_])', text):
+            candidates.append((
+                m.start(), m.end(),
+                [(m.start(), m.start() + 2, "md_syntax"), (m.start() + 2, m.end() - 2, "md_bold"), (m.end() - 2, m.end(), "md_syntax")],
+                5
+            ))
+
+        # 6. Strike
+        for m in re.finditer(r'(?<![\w\d~])~~([^\n\s](?:[^\n]*?[^\n\s])?)~~(?![\w\d~])', text):
+            candidates.append((
+                m.start(), m.end(),
+                [(m.start(), m.start() + 2, "md_syntax"), (m.start() + 2, m.end() - 2, "md_strike"), (m.end() - 2, m.end(), "md_syntax")],
+                6
+            ))
+
+        # 7. Italic
+        for m in re.finditer(r'(?<![\w\d\*])\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*(?![\w\d\*])', text):
+            candidates.append((
+                m.start(), m.end(),
+                [(m.start(), m.start() + 1, "md_syntax"), (m.start() + 1, m.end() - 1, "md_italic"), (m.end() - 1, m.end(), "md_syntax")],
+                7
+            ))
+
+        for m in re.finditer(r'(?<![\w\d_])_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?![\w\d_])', text):
+            candidates.append((
+                m.start(), m.end(),
+                [(m.start(), m.start() + 1, "md_syntax"), (m.start() + 1, m.end() - 1, "md_italic"), (m.end() - 1, m.end(), "md_syntax")],
+                7
+            ))
+
+        candidates.sort(key=lambda x: (x[0], x[3], -(x[1] - x[0])))
+        resolved = []
+        last_end = 0
+
+        for start, end, spans, prio in candidates:
+            if start >= last_end:
+                for s, e, tag in spans:
+                    resolved.append((base_offset + s, base_offset + e, tag))
+                last_end = end
+
+        return resolved
