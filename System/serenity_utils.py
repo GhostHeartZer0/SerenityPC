@@ -412,13 +412,31 @@ class HardwareProfile:
         if sys.platform != "win32": return
         
         import glob
+        bundle_dir = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
+        
+        # 1. First check bundled directory for packaged CUDA runtime DLLs (standalone mode)
+        if hasattr(os, 'add_dll_directory'):
+            cudart_bundled = os.path.join(bundle_dir, "cudart64_12.dll")
+            if os.path.exists(cudart_bundled):
+                try:
+                    os.add_dll_directory(bundle_dir)
+                    print(f"[HARDWARE] Bundled CUDA Link Established: {bundle_dir}")
+                    return
+                except Exception as e:
+                    print(f"[HARDWARE] Bundled CUDA Link Failed: {e}")
+
+        # 2. Fallback to host CUDA toolkit installation
         cuda_path = None
         base_install = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
         
         if os.path.exists(base_install):
             versions = glob.glob(os.path.join(base_install, "v*")) 
             if versions:
-                cuda_path = os.path.join(sorted(versions)[-1], "bin")
+                v12 = [v for v in versions if os.path.basename(v).startswith("v12")]
+                if v12:
+                    cuda_path = os.path.join(sorted(v12)[-1], "bin")
+                else:
+                    cuda_path = os.path.join(sorted(versions)[-1], "bin")
         
         if not cuda_path:
             cuda_path = os.environ.get('CUDA_PATH') or os.environ.get('CUDA_HOME')

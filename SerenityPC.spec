@@ -1,6 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import re
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
+app_version = "1.7.0"
+changelog_path = os.path.join(os.path.dirname(os.path.abspath(SPEC)), "CHANGELOG.md") if 'SPEC' in globals() and SPEC else "CHANGELOG.md"
+if os.path.exists(changelog_path):
+    try:
+        with open(changelog_path, "r", encoding="utf-8") as f:
+            match = re.search(r"## Current Version:\s*\n+### Version\s+([^\s\n]+)", f.read())
+            if match:
+                app_version = match.group(1).strip()
+    except Exception:
+        pass
+
+exe_name = f"SerenityPC Legacy v{app_version}"
 
 datas = [
     ('System', 'System'),
@@ -94,7 +108,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='SerenityPC',
+    name=exe_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

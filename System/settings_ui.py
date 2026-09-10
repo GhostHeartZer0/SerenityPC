@@ -304,6 +304,7 @@ def open_settings_window(app, is_generating=None):
             "thinking_var": tk.BooleanVar(value=app.config.get("thinking_checkbox", True)),
             "benchmark_var": tk.BooleanVar(value=app.config.get("benchmark_enabled", False)),
             "inline_md_var": tk.BooleanVar(value=app.config.get("inline_markdown", True)),
+            "format_prompt_md_var": tk.BooleanVar(value=app.config.get("format_prompt_markdown", False)),
             "monitor_graph_var": tk.BooleanVar(value=app.config.get("monitor_graph_mode", False)),
             "show_tooltips_var": tk.BooleanVar(value=app.config.get("show_tooltips", True)),
             "resp_len_var": tk.StringVar(value=app.config.get("response_length", "natural")),
@@ -558,6 +559,8 @@ def open_settings_window(app, is_generating=None):
             app.config["thinking_checkbox"] = vars_dict["thinking_var"].get()
             app.config["benchmark_enabled"] = vars_dict["benchmark_var"].get()
             app.config["inline_markdown"] = vars_dict["inline_md_var"].get()
+            if "format_prompt_md_var" in vars_dict:
+                app.config["format_prompt_markdown"] = vars_dict["format_prompt_md_var"].get()
             app.config["overfill_behavior_mode"] = vars_dict["overfill_behavior_var"].get()
             app.config["budget_recovery_mode"] = vars_dict["overfill_behavior_var"].get()
             app.config["halt_behavior_mode"] = vars_dict["halt_behavior_var"].get()

@@ -76,6 +76,13 @@ Technical Breakdown:
     for txt, tags in mixed_spans:
         assert "\x00" not in txt
 
+    # 5. Math Expression Preservation (e.g. 3*3*5*5 never converted to 3355)
+    math_text = "Compute 3*3*5*5 in the prompt or response."
+    math_spans = MarkdownEngine.parse_to_spans(math_text)
+    joined_math = "".join(txt for txt, _ in math_spans)
+    assert "3*3*5*5" in joined_math, f"Math was mangled! Got: {joined_math}"
+    assert "3355" not in joined_math
+
     print("\n=== ALL INTERVAL MARKDOWN TESTS PASSED ===")
 
 if __name__ == "__main__":

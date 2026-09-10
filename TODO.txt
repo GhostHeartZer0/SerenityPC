@@ -9,6 +9,8 @@ Needs fixing:
   - Tool execution sandboxing: Restrict _run_tool_loop file operations outside Users/ & Logs/
 
 Completed Log: (Verification Needed)
+- Verify non-destructive Markdown overlay in live chat UI (confirm 3*3*5*5 in prompts and responses renders without mangling into 3355, and clipboard copy preserves raw formatting)
+- Push requirements.txt to GitHub to verify Dependabot Alert #1 closure (accelerate CVE-2026-69112 removal)
 - Dynamic Agent Orchestration & Subagent Delegation Engine (`orchestration_manager.py`, toggleable in Settings)
 - Shadow Wizard & Divine Judgement Modes for Cecilia (Level 7)
 - Search bloat filter (`clean_search_bloat`) in `tool_registry.py`

@@ -16,21 +16,28 @@
 - Cleared TODO list for v2.0.
 - Deep Cook Cycles Verified.
 
-### Version 1.7.0
-- **Fonts Refactored**
-  - Updated the font options
-  - Replaced hardcoded font names with dynamic configuration.
-- **Settings UI Refactored**
-  - Settings UI Reorganized into dedicated tabs.
-
 ---
 
 ## Current Version:
 
-### Version 1.7.0
+### Version 1.7.1
 - **Stability & Defect Fixes (Needs Fixing Resolutions)**:
-  - **Sash & Window Geometry**: Persisted mid-split sash position (`sash_pos`) across restarts; persisted settings window size (`settings_window_geometry`) on close and apply.
-  - **Multimodal Token Streaming & Isolation**: Fixed token count estimation ballooning on base64 images; implemented token streaming for multimodal tasks with strict thought channel separation (`thought_stream` / `streaming`).
+  - **Markdown Formatting & Visual Overlay Engine**:
+    - Converted Markdown formatting across chat history and history archive views into a non-destructive visual overlay via `MarkdownEngine.parse_overlay_intervals()` and Tkinter `tag_add()`, eliminating destructive text deletions and replacements.
+    - Preserved raw text bit-for-bit in widget buffers; syntax delimiters (`**`, `*`, `~~`, ```` ``` ````, etc.) tagged with `md_syntax` (`elide=True`) for clean rich display while keeping clipboard copy-paste and context untouched.
+    - Excluded user prompts from markdown formatting by default to preserve math notation (e.g. `3*3*5*5`); added configurable toggle `format_prompt_markdown` in Settings -> Additional Settings.
+    - Hardened regex boundary checks in `MarkdownEngine` to prevent math multiplication patterns (e.g. `3*3*5*5`) and numbers from falsely matching as italics or bold.
+    - Fixed LaTeX macro conversion order in `MarkdownEngine.convert_latex_to_unicode()` by sorting symbol keys by length descending, preventing `\in` from corrupting `\infty` into `∈fty`.
+    
+
+### Version 1.7.0
+- **Stability & Defect Fixes**:
+- **CUDA 12.6 Toolkit Prioritization & Standalone Executable Support**: Updated `HardwareProfile.initialize_gpu_acceleration()` in `System/serenity_utils.py` to first link bundled CUDA runtime DLLs (`sys._MEIPASS`) for standalone zero-install GPU offloading on client PCs, with fallback prioritization of CUDA `v12*` (12.6) over higher non-binary matching versions (`v13.3`).
+- **Versioned Executable Naming**: Updated `SerenityPC.spec` to dynamically name binary `SerenityPC Legacy v<version>` (`SerenityPC Legacy v1.7.0.exe`) sourced directly from `CHANGELOG.md`.
+- **Dependency Hardening & CVE-2026-69112 Mitigation**: Removed unused `accelerate` package from `requirements.txt` and purged cached wheels (`wheels/accelerate-*.whl`). Resolves GitHub Dependabot alert #1 (path traversal and DoS via sharded checkpoint `weight_map` entries) while eliminating unneeded attack surface and reducing installation footprint.
+- **Build Script Launcher Fix**: Replaced `.venv\Scripts\pyinstaller.exe` shim call in `build_exe.bat` with `.venv\Scripts\python.exe -m PyInstaller` to bypass hardcoded drive path issues across environments.
+- **Sash & Window Geometry**: Persisted mid-split sash position (`sash_pos`) across restarts; persisted settings window size (`settings_window_geometry`) on close and apply.
+- **Multimodal Token Streaming & Isolation**: Fixed token count estimation ballooning on base64 images; implemented token streaming for multimodal tasks with strict thought channel separation (`thought_stream` / `streaming`).
   - **Status Bar & Linger Overhaul**: Added `winfo_exists()` checks to eliminate Tkinter background teardown errors; added configurable linger duration (`status_bar_linger_sec`); added smart info rotation during idle while preserving active DMN states.
   - **Scroll Lock**: Added toggle in Settings -> Additional Settings; prevents forced autoscrolling when reviewing backlog text during inference.
   - **Prefill Avatars**: Standardized prefill avatar transitions (Option B): Lvl 1-5 use `serenity_thinking.png`, Lvl 6 uses `Meditating_Serenity.png`, Lvl 7 uses `Cecilia_01.png`.
