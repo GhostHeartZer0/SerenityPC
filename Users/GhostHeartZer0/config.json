@@ -1,12 +1,12 @@
 {
     "username": "GhostHeartZer0",
-    "main_window": "1225x882+239+27",
+    "main_window": "2391x1694+239+27",
     "model_paths": {
         "fast": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "low": "C:/Users/ccrg6/Documents/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "med": "C:/Users/ccrg6/Documents/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
-        "high": "C:/Users/ccrg6/Documents/SerenityPC/Models/26B-A4B/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+        "high": "S:/LLM/gemma-4 QAT/26B-A4B/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
         "secret": "S:/LLM/gemma-4-unc/26B/gemma-4-26B-A4B-it-qat-q4_0-unquantized-uncensored-heretic.i1-Q4_K_M.gguf",
         "deep_cook": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "vision_video": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
@@ -16,7 +16,7 @@
         "vision_multimodal": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "vision_multimodal_projector": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/mmproj-BF16.gguf",
         "mid": "S:/SerenityPC/Models/gemma-4-26B MoE/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-        "transcendent": "C:/Users/ccrg6/Desktop/Hub/Serenities/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+        "transcendent": "S:/LLM/Qwen3.8/Qwen3.8-27B-UD-Q4_K_XL.gguf"
     },
     "gpu_layer_config": {
         "fast": 99,
@@ -30,7 +30,7 @@
         "vision_video_deep": 14,
         "vision_multimodal": 99,
         "mid": 99,
-        "transcendent": 99
+        "transcendent": 13
     },
     "context_size_config": {
         "fast": 32768,
@@ -44,7 +44,7 @@
         "vision_video_deep": 4096,
         "vision_multimodal": 32768,
         "mid": 32768,
-        "transcendent": 32768
+        "transcendent": 65536
     },
     "temp_config": {
         "fast": 0.8,
@@ -58,7 +58,7 @@
         "vision_video_deep": 0.1,
         "vision_multimodal": 1.0,
         "mid": 0.8,
-        "transcendent": 0.8
+        "transcendent": 1.0
     },
     "top_p_config": {
         "fast": 0.95,
@@ -86,7 +86,7 @@
         "vision_video_deep": 0.0,
         "vision_multimodal": 0.0,
         "mid": 0.05,
-        "transcendent": 0.05
+        "transcendent": 0.0
     },
     "repeat_penalty_config": {
         "fast": 1.0,
@@ -100,7 +100,7 @@
         "vision_video_deep": 1.0,
         "vision_multimodal": 1.0,
         "mid": 1.1,
-        "transcendent": 1.1
+        "transcendent": 1.0
     },
     "frequency_penalty_config": {
         "fast": 0.0,
@@ -168,9 +168,9 @@
         "vision_video_deep": 64,
         "vision_multimodal": 64,
         "mid": 64,
-        "transcendent": 64
+        "transcendent": 20
     },
-    "sash_pos": 810,
+    "sash_pos": 1648,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
     "active_persona_level": 6,
@@ -506,11 +506,11 @@
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
     "history_usage": "current_window",
-    "ghost_mode": true,
+    "ghost_mode": false,
     "dynamic_params_enabled": false,
     "startup_count": 1,
     "offline_mode": false,
-    "theme": "apex",
+    "theme": "persona",
     "texture_style": "default",
     "frosted_glass": false,
     "repeat_detection_mode": "lazy",
@@ -532,16 +532,16 @@
     "dmn_timeout": "05:00",
     "stt_device_index": null,
     "stt_language": "en-US",
-    "text_scale": 115,
-    "ui_font": "Cambria",
-    "mono_font": "Consolas",
+    "text_scale": 85,
+    "ui_font": "Modern Antiqua",
+    "mono_font": "Doto",
     "responsive_font_scaling": true,
     "font_size_offsets": {
-        "chat": 0,
-        "headers": 0,
-        "code_log": 0,
-        "stats": -1,
-        "ui": 0
+        "chat": -4,
+        "headers": -4,
+        "code_log": -4,
+        "stats": -4,
+        "ui": -4
     },
     "dark_mode": false,
     "mtp_mapping": {
@@ -569,7 +569,7 @@
     "halt_behavior_mode": "off",
     "history_mode": "Keyword",
     "status_bar_linger_sec": 5.0,
-    "settings_window_geometry": "1457x950+190+190",
-    "scroll_lock_enabled": false,
+    "settings_window_geometry": "2341x1406+190+190",
+    "scroll_lock_enabled": true,
     "user_notes": ""
 }
