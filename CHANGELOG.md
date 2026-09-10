@@ -35,6 +35,9 @@
   - **MTP Drafting Architecture Fallback**: Replaced crashing exception with architecture compatibility fallback and graceful degradation without freezing Tk event loops or worker threads.
   - **Templating Engine**: Added explicit active mode buttons (`Save & Write`, `Save & Save`, `Save & Close`) and single-click return to modify mode upon tier write.
   - **User Profile Isolation & Security**: Outgoing profile automatically locked on switch; locked private profiles require password verification before loading; usernames, themes, settings, and histories kept isolated.
+- **Accelerate Security Patch (CVE-2026-69112)**:
+  - Upgraded `accelerate` from `1.14.0` to `1.15.0` in `requirements.txt` and `.venv`.
+  - Resolves path traversal and denial of service vulnerability in sharded checkpoint weight_map entries (`load_checkpoint_in_model` / `load_checkpoint_and_dispatch`).
 - **Settings Window Modular Reorganization**:
   - Refactored monolithic settings dialog into 6 specialized tabs: `Models & Params`, `Inference`, `Agents`, `Additional Settings`, `Users & Security`, and `Personalize`.
   - Decoupled tab UI construction into `System/settings_tabs.py` while keeping coordinator bindings in `System/settings_ui.py`.
