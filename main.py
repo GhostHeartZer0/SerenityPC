@@ -1384,6 +1384,7 @@ class ChatbotApp:
         txt_chat.tag_config("md_header_3", font=self.fonts["md_header_3"], foreground="#80ffe5")
         txt_chat.tag_config("md_quote", font=self.fonts["md_quote"], foreground="#98c379", lmargin1=20, lmargin2=30)
         txt_chat.tag_config("md_strike", font=self.fonts["md_strike"], foreground="#7f848e")
+        txt_chat.tag_config("md_hidden", elide=True)
 
         # 3. History Archive (Hidden by default)
         self.history_menu_frame = tk.Frame(chat_frame, bg=THEME["bg_color"])
@@ -1409,6 +1410,7 @@ class ChatbotApp:
         txt_past.tag_config("md_header_3", font=self.fonts["md_header_3"], foreground="#80ffe5")
         txt_past.tag_config("md_quote", font=self.fonts["md_quote"], foreground="#98c379", lmargin1=20, lmargin2=30)
         txt_past.tag_config("md_strike", font=self.fonts["md_strike"], foreground="#7f848e")
+        txt_past.tag_config("md_hidden", elide=True)
 
         # --- 3. INPUT FRAME (Themed Border) ---
         input_frame = tk.Frame(left, bg=THEME["trim_color"], highlightthickness=1, 
@@ -5478,9 +5480,9 @@ class ChatbotApp:
         self.state["response_start_idx"] = end_idx
         hist.config(state='disabled')
         
-        # Universal Markdown Application
+        # Markdown Application (Prompt formatting disabled by default to preserve raw expressions like 3*3*5*5)
         render_mode = self.config.get("media_rendering", 1)
-        if render_mode > 0:
+        if render_mode > 0 and self.config.get("format_prompts_markdown", False):
             self._apply_markdown(start_idx, end_idx, ("user",))
         
         self._user_scrolled_up = False
@@ -5597,7 +5599,7 @@ class ChatbotApp:
         hist.tag_config(tag, foreground=fg)
 
     def _apply_markdown(self, start_idx, end_idx, base_tags=("ai",), is_thought=False):
-        """Processes Markdown formatting (bold, italic, lists, code, tables, math) in a fast, single-pass atomic render."""
+        """Processes Markdown formatting via non-destructive tag overlay, preserving raw context and math."""
         hist = self.chat_history
         if hist is None or not hist.winfo_exists(): return
         
@@ -5605,18 +5607,26 @@ class ChatbotApp:
             raw_text = hist.get(start_idx, end_idx)
             if not raw_text: return
             
-            # Parse text into tagged spans via MarkdownEngine
-            spans = MarkdownEngine.parse_to_spans(raw_text, base_tags=base_tags, is_thought=is_thought)
-            if not spans: return
+            # Non-destructive overlay intervals
+            tag_ranges, replacements = MarkdownEngine.get_overlay_intervals(raw_text, base_tags=base_tags, is_thought=is_thought)
+            if not tag_ranges and not replacements: return
             
-            # Atomic single-pass replacement in Tkinter Text widget
             hist.config(state='normal')
-            hist.delete(start_idx, end_idx)
             
-            insert_pos = hist.index(start_idx)
-            for text_chunk, tags in spans:
-                hist.insert(insert_pos, text_chunk, tags)
-                insert_pos = hist.index(f"{insert_pos} + {len(text_chunk)} chars")
+            # Handle block replacements (e.g. GFM box tables) if present, sorted reverse to preserve indices
+            if replacements:
+                replacements.sort(key=lambda x: x[0], reverse=True)
+                for r_start, r_end, r_text, r_tag in replacements:
+                    sub_start = f"{start_idx} + {r_start} chars"
+                    sub_end = f"{start_idx} + {r_end} chars"
+                    hist.delete(sub_start, sub_end)
+                    hist.insert(sub_start, r_text, base_tags + (r_tag,))
+            
+            # Apply non-destructive styling and elision tags directly over the raw text
+            for t_start, t_end, t_tag in tag_ranges:
+                pos_start = f"{start_idx} + {t_start} chars"
+                pos_end = f"{start_idx} + {t_end} chars"
+                hist.tag_add(t_tag, pos_start, pos_end)
                 
             hist.config(state='disabled')
         except Exception as e:
@@ -7880,7 +7890,7 @@ class ChatbotApp:
                 s_idx = hist.index(tk.END + "-1c")
                 hist.insert(tk.END, f"\nYou: {content_str}\n", ("user",))
                 e_idx = hist.index(tk.END + "-1c")
-                if self.config.get("media_rendering", 1) > 0:
+                if self.config.get("media_rendering", 1) > 0 and self.config.get("format_prompts_markdown", False):
                     self._apply_markdown(s_idx, e_idx, ("user",))
             elif role == 'assistant':
                 s_idx = hist.index(tk.END + "-1c")
@@ -8279,6 +8289,8 @@ class ChatbotApp:
             self.config["benchmark_enabled"] = False
         if "inline_markdown" not in self.config:
             self.config["inline_markdown"] = True
+        if "format_prompts_markdown" not in self.config:
+            self.config["format_prompts_markdown"] = False
         if "overfill_behavior_mode" not in self.config:
             self.config["overfill_behavior_mode"] = self.config.get("budget_recovery_mode", "wrapup")
         if "budget_recovery_mode" not in self.config:

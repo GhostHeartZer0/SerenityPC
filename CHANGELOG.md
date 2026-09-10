@@ -16,14 +16,16 @@
 - Cleared TODO list for v2.0.
 - Deep Cook Cycles Verified.
 
-### Version 1.7.0
-- **Settings UI Refactored**
-  - Settings UI Reorganized into dedicated tabs.
-
 ---
 
 ## Current Version:
 
+### Version 1.7.1
+- **Markdown Engine & Prompt Formatting Overhaul**:
+  - **Prompt Markdown Exclusion Setting**: Added configurable `format_prompts_markdown` setting (default `False` / OFF) under Settings -> Toggles; user prompts are excluded from markdown formatting by default, preserving raw expressions and math notation.
+  - **Non-Destructive Visual Overlay**: Refactored `_apply_markdown` in `main.py` and added `get_overlay_intervals` in `System/markdown_engine.py`; formats bold, italic, code, strike, lists, and blockquotes using Tkinter tag overlays (`md_hidden` with `elide=True`) without deleting or mutating source characters in the text buffer.
+  - **Arithmetic Multiplication Preservation**: Added regex word/alphanumeric boundary protection to `MarkdownEngine` italic and bold patterns, preventing arithmetic expressions (such as `3*3*5*5` or `a*b*c`) and power syntax (`3**2`) from being stripped or mangled into italics.
+  - **LaTeX Symbol Order Safety**: Sorted `LATEX_SYMBOLS` keys by length descending to prevent shorter prefixes (`\in`) from corrupting longer symbols (`\infty` into `∈fty`).
 ### Version 1.7.0
 - **Stability & Defect Fixes (Needs Fixing Resolutions)**:
   - **Sash & Window Geometry**: Persisted mid-split sash position (`sash_pos`) across restarts; persisted settings window size (`settings_window_geometry`) on close and apply.
