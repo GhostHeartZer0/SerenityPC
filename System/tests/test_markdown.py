@@ -76,6 +76,39 @@ Technical Breakdown:
     for txt, tags in mixed_spans:
         assert "\x00" not in txt
 
+    # 5. Arithmetic Multiplication & Power Preservation Test (e.g. 3*3*5*5 -> 3*3*5*5, NEVER 3355)
+    arithmetic_prompt = "Calculate 3*3*5*5 and a*b*c with power 3**2."
+    spans = MarkdownEngine.parse_to_spans(arithmetic_prompt)
+    reconstructed = "".join(txt for txt, tags in spans)
+    print(f"\n[ARITHMETIC TEST] Input: {repr(arithmetic_prompt)}")
+    print(f"[ARITHMETIC TEST] Output: {repr(reconstructed)}")
+    assert "3*3*5*5" in reconstructed, f"3*3*5*5 was corrupted into: {reconstructed}"
+    assert "a*b*c" in reconstructed, f"a*b*c was corrupted into: {reconstructed}"
+    assert "3**2" in reconstructed, f"3**2 was corrupted into: {reconstructed}"
+    assert not any("md_italic" in tags for txt, tags in spans if "3" in txt)
+
+    # 6. Non-Destructive Overlay Intervals Test
+    overlay_text = "Here is **bold** text and *italic* and `code` with 3*3*5*5 math."
+    tag_ranges, replacements = MarkdownEngine.get_overlay_intervals(overlay_text)
+    print(f"\n[OVERLAY TEST] Tag ranges count: {len(tag_ranges)}, replacements: {len(replacements)}")
+    # Replacements must be empty since there are no tables
+    assert len(replacements) == 0
+    # Must have md_hidden and styling tags
+    tags_used = {t for _, _, t in tag_ranges}
+    assert "md_hidden" in tags_used
+    assert "md_bold" in tags_used
+    assert "md_italic" in tags_used
+    assert "md_code" in tags_used
+    # Verify exact spans
+    for s, e, tag in tag_ranges:
+        slice_txt = overlay_text[s:e]
+        if tag == "md_bold":
+            assert slice_txt == "bold"
+        elif tag == "md_italic":
+            assert slice_txt == "italic"
+        elif tag == "md_code":
+            assert slice_txt == "code"
+
     print("\n=== ALL INTERVAL MARKDOWN TESTS PASSED ===")
 
 if __name__ == "__main__":

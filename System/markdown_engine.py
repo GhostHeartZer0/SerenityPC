@@ -90,9 +90,9 @@ class MarkdownEngine:
         # 5. Spacing commands
         s = re.sub(r'\\(?:quad|qquad|,|;|!|\s)', ' ', s)
 
-        # 6. Replace symbols
-        for lat, uni in cls.LATEX_SYMBOLS.items():
-            s = s.replace(lat, uni)
+        # 6. Replace symbols (sorted by length descending to prevent prefix collisions like \in before \infty)
+        for lat in sorted(cls.LATEX_SYMBOLS.keys(), key=len, reverse=True):
+            s = s.replace(lat, cls.LATEX_SYMBOLS[lat])
 
         # 7. Convert simple superscripts: x^2 -> x², x^{10} -> x¹⁰
         def replace_sup(m):
@@ -228,13 +228,13 @@ class MarkdownEngine:
                 converted = cls.convert_latex_to_unicode(inner)
                 intervals.append((m.start(), m.end(), converted, base_tags + ("md_math_inline",), 3))
 
-        # 4. Bold-italic
-        for m in re.finditer(r'\*\*\*(.+?)\*\*\*|___(.+?)___', text):
+        # 4. Bold-italic (requires delimiter boundary protection against arithmetic like 3***2)
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*\*\*(.+?)\*\*\*(?![a-zA-Z0-9_*])|(?<![a-zA-Z0-9_])___(.+?)___(?![a-zA-Z0-9_])', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
             intervals.append((m.start(), m.end(), inner, base_tags + ("md_bold_italic",), 4))
 
-        # 5. Bold
-        for m in re.finditer(r'\*\*(.+?)\*\*|__(.+?)__', text):
+        # 5. Bold (requires delimiter boundary protection against math powers like 3**2)
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*\*(.+?)\*\*(?![a-zA-Z0-9_*])|(?<![a-zA-Z0-9_])__(.+?)__(?![a-zA-Z0-9_])', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
             intervals.append((m.start(), m.end(), inner, base_tags + ("md_bold",), 5))
 
@@ -242,8 +242,8 @@ class MarkdownEngine:
         for m in re.finditer(r'~~(.+?)~~', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_strike",), 6))
 
-        # 7. Italic
-        for m in re.finditer(r'\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*', text):
+        # 7. Italic (boundary protection strictly ensures 3*3*5*5 arithmetic multiplication is never mangled)
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*(?![a-zA-Z0-9_*])', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_italic",), 7))
 
         for m in re.finditer(r'(?<=\s)_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?=\s|[.,;:!?\)]|$)', text):
@@ -453,3 +453,188 @@ class MarkdownEngine:
         """Parses inline formatting for a single line."""
         spans = cls._parse_inline_spans(line, base_tags)
         out_spans.extend(spans)
+
+    @classmethod
+    def get_overlay_intervals(cls, text: str, base_tags: tuple = ("ai",), is_thought: bool = False) -> Tuple[List[Tuple[int, int, str]], List[Tuple[int, int, str, str]]]:
+        """
+        Parses text for a non-destructive visual tag overlay.
+        Returns:
+            tag_ranges: List of (char_start, char_end, tag_name) for direct styling without mutating source characters.
+            replacements: List of (char_start, char_end, replacement_text, tag_name) strictly for complex visual blocks (GFM tables).
+        """
+        if not text:
+            return [], []
+
+        tag_ranges: List[Tuple[int, int, str]] = []
+        replacements: List[Tuple[int, int, str, str]] = []
+
+        if is_thought:
+            thought_tag = "md_thought"
+            tag_ranges.append((0, len(text), thought_tag))
+            # Scan inline code inside thoughts
+            for m in re.finditer(r'`([^`\n]+?)`', text):
+                tag_ranges.append((m.start(), m.start() + 1, "md_hidden"))
+                tag_ranges.append((m.start() + 1, m.end() - 1, "md_code"))
+                tag_ranges.append((m.end() - 1, m.end(), "md_hidden"))
+            return tag_ranges, []
+
+        # Phase 1: Identify top-level code blocks
+        blocks = []
+        for m in re.finditer(r'```(\w*)\r?\n([\s\S]*?)```', text):
+            blocks.append((m.start(), m.end(), "code"))
+
+        blocks.sort(key=lambda x: x[0])
+        resolved_blocks = []
+        last_end = 0
+        for b_start, b_end, b_type in blocks:
+            if b_start >= last_end:
+                resolved_blocks.append((b_start, b_end, b_type))
+                last_end = b_end
+
+        pos = 0
+        for b_start, b_end, b_type in resolved_blocks:
+            if b_start > pos:
+                cls._scan_overlay_chunk(text, pos, b_start, tag_ranges, replacements)
+
+            if b_type == "code":
+                tag_ranges.append((b_start, b_end, "md_code"))
+
+            pos = b_end
+
+        if pos < len(text):
+            cls._scan_overlay_chunk(text, pos, len(text), tag_ranges, replacements)
+
+        return tag_ranges, replacements
+
+    @classmethod
+    def _scan_overlay_chunk(cls, full_text: str, chunk_start: int, chunk_end: int, tag_ranges: list, replacements: list) -> None:
+        """Scans a non-code text chunk and appends overlay tag ranges and table replacements."""
+        chunk = full_text[chunk_start:chunk_end]
+        if not chunk:
+            return
+
+        lines = chunk.split('\n')
+        line_offset = chunk_start
+        table_lines = []
+        table_start_offset = None
+
+        def flush_overlay_table():
+            nonlocal table_lines, table_start_offset
+            if not table_lines:
+                return
+            if len(table_lines) >= 2 and any(re.search(r'\|\s*:?-+-*:?\s*\|', l) or re.search(r'^:?-+-*:?$', l.replace('|', '').strip()) for l in table_lines):
+                tbl_raw = '\n'.join(table_lines)
+                formatted = cls.format_gfm_table(tbl_raw)
+                tbl_end_offset = table_start_offset + len(tbl_raw)
+                replacements.append((table_start_offset, tbl_end_offset, f"\n{formatted}\n\n", "md_table"))
+            else:
+                curr_off = table_start_offset
+                for l in table_lines:
+                    cls._scan_overlay_line(l, curr_off, tag_ranges)
+                    curr_off += len(l) + 1
+            table_lines = []
+            table_start_offset = None
+
+        for line in lines:
+            line_len = len(line)
+
+            if '|' in line:
+                if table_start_offset is None:
+                    table_start_offset = line_offset
+                table_lines.append(line)
+                line_offset += line_len + 1
+                continue
+            else:
+                if table_lines:
+                    flush_overlay_table()
+
+            # Headers: #, ##, ###
+            header_match = re.match(r'^(#{1,6})\s+(.*)$', line)
+            if header_match:
+                level = len(header_match.group(1))
+                h_tag = "md_header_1" if level == 1 else "md_header_2" if level == 2 else "md_header_3"
+                prefix_len = level + 1
+                tag_ranges.append((line_offset, line_offset + prefix_len, "md_hidden"))
+                tag_ranges.append((line_offset + prefix_len, line_offset + line_len, h_tag))
+                line_offset += line_len + 1
+                continue
+
+            # Blockquotes: > quote
+            quote_match = re.match(r'^(\s*>\s*)(.*)$', line)
+            if quote_match:
+                prefix_len = len(quote_match.group(1))
+                tag_ranges.append((line_offset, line_offset + prefix_len, "md_hidden"))
+                tag_ranges.append((line_offset + prefix_len, line_offset + line_len, "md_quote"))
+                cls._scan_overlay_line(quote_match.group(2), line_offset + prefix_len, tag_ranges)
+                line_offset += line_len + 1
+                continue
+
+            # Unordered & Ordered lists
+            list_match = re.match(r'^(\s*[\*\-\+]\s+|\s*\d+\.\s+)(.*)$', line)
+            if list_match:
+                prefix_len = len(list_match.group(1))
+                tag_ranges.append((line_offset, line_offset + prefix_len, "md_list"))
+                cls._scan_overlay_line(list_match.group(2), line_offset + prefix_len, tag_ranges)
+                line_offset += line_len + 1
+                continue
+
+            # Standard line
+            cls._scan_overlay_line(line, line_offset, tag_ranges)
+            line_offset += line_len + 1
+
+        if table_lines:
+            flush_overlay_table()
+
+    @classmethod
+    def _scan_overlay_line(cls, line: str, line_offset: int, tag_ranges: list) -> None:
+        """Scans inline formatting in a single line and appends non-destructive tag intervals."""
+        if not line:
+            return
+
+        intervals = []
+
+        # 1. Inline code: `...`
+        for m in re.finditer(r'`([^`\n]+?)`', line):
+            intervals.append((m.start(), m.end(), "code", 1, 1))
+
+        # 2. Bold-italic: ***...*** or ___...___
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*\*\*(.+?)\*\*\*(?![a-zA-Z0-9_*])|(?<![a-zA-Z0-9_])___(.+?)___(?![a-zA-Z0-9_])', line):
+            intervals.append((m.start(), m.end(), "bold_italic", 3, 2))
+
+        # 3. Bold: **...** or __...__
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*\*(.+?)\*\*(?![a-zA-Z0-9_*])|(?<![a-zA-Z0-9_])__(.+?)__(?![a-zA-Z0-9_])', line):
+            intervals.append((m.start(), m.end(), "bold", 2, 3))
+
+        # 4. Strike: ~~...~~
+        for m in re.finditer(r'~~(.+?)~~', line):
+            intervals.append((m.start(), m.end(), "strike", 2, 4))
+
+        # 5. Italic: *...* or _..._ (strictly boundary protected against 3*3*5*5)
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*(?![a-zA-Z0-9_*])', line):
+            intervals.append((m.start(), m.end(), "italic", 1, 5))
+
+        for m in re.finditer(r'(?<=\s)_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?=\s|[.,;:!?\)]|$)', line):
+            intervals.append((m.start(), m.end(), "italic", 1, 5))
+
+        # Resolve overlaps by priority
+        intervals.sort(key=lambda x: (x[0], x[4], -(x[1] - x[0])))
+        last_end = 0
+        for start, end, el_type, delim_len, prio in intervals:
+            if start >= last_end:
+                tag_name = (
+                    "md_code" if el_type == "code" else
+                    "md_bold_italic" if el_type == "bold_italic" else
+                    "md_bold" if el_type == "bold" else
+                    "md_strike" if el_type == "strike" else
+                    "md_italic"
+                )
+                abs_s = line_offset + start
+                abs_e = line_offset + end
+                # Hide delimiters
+                tag_ranges.append((abs_s, abs_s + delim_len, "md_hidden"))
+                # Style content
+                tag_ranges.append((abs_s + delim_len, abs_e - delim_len, tag_name))
+                # Hide closing delimiters
+                tag_ranges.append((abs_e - delim_len, abs_e, "md_hidden"))
+                last_end = end
+
