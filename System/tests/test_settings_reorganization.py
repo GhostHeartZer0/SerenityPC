@@ -321,6 +321,83 @@ class TestSettingsReorganization(unittest.TestCase):
             # Confirm values were applied from T1 ("temp": 0.7)
             self.assertEqual(temp_ents["fast"].get(), "0.7")
 
+    def test_cores_models_and_marquee_scrolling(self):
+        """Verify Cores (Models) header, tooltip over Models, Core: tier titles, and marquee scrolling."""
+        win = tk.Toplevel(self.root)
+        parent = tk.Frame(win)
+        parent.pack()
+
+        temp_ents, top_p_ents, min_p_ents, top_k_ents = {}, {}, {}, {}
+        rep_ents, freq_ents, pres_ents, stop_ents = {}, {}, {}, {}
+        ents, ctx_ents, n_batch_ents, labels = {}, {}, {}, {}
+        active_template = tk.StringVar(value="")
+        template_mode = tk.StringVar(value="modify")
+
+        self.app.config["marquee_text_enabled"] = True
+        self.app.model_paths = {
+            "fast": "S:/Models/Gemma-4-Ultra-Long-Model-Name-For-Marquee-Testing-Q4_K_M.gguf",
+            "low": "S:/Models/short.gguf"
+        }
+
+        vars_dict = {
+            "labels": labels, "ents": ents, "ctx_ents": ctx_ents, "n_batch_ents": n_batch_ents,
+            "temp_ents": temp_ents, "top_p_ents": top_p_ents, "min_p_ents": min_p_ents, "top_k_ents": top_k_ents,
+            "rep_ents": rep_ents, "freq_ents": freq_ents, "pres_ents": pres_ents, "stop_ents": stop_ents,
+            "active_template": active_template,
+            "template_mode": template_mode,
+            "dynamic_params_var": tk.BooleanVar(value=True)
+        }
+
+        tab = build_models_tab(parent, self.app, win, vars_dict, [])
+
+        # 1. Verify "Core:" on tier block titles instead of "Engine:"
+        label_frames = []
+        def _find_lf(w):
+            for c in w.winfo_children():
+                if isinstance(c, tk.LabelFrame):
+                    label_frames.append(c)
+                _find_lf(c)
+        _find_lf(tab)
+
+        core_titles = [lf.cget("text") for lf in label_frames if "Core:" in lf.cget("text")]
+        self.assertGreater(len(core_titles), 0, "Expected LabelFrames with 'Core:' prefix")
+        engine_titles = [lf.cget("text") for lf in label_frames if "Engine:" in lf.cget("text")]
+        self.assertEqual(len(engine_titles), 0, "No tier LabelFrames should have 'Engine:' prefix")
+
+        # 2. Verify "Models" label exists with ToolTip stating "Large Language Models."
+        all_labels = []
+        def _find_lbls(w):
+            for c in w.winfo_children():
+                if isinstance(c, tk.Label):
+                    all_labels.append(c)
+                _find_lbls(c)
+        _find_lbls(tab)
+
+        models_lbl = None
+        for l in all_labels:
+            if l.cget("text") == "Models":
+                models_lbl = l
+                break
+        self.assertIsNotNone(models_lbl, "Expected 'Models' header label")
+        self.assertTrue(hasattr(models_lbl, "_serenity_tooltip"), "Models label should have ToolTip attached")
+        self.assertIn("Large Language Models.", models_lbl._serenity_tooltip.text)
+
+        # 3. Verify Vision Cores header
+        vision_core_lbl = any("Vision Cores:" in l.cget("text") for l in all_labels)
+        self.assertTrue(vision_core_lbl, "Expected 'Vision Cores:' section header")
+
+        # 4. Verify Marquee Scrolling on long model titles
+        fast_lbl = labels["fast"]
+        self.assertTrue(hasattr(fast_lbl, "_marquee_job") or hasattr(fast_lbl, "set_marquee_text"))
+        # With marquee active, fast tier title text should be padded and active
+        self.assertIsNotNone(fast_lbl.cget("text"))
+
+        # Test set_marquee_text dynamically
+        fast_lbl.set_marquee_text("Updated-Model-Filename-Very-Long-Text-Example.gguf")
+        self.assertIsNotNone(fast_lbl.cget("text"))
+
+        win.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

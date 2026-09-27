@@ -109,6 +109,49 @@ Technical Breakdown:
         elif tag == "md_code":
             assert slice_txt == "code"
 
+    # 7. Advanced LaTeX & Math Formatting Test (TODO Example + Currency Disambiguation)
+    todo_math = r'$$S_n = \sum_{i=0}^{n} 5^i = \frac{5^{n+1} - 1}{5 - 1} = \frac{5^{n+1} - 1}{4}$$, the sum of $5^0$ through $5^{21}$ is $596,046,447,753,906.'
+    spans_todo = MarkdownEngine.parse_to_spans(todo_math)
+    math_blocks = [txt for txt, tags in spans_todo if "md_math_block" in tags]
+    math_inlines = [txt for txt, tags in spans_todo if "md_math_inline" in tags]
+    raw_texts = "".join(txt for txt, tags in spans_todo if "md_math_block" not in tags and "md_math_inline" not in tags)
+    print(f"\n[TODO MATH TEST] Math Blocks: {math_blocks}")
+    print(f"[TODO MATH TEST] Math Inlines: {math_inlines}")
+    print(f"[TODO MATH TEST] Preserved Raw: {raw_texts}")
+    assert len(math_blocks) == 1
+    assert "Sₙ = ∑₍ᵢ₌₀₎ⁿ 5ⁱ = (5ⁿ⁺¹ - 1)/(5 - 1) = (5ⁿ⁺¹ - 1)/(4)" in math_blocks[0]
+    assert "5⁰" in math_inlines
+    assert "5²¹" in math_inlines
+    assert "$596,046,447,753,906." in raw_texts
+
+    # 8. Forward-Slash Commands Test (/frac, /sum, /times, /mathbf, /left, /right)
+    forward_math = r'/sum_{i=0}^{n} /frac{a}{b} /times /mathbf{x} /left( x /right)'
+    converted_forward = MarkdownEngine.convert_latex_to_unicode(forward_math)
+    print(f"\n[FORWARD SLASH TEST] Output: {converted_forward}")
+    assert "∑₍ᵢ₌₀₎ⁿ" in converted_forward
+    assert "a/b" in converted_forward
+    assert "×" in converted_forward
+    assert "x ( x )" in converted_forward
+
+    # 9. Quad Dollar Syntax ($$$$...$$$$) Test
+    quad_math = r'$$$$E = m \cdot c^2$$$$'
+    spans_quad = MarkdownEngine.parse_to_spans(quad_math)
+    assert any("md_math_block" in tags and "m · c²" in txt for txt, tags in spans_quad)
+
+    # 10. Single-letter variables and complex inline LaTeX
+    single_var = r'Let $U$ be internal energy, $x$ position, and **High Specific Heat Capacity** ($\approx 4.18\text{ kJ/kg}\cdot^\circ\text{C}$).'
+    spans_single = MarkdownEngine.parse_to_spans(single_var)
+    assert any("md_math_inline" in tags and txt == "U" for txt, tags in spans_single)
+    assert any("md_math_inline" in tags and txt == "x" for txt, tags in spans_single)
+    assert any("md_math_inline" in tags and "4.18 kJ/kg·°C" in txt for txt, tags in spans_single)
+
+    # 11. Standalone slash symbols in text outside math ($)
+    slash_text = r'Change is /Delta and approx is /approx and /circ'
+    spans_slash = MarkdownEngine.parse_to_spans(slash_text)
+    assert any("md_math_inline" in tags and txt == "Δ" for txt, tags in spans_slash)
+    assert any("md_math_inline" in tags and txt == "≈" for txt, tags in spans_slash)
+    assert any("md_math_inline" in tags and txt == "°" for txt, tags in spans_slash)
+
     print("\n=== ALL INTERVAL MARKDOWN TESTS PASSED ===")
 
 if __name__ == "__main__":

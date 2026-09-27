@@ -48,6 +48,7 @@ class VaultManager:
     def __init__(self, history_dir: str, state_dir: str):
         self.history_dir = os.path.abspath(history_dir)
         self.state_dir = os.path.abspath(state_dir)
+        self.default_state_dir = self.state_dir
         self.state_file = os.path.join(self.state_dir, "vault_state.json")
         
         self._session_key: Optional[bytes] = None
@@ -59,6 +60,73 @@ class VaultManager:
             self._auto_unlock_from_env()
         else:
             self._is_locked = False
+
+    def set_user_context(self, user_dir: Optional[str] = None, history_dir: Optional[str] = None):
+        """Switches the active vault context to a specific user's directory and history."""
+        target_hist = os.path.abspath(history_dir) if history_dir else self.history_dir
+        target_state_dir = self.state_dir
+        target_state_file = self.state_file
+        if user_dir:
+            u_dir_abs = os.path.abspath(user_dir)
+            u_state_file = os.path.join(u_dir_abs, "vault_state.json")
+            if os.path.exists(u_state_file):
+                target_state_dir = u_dir_abs
+                target_state_file = u_state_file
+            else:
+                target_state_dir = getattr(self, "default_state_dir", self.state_dir)
+                target_state_file = os.path.join(target_state_dir, "vault_state.json")
+
+        if target_state_file == self.state_file:
+            self.history_dir = target_hist
+            if not self._is_locked and self._session_key:
+                return
+
+        self.history_dir = target_hist
+        self.state_dir = target_state_dir
+        self.state_file = target_state_file
+        self._state = self._load_state()
+        self._session_key = None
+        if self._state.get("lock_enabled", False):
+            self._is_locked = True
+            self._auto_unlock_from_env()
+        else:
+            self._is_locked = False
+
+    def create_profile_vault(self, user_dir: str, history_dir: str, password: str) -> Tuple[bool, str]:
+        """Initializes a new vault state for a newly created profile with its own password."""
+        if not self.is_crypto_available():
+            return False, "Cryptography package (AESGCM) is not available."
+        if not password or len(password) < 4:
+            return False, "Password must be at least 4 characters long."
+
+        u_dir_abs = os.path.abspath(user_dir)
+        h_dir_abs = os.path.abspath(history_dir)
+        os.makedirs(u_dir_abs, exist_ok=True)
+        os.makedirs(h_dir_abs, exist_ok=True)
+
+        new_salt = secrets.token_bytes(self.SALT_SIZE)
+        new_key = self.derive_key(password, new_salt)
+        new_verifier = self._compute_verifier(new_key)
+
+        state = {
+            "lock_enabled": True,
+            "salt_hex": new_salt.hex(),
+            "verifier_hash": new_verifier,
+            "auto_lock_seconds": 0,
+            "last_migration": datetime.datetime.now().isoformat()
+        }
+        state_file = os.path.join(u_dir_abs, "vault_state.json")
+        with open(state_file, "w", encoding="utf-8") as fp:
+            json.dump(state, fp, indent=4)
+
+        # Set active context to this new profile and keep it unlocked
+        self.state_dir = u_dir_abs
+        self.state_file = state_file
+        self.history_dir = h_dir_abs
+        self._state = state
+        self._session_key = new_key
+        self._is_locked = False
+        return True, "Vault password set successfully."
 
     def _find_env_file(self) -> Optional[str]:
         """Locates the .env file in workspace root or state parent directory."""
@@ -308,6 +376,49 @@ class VaultManager:
         self._session_key = new_key
         self._is_locked = False
         return True, "Master password set and history archives encrypted successfully."
+
+    def encrypt_vault(self, password: str, target_history_dir: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Encrypts plaintext history files (.jsonz -> .encz) using master password.
+        If vault is not enabled yet, sets password and enables vault lock.
+        If vault is already enabled, verifies password and executes safe transactional migration.
+        """
+        if not self.is_crypto_available():
+            return False, "Cryptography package (AESGCM) is not available."
+
+        if not password or len(password) < 4:
+            return False, "Master password must be at least 4 characters long."
+
+        if not self.is_lock_enabled():
+            return self.set_password(password)
+
+        if not self.verify_password(password):
+            return False, "Master password verification failed."
+
+        salt = bytes.fromhex(self._state["salt_hex"])
+        key = self.derive_key(password, salt)
+
+        orig_hist = self.history_dir
+        if target_history_dir:
+            self.history_dir = os.path.abspath(target_history_dir)
+
+        try:
+            success, msg = self._migrate_vault_files(
+                source_key=key,
+                target_key=key,
+                to_encrypted=True
+            )
+            if not success:
+                return False, f"Encryption failed. Rollback executed: {msg}"
+
+            self._session_key = key
+            self._is_locked = False
+            self._state["last_migration"] = datetime.datetime.now().isoformat()
+            self._save_state()
+            return True, f"Active profile history archives encrypted successfully."
+        finally:
+            if target_history_dir:
+                self.history_dir = orig_hist
 
     def disable_lock(self, current_password: str) -> Tuple[bool, str]:
         """

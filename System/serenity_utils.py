@@ -360,7 +360,7 @@ class LoadingScreen:
         self.canvas.pack()
         self.load_animation_images()
         self.canvas.create_text(self.width / 2, self.height - 52, text="Serenity is Awakening...", font=("Open Sans", 11, "bold"), fill="#FFFFFF", tags="splash_text")
-        self.canvas.create_text(self.width / 2, self.height - 24, text="Loading... please wait. This'll only take a minute or two.", font=("Open Sans", 9, "italic"), fill="#00FFCC", tags="splash_text")
+        self.canvas.create_text(self.width / 2, self.height - 24, text="Patience is a Virtue...", font=("Open Sans", 9, "italic"), fill="#00FFCC", tags="splash_text")
         self.root.lift()
         self.root.attributes("-topmost", True)
 
@@ -1477,6 +1477,14 @@ class ToolTip:
     Respects app.config['show_tooltips'] toggle.
     """
     def __init__(self, widget, text_or_callable, delay_ms: int = 1500, app=None, wraplength: int = 300):
+        # Clean up any existing tooltip bound to this widget to prevent multi-tooltip stacking
+        old_tip = getattr(widget, '_serenity_tooltip', None)
+        if old_tip is not None and old_tip is not self:
+            try:
+                old_tip.unbind()
+            except Exception:
+                pass
+
         self.widget = widget
         self.text_or_callable = text_or_callable
         self.delay_ms = delay_ms
@@ -1484,12 +1492,47 @@ class ToolTip:
         self.wraplength = wraplength
         self.tip_window = None
         self._after_id = None
+        self._bind_ids = []
+        try:
+            self.widget._serenity_tooltip = self
+        except Exception:
+            pass
 
-        self.widget.bind("<Enter>", self._on_enter, add="+")
-        self.widget.bind("<Leave>", self._on_leave, add="+")
-        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
-        self.widget.bind("<Unmap>", self._on_leave, add="+")
-        self.widget.bind("<Destroy>", self._on_destroy, add="+")
+        try:
+            self._bind_ids.append(("<Enter>", self.widget.bind("<Enter>", self._on_enter, add="+")))
+            self._bind_ids.append(("<Leave>", self.widget.bind("<Leave>", self._on_leave, add="+")))
+            self._bind_ids.append(("<ButtonPress>", self.widget.bind("<ButtonPress>", self._on_leave, add="+")))
+            self._bind_ids.append(("<Unmap>", self.widget.bind("<Unmap>", self._on_leave, add="+")))
+            self._bind_ids.append(("<Destroy>", self.widget.bind("<Destroy>", self._on_destroy, add="+")))
+        except Exception:
+            pass
+
+    def unbind(self):
+        """Cancels scheduled timers, destroys active tip window, and unbinds event listeners."""
+        self._unschedule()
+        self._hide()
+        if hasattr(self, '_bind_ids') and self.widget:
+            try:
+                if self.widget.winfo_exists():
+                    for seq, b_id in self._bind_ids:
+                        if b_id:
+                            try:
+                                self.widget.unbind(seq, b_id)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            self._bind_ids = []
+
+    def update_text(self, text_or_callable):
+        """Updates tooltip content and clears any open popup immediately."""
+        self.text_or_callable = text_or_callable
+        self._unschedule()
+        self._hide()
+
+    @property
+    def text(self):
+        return self.text_or_callable() if callable(self.text_or_callable) else self.text_or_callable
 
     def _on_enter(self, event=None):
         self._schedule()
@@ -2068,4 +2111,99 @@ class TutorialOverlay:
                 self.on_finish()
             except Exception:
                 pass
+
+
+def setup_marquee_label(lbl, text, app=None, limit=22, full_path=None, interval_ms=220):
+    """
+    Configures a label with marquee scrolling if text exceeds limit.
+    Honors app.config['marquee_text_enabled'] (continuous scrolling when enabled,
+    fallback compact truncation with hover marquee when disabled).
+    Safe cleanup of after jobs on widget destroy.
+    """
+    if lbl is None:
+        return
+
+    old_job = getattr(lbl, "_marquee_job", None)
+    if old_job:
+        try:
+            lbl.after_cancel(old_job)
+        except Exception:
+            pass
+        lbl._marquee_job = None
+
+    cleaned = (text or "").strip()
+    if not cleaned:
+        cleaned = "Not Set"
+
+    full_p = full_path if full_path is not None else cleaned
+    if full_p and full_p != "Not Set":
+        ToolTip(lbl, f"Full Path: {full_p}", app=app)
+
+    marquee_on = False
+    if app and hasattr(app, "config") and isinstance(app.config, dict):
+        marquee_on = bool(app.config.get("marquee_text_enabled", False))
+
+    compact = cleaned if len(cleaned) <= limit else f"{cleaned[:limit - 3]}..."
+
+    if len(cleaned) > limit and marquee_on:
+        padded = cleaned + "   •   "
+        def _tick(idx=0):
+            if not lbl.winfo_exists():
+                return
+            disp = (padded * 2)[idx:idx + limit]
+            lbl.config(text=disp)
+            next_idx = (idx + 1) % len(padded)
+            lbl._marquee_job = lbl.after(interval_ms, lambda: _tick(next_idx))
+        _tick(0)
+    else:
+        lbl.config(text=compact)
+        if len(cleaned) > limit:
+            padded = cleaned + "   •   "
+            def _on_hover_enter(event=None):
+                if getattr(lbl, "_hover_scrolling", False):
+                    return
+                lbl._hover_scrolling = True
+                def _hover_tick(idx=0):
+                    if not lbl.winfo_exists() or not getattr(lbl, "_hover_scrolling", False):
+                        return
+                    disp = (padded * 2)[idx:idx + limit]
+                    lbl.config(text=disp)
+                    next_idx = (idx + 1) % len(padded)
+                    lbl._marquee_job = lbl.after(interval_ms, lambda: _hover_tick(next_idx))
+                _hover_tick(0)
+
+            def _on_hover_leave(event=None):
+                lbl._hover_scrolling = False
+                job = getattr(lbl, "_marquee_job", None)
+                if job:
+                    try:
+                        lbl.after_cancel(job)
+                    except Exception:
+                        pass
+                    lbl._marquee_job = None
+                if lbl.winfo_exists():
+                    lbl.config(text=compact)
+
+            if not getattr(lbl, "_marquee_hover_bound", False):
+                lbl._marquee_hover_bound = True
+                lbl.bind("<Enter>", _on_hover_enter, add="+")
+                lbl.bind("<Leave>", _on_hover_leave, add="+")
+
+    def _on_destroy(event=None):
+        job = getattr(lbl, "_marquee_job", None)
+        if job:
+            try:
+                lbl.after_cancel(job)
+            except Exception:
+                pass
+            lbl._marquee_job = None
+
+    if not getattr(lbl, "_marquee_destroy_bound", False):
+        lbl._marquee_destroy_bound = True
+        lbl.bind("<Destroy>", _on_destroy, add="+")
+
+    def set_text(new_text, new_path=None):
+        setup_marquee_label(lbl, new_text, app=app, limit=limit, full_path=new_path, interval_ms=interval_ms)
+
+    lbl.set_marquee_text = set_text
 

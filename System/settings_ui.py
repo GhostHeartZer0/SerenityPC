@@ -288,8 +288,10 @@ def open_settings_window(app, is_generating=None):
             "k_cache_var": tk.StringVar(value=app.config.get("k_cache_type", "q8_0").lower()),
             "v_cache_var": tk.StringVar(value=app.config.get("v_cache_type", "q8_0").lower()),
             "history_mode_var": tk.StringVar(value=app.config.get("history_mode", "TurboVec" if app.config.get("turbovec_mode") == "on" else ("Off" if app.config.get("turbovec_mode") == "off" else "Keyword"))),
-            "history_usage_var": tk.StringVar(value=app.config.get("history_usage", "all")),
+            "history_usage_var": tk.StringVar(value="window" if app.config.get("history_usage") == "current_window" else app.config.get("history_usage", "all")),
             "history_lookup_var": tk.StringVar(value=app.config.get("history_lookup_mode", "targeted")),
+            "history_autosave_var": tk.StringVar(value=app.config.get("history_autosave_mode", "End")),
+            "history_level_format_var": tk.StringVar(value=app.config.get("history_level_format", "All")),
             "reasoning_var": tk.StringVar(value=init_reasoning),
             "delegation_enabled_var": tk.BooleanVar(value=app.config.get("delegation_enabled", False)),
             "delegation_model_mode_var": tk.StringVar(value=app.config.get("delegation_model_mode", "lvl6_7_model")),
@@ -341,6 +343,7 @@ def open_settings_window(app, is_generating=None):
             "MONO_FONT_OPTIONS": MONO_FONT_OPTIONS,
             "ui_font_var": tk.StringVar(value=app.config.get("ui_font", "Segoe UI")),
             "mono_font_var": tk.StringVar(value=app.config.get("mono_font", "Consolas")),
+            "marquee_text_var": tk.BooleanVar(value=app.config.get("marquee_text_enabled", False)),
             "open_scaling_center_fn": lambda: open_text_scaling_center(app, win)
         }
         vars_dict["budget_recovery_var"] = vars_dict["overfill_behavior_var"]
@@ -454,7 +457,63 @@ def open_settings_window(app, is_generating=None):
             tk.Button(dis_win, text="Decrypt & Disable", command=_do_disable,
                       bg="#660000", fg="white", font=app.fonts["ui_button"]).pack(pady=12)
 
+        def _open_encrypt_vault_modal():
+            if not hasattr(app, 'vault_manager'):
+                messagebox.showerror("Error", "Vault Manager is unavailable.", parent=win)
+                return
+
+            if not app.vault_manager.is_lock_enabled():
+                _open_set_password_modal()
+                return
+
+            enc_win = tk.Toplevel(win)
+            enc_win.title("Encrypt Profile Vault")
+            enc_win.geometry("540x380")
+            enc_win.config(bg=THEME["bg_color"])
+            enc_win.transient(win)
+            enc_win.grab_set()
+
+            disc_frame = tk.Frame(enc_win, bg="#330000", bd=2, relief=tk.RIDGE)
+            disc_frame.pack(fill=tk.X, padx=12, pady=10)
+            tk.Label(disc_frame, text="⚠️ DATA ENCRYPTION & LOSS WARNING ⚠️\n\nEncrypting history files (.jsonz to .encz) using AES-256-GCM.\nIf you lose your password, all encrypted data is PERMANENTLY lost.\nDefault and Public profiles are preserved in plaintext.",
+                     bg="#330000", fg="#ffcc00", font=app.fonts["log_bold"], justify=tk.LEFT).pack(padx=8, pady=8)
+
+            fields_frame = tk.Frame(enc_win, bg=THEME["bg_color"])
+            fields_frame.pack(fill=tk.X, padx=16, pady=4)
+
+            tk.Label(fields_frame, text="Enter Master Password:", bg=THEME["bg_color"], fg=THEME["fg_color"]).grid(row=0, column=0, sticky="w", pady=4)
+            pwd_var = tk.StringVar()
+            pwd_entry = tk.Entry(fields_frame, textvariable=pwd_var, show="*", width=24,
+                                 bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                 insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+            bind_entry_limit(pwd_entry, max_len=64)
+            pwd_entry.grid(row=0, column=1, padx=6, pady=4)
+            pwd_entry.focus_set()
+
+            def _do_encrypt():
+                pwd = pwd_var.get().strip()
+                if not pwd:
+                    messagebox.showerror("Error", "Password cannot be empty.", parent=enc_win)
+                    return
+                if not messagebox.askyesno("CONFIRM ENCRYPTION", "ARE YOU ABSOLUTELY SURE?\n\nProceed with AES-256-GCM history migration to .encz?", parent=enc_win):
+                    return
+                success, msg = app.vault_manager.encrypt_vault(pwd)
+                if success:
+                    messagebox.showinfo("Vault Encrypted", msg, parent=enc_win)
+                    if "refresh_vault_status" in vars_dict: vars_dict["refresh_vault_status"]()
+                    enc_win.destroy()
+                else:
+                    messagebox.showerror("Encryption Failed", msg, parent=enc_win)
+
+            btn_box = tk.Frame(enc_win, bg=THEME["bg_color"])
+            btn_box.pack(fill=tk.X, padx=16, pady=12)
+            tk.Button(btn_box, text="Encrypt Vault", command=_do_encrypt,
+                      bg=THEME["button_active_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"]).pack(side=tk.LEFT, padx=4)
+            tk.Button(btn_box, text="Cancel", command=enc_win.destroy,
+                      bg=THEME["button_bg_color"], fg=THEME["fg_color"]).pack(side=tk.RIGHT, padx=4)
+
         vars_dict["_open_set_password_modal"] = _open_set_password_modal
+        vars_dict["_open_encrypt_vault_modal"] = _open_encrypt_vault_modal
         vars_dict["_open_disable_vault_modal"] = _open_disable_vault_modal
 
         # --- 5. Construct All 6 Tabs ---
@@ -525,6 +584,8 @@ def open_settings_window(app, is_generating=None):
             app.config["k_cache_type"] = vars_dict["k_cache_var"].get()
             app.config["v_cache_type"] = vars_dict["v_cache_var"].get()
             app.config["history_lookup_mode"] = vars_dict["history_lookup_var"].get()
+            app.config["history_autosave_mode"] = vars_dict["history_autosave_var"].get()
+            app.config["history_level_format"] = vars_dict["history_level_format_var"].get()
             app.config["history_usage"] = vars_dict["history_usage_var"].get()
             app.config["history_mode"] = vars_dict["history_mode_var"].get()
             hm = vars_dict["history_mode_var"].get().lower()
@@ -536,6 +597,8 @@ def open_settings_window(app, is_generating=None):
                 app.ghost_button.config(text=app._get_ghost_mode_label(), fg=app._get_ghost_mode_color())
             if hasattr(app, 'history_usage_button') and app.history_usage_button:
                 app.history_usage_button.config(text=app._get_history_usage_label(), fg=app._get_history_usage_color())
+            if hasattr(app, 'history_autosave_button') and app.history_autosave_button:
+                app.history_autosave_button.config(text=app._get_history_autosave_label(), fg=app._get_history_autosave_color())
 
             try:
                 for pth in [os.path.join(app.script_dir, "Live", "System", "params.json"),
@@ -656,6 +719,11 @@ def open_settings_window(app, is_generating=None):
             app.config["status_bar_fallback_info"] = vars_dict["sb_fallback_var"].get()
             app.config["status_bar_linger_sec"] = float(vars_dict["sb_linger_var"].get())
             app.config["scroll_lock_enabled"] = vars_dict["scroll_lock_var"].get()
+            app.config["marquee_text_enabled"] = vars_dict["marquee_text_var"].get()
+            if hasattr(app, '_update_status_label_text') and hasattr(app, 'system_status_label'):
+                cur_txt = getattr(app, '_last_status_text', None) or (app.system_status_label.cget("text") if app.system_status_label else "")
+                if cur_txt:
+                    app._update_status_label_text(cur_txt)
             app.config["user_preferred_name"] = vars_dict["user_pref_name_var"].get().strip()
             app.config["user_address_style"] = vars_dict["user_addr_style_var"].get().strip()
             try:
@@ -828,10 +896,15 @@ def open_text_scaling_center(app, parent_win=None):
                 app.apply_text_scale(pct, persist=False)
             _update_preview_tags()
 
+        scale_ratio = getattr(app, "scale_factor", 1.0)
+        if scale_ratio <= 0.1:
+            scale_ratio = 1.0
         scale_slider = tk.Scale(ctrl_lf, from_=70, to=250, orient=tk.HORIZONTAL, variable=scale_var,
                                 command=_on_scale_slider_move, showvalue=False, bg=THEME["widget_bg_color"],
                                 fg=THEME["fg_color"], activebackground=THEME["electric_blue"],
-                                highlightthickness=0, bd=0)
+                                highlightthickness=0, bd=0,
+                                width=max(12, int(15 * scale_ratio)),
+                                sliderlength=max(18, int(24 * scale_ratio)))
         scale_slider.pack(fill=tk.X, pady=(0, 4))
 
         # Preset Quick Buttons
@@ -970,7 +1043,9 @@ def open_text_scaling_center(app, parent_win=None):
             s = tk.Scale(f, from_=-4, to=8, orient=tk.HORIZONTAL, variable=cat_vars[cat_key],
                          command=_make_cat_cmd(cat_key, v_lbl), showvalue=False, bg=THEME["widget_bg_color"],
                          fg=THEME["fg_color"], activebackground=THEME["electric_blue"],
-                         highlightthickness=0, bd=0)
+                         highlightthickness=0, bd=0,
+                         width=max(12, int(15 * scale_ratio)),
+                         sliderlength=max(18, int(24 * scale_ratio)))
             s.pack(fill=tk.X)
 
         # Live Preview Box

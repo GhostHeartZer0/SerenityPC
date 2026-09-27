@@ -210,9 +210,9 @@ CTX_PRESETS = [
 
 
 # ============================================================
-# Debate Engine
+# Debate Cores (Models)
 # ============================================================
-class DebateEngine:
+class DebateCore:
     """Runs a multi-round debate between contestants, scores with a judge."""
 
     def __init__(self):
