@@ -10,15 +10,137 @@
 - Stable, polished release (Manual Verification).
 
 ### Version 1.9.0
-- Cleared TODO Verifications (Completed Logs).
+- Cleared most TODO Verifications (Completed Logs).
 
 ### Version 1.8.0
-- Cleared TODO list for v2.0.
+- Cleared TODO list for v1.8.0.
 - Deep Cook Cycles Verified.
 
 ---
 
 ## Current Version:
+
+### Version 1.7.3
+- **Chat Format Auto-Recovery & Handler Caching**:
+  - Fixed `KeyError: None` crash in `llama-cpp-python` when running text turns on models initialized with a multimodal projector (such as Level 2 / Search tier).
+  - Implemented `_ensure_model_chat_format(model)` in `main.py` to auto-resolve native GGUF `chat_template.default`, metadata-guessed templates, or fallback chat formats whenever `chat_handler` is detached or not specified.
+  - Added `_cached_chat_handler` preservation to prevent expensive disk reloads of CLIP projectors during transitions between text and multimodal messages.
+  - Added unit test suite `System/tests/test_chat_format_recovery.py`.
+
+- **Vault Encryption Migration & Individual Profile Archiving**:
+  - Added "Encrypt Vault" button in Settings between "Set / Change Master Password" and "Disable Encryption / Decrypt".
+  - Implemented transactional migration in `VaultManager.encrypt_vault(password, target_history_dir)` to convert plaintext `.history.jsonz` files into AES-256-GCM `.history.encz` archives with automated backup retention and rollback on error.
+  - Added disclaimer dialog warning that Default (fresh init) and Public (shared/unencrypted) profile histories remain unencrypted while custom profiles can be selectively encrypted and protected.
+  - Created unit test suite `System/tests/test_vault_encrypt_migration.py` verifying password creation, existing password verification, and encryption conversion.
+
+- **Thoughts Dropdown & Gemma-4 Thinking**:
+  - Enabled thinking/reasoning mode across all persona levels when `thinking_checkbox` is enabled and `reasoning_strength != "off"` (allowing Gemma-4 reasoning on Lvl 1 & 2 per Option A).
+  - Preserved sampler hygiene in `_get_inference_params` by retaining `chat_template_kwargs` for reasoning-capable architectures.
+  - Resolved thoughts dropdown disappearing bug: persisted `reasoning_content` in message state dictionary (`self.messages`) and reconstructed collapsible thought widgets with toggle buttons during history reload and tab switching in `_render_messages_to_active_chat`.
+  - Fixed dropdown widget nuking in `_finalize_message`: constrained markdown tag cleanup and leak deletion to `ai_text_start` to preserve embedded thinking widgets.
+
+- **LaTeX Math Catch-All & Markdown Engine Overhaul**:
+  - Added catch-all forward slash symbol normalization (`SLASH_SYMBOL_MAP`, `STANDALONE_SLASH_REGEX`) to render plain text LaTeX commands outside math blocks (e.g. `/Delta` -> `Δ`, `/approx` -> `≈`, `/circ` -> `°`).
+  - Added support for single-letter variable math (`$U$`, `$x$`) while preserving currency amounts (`$100`, `$596,046,447,753,906`).
+  - Handled complex composite expressions like `**High Specific Heat Capacity** ($\approx 4.18\text{ kJ/kg}\cdot^\circ\text{C}$)` with dynamic text offset tracking in `_apply_markdown`.
+  - Added unit tests in `System/tests/test_markdown.py` covering single variable math and standalone slash symbols.
+
+- **Chat Scrolling & Scroll Lock Persistence**:
+  - Replaced flawed percentage threshold checks (`0.95` / `0.98`) with document-length-invariant physical line visibility (`_is_chat_at_bottom()` checking `hist.dlineinfo("end-1c") is not None` and exact `1.0` viewport fraction), preventing scroll degradation on long documents.
+  - Added comprehensive user scroll event bindings across `txt_chat` and `txt_chat.vbar` (`<MouseWheel>`, `<Button-4>`, `<Button-5>`, `<Button-1>`, `<B1-Motion>`, `<ButtonRelease-1>`, and keyboard navigation keys `<Prior>`, `<Next>`, `<Up>`, `<Down>`, `<Home>`, `<End>`) to immediately capture scroll intent.
+  - Prevented forced autoscrolling / scroll stealing across `_update_ai_message`, `_replace_ai_message`, `_append_to_chat`, `_update_thought_dropdown`, `_update_agentic_dropdown`, Deep Cook UI streams (`_ensure_deep_cook_dropdown`, `_handle_deep_cook_ui_batch`), and `_finalize_message` whenever the user is scrolled up or `scroll_lock_enabled` is active.
+  - Updated "Scroll Lock to Lines of Text" toggle description to accurately reflect locking the viewport in place during generation to prevent forced autoscrolling.
+  - Added automated unit test suite `System/tests/test_chat_scroll_lock.py` verifying short and massive (3000+ line) document scroll tracking and streaming viewport persistence.
+
+- **Offloaded Model Display & ToolTip De-duplication**:
+  - Resolved multi-tooltip window stacking bug in `ToolTip` (`System/serenity_utils.py`) by tracking event binding IDs, unbinding previous tooltip handlers on widget reassignment, and adding `update_text()` to dynamically change tooltip text in-place.
+  - Fixed offloaded model status bug in `main.py`: cleared `self.model_path` on `offload_model()`, added `get_proposed_model_path()` to resolve proposed model for active persona level/tier or staged multimodal, and updated `_revert_status_label()` to display `Selected: <model_name>` instead of `Loaded: <model_name>` when offloaded.
+  - Added real-time proposed model synchronization in `update_persona_display()` when sliding persona levels while offloaded.
+  - Added unit test suite `System/tests/test_offload_model_display_and_tooltips.py`.
+
+- **UI and Settings Renames**:
+  - Formatted Streaming Behavior push radio `"Experimental Chunking"` to 2 lines (`"Experimental\nChunking"`).
+  - Renamed the Chronicles button in persona frame from `"📜 Open Chronicles"` to open book icon `"📖"`.
+  - Updated Settings History Usage radio from `"current_window"` to `"window"`, normalizing across `settings_ui.py` and `main.py` while maintaining backwards compatibility for existing `"current_window"` configurations.
+  - Moved "Reasoning Strength" push radios in Settings Inference tab from Column 2 to Column 1 between "Repeat Loop Detection" and "Response Headroom", balancing both columns with 8 control groups each.
+
+- **Multi-Level History Pipeline & History AutoSave Modes**:
+  - Implemented session pipeline level tracking (`"level"` key on assistant messages) and dynamic level pipeline formatting supporting 5 modes: `All` (unique levels without repeats), `full` (full stacktrace with repeats), `ordered` (numerical order 1-7), `first` (first model invoked), and `last` (last model invoked).
+  - Enhanced `get_history_path` and `save_history` in `main.py` to name multi-level archives as `_lvls<A>_<B>...` with clean rollover cleanup from single-level predecessors.
+  - Added pipeline breakdown banner (`═══ PIPELINE BREAKDOWN: Lvl ... ═══`) prominently rendered at the top of history archives in `past_history_view`.
+  - Added multi-level archive regex support in `_get_all_history_entries` and dynamic multi-level badge rendering (` L4,6,2,3 `) in history archive item cards.
+  - Updated `TurboVecIndex` in `System/kv_manager.py` to parse multi-level filenames and match if `active_level` is contained within the archive's pipeline.
+  - Implemented configurable History AutoSave (`End`, `Close`, `Manual`):
+    - Added Settings > Inference tab controls `# 7. History AutoSave Mode` and `# 8. History Level Naming` directly below History Lookup Scope.
+    - Added quick-toggle push button (`history_autosave_button`) to the left of the History Usage toggle in the input controls bar, cycling `End` -> `Close` -> `Manual` with reactive color coding and logging.
+  - Added unit test suite `System/tests/test_multilevel_history_and_autosave.py` verifying pipeline formatting, file naming, header insertion, AutoSave modes, and TurboVec index ingestion.
+
+- **Vault History Unlock Persistence & Exit History on Cancel**:
+  - Preserved cached session key in `VaultManager.set_user_context` (`System/vault_manager.py`) when the state context is unchanged, preventing accidental session lock wipes when loading archives or switching profiles.
+  - Updated `show_vault_unlock_modal` and `switch_user` in `main.py` to verify password before switching active user context and cleanly unlock the vault afterwards, eliminating infinite reprompt loops when opening encrypted history files (`.history.encz`).
+  - Added Cancel button to `show_vault_unlock_modal` and updated modal close handler (`_on_close_modal`) to cleanly exit history view (`show_active_chat` and `_back_history`) instead of prompting to exit the application (`root.destroy()`).
+  - Added unit test suite `System/tests/test_vault_history_unlock.py` validating session key persistence and non-destructive history exit.
+
+- **Admin Profile Deletion & Profile Creation**:
+  - Implemented `delete_user_profile` in `ChatbotApp` (`main.py`) to safely delete user profile directories in `Users/<username>` and `History/<username>`, protecting system profiles (`Default`, `Public`) and cleanly falling back to `Default` if the active profile is deleted.
+  - Added `"Delete Profile"` button in Tab 5 (Users & Security) with confirmation prompt and master password verification when the vault is locked.
+  - Resolved "half profile" issue: modified `_open_create_profile_wizard` in `settings_tabs.py` to authenticate and switch before creating disk directories, eliminating orphaned folders on password cancellation or switch failure.
+  - Cleaned up half-created test profiles (`Jesse` and `Kavakarma`).
+  - Added unit test suite `System/tests/test_profile_deletion.py` covering system profile protection, directory deletion, active user fallback, and atomic creation failure recovery.
+
+- **Dedicated Profile Creation & Setup Wizard**:
+  - Split the combined `"Switch / Create Profile"` button into distinct `"Switch Profile"` and `"Create Profile"` buttons in Tab 5 (Users & Security).
+  - Implemented `_open_create_profile_wizard` modal dialog providing a guided setup flow for:
+    - Profile Username / ID (with validation and duplicate collision protection).
+    - Preferred Name / Call Sign.
+    - Addressing Style (`Direct / Plain`, `Warm / Familiar`, `Formal / Respectful`, `Silent / Unnamed`).
+    - Color Theme selection and Dark Mode toggle.
+  - Automatically initializes profile directory (`Users/<username>/config.json`), switches to the new profile, and synchronizes active UI settings variables.
+  - Added test suite `System/tests/test_profile_wizard.py` covering split buttons, modal form inputs, validation, and profile activation.
+
+### Version 1.7.2
+- **Model Titles Marquee Scrolling & Cores Naming Transition**:
+  - Replaced static truncation on model title labels with `setup_marquee_label`, smoothly scrolling filenames across tier blocks when `marquee_text_enabled` is active, with compact truncation and hover-activated marquee when disabled.
+  - Added dynamic path updater integration in `_set_path` and automated cleanup of scrolling timer handles upon widget destruction.
+  - Renamed Settings "Text & Inline Engines" section header to "Cores (Models):" with dedicated `ToolTip` on the word "Models" explaining "Large Language Models. Neural weights powering reasoning and conversation."
+  - Renamed individual engine tier titles to "Core:" (e.g. `Core: FAST (Lvl 1)`), vision section to "Vision Cores:", and updated UI references from engines to cores in model contexts.
+- **Startup Single Password Prompt & Modal Scaling**:
+  - Eliminated duplicate master password prompt at startup by gating auto-lock to actual profile transitions (`old_un != clean_un`) and adding `skip_lock_prompt` support to `switch_user`.
+  - Added scaling factor support and geometry persistence (`vault_modal_geometry` saved in config) to `show_vault_unlock_modal`, preserving user dimensions across app restarts.
+- **Backend Logs High-DPI Canvas & Icon Bleed Resolution**:
+  - Replaced hardcoded 104x28 canvas and 24px slot spacing with dynamic DPI/scale-ratio sizing (`_log_slot_w = max(34, int(32 * scale_ratio))`).
+  - Added explicit font sizing to log switcher canvas text icons to prevent symbol glyph overflow on High-DPI screens.
+  - Dynamically calculated click thresholds and knob slide coordinates (`2 + slot_idx * sw`) and added padding to adjacent utility buttons.
+- **Cecilia Persona Prefix & Deep Cook Tag Isolation (Option B)**:
+  - Ensured `_get_persona_label()` returns `"Cecilia"` strictly for Level 7 and `"Serenity"` otherwise, removing duplicate conflicting helper methods.
+  - Removed duplicate persona prefix output from Deep Cook cycle initiation, rendering cycles as anonymous background reasoning blocks.
+  - Upgraded `_sanitize_synthesis_output` and `_finalize_message` to strip model-generated self-prefixes (`Cecilia:`, `**Cecilia:**`, `Serenity:`) and isolate thought tags, Gemma turn tokens, and Deep Cook tracking tags from the final response.
+- **History Archive Scroll & Canvas TclError Fix**:
+  - Added `_unbind_history_mousewheel` to safely detach global `<MouseWheel>`, `<Button-4>`, and `<Button-5>` bindings from the root application when leaving, switching views, or re-rendering.
+  - Added `winfo_exists()` checks and automated cleanup to history canvas mousewheel callbacks and configure handlers, preventing `_tkinter.TclError: invalid command name` exceptions after canvas destruction.
+  - Bound `<Destroy>` on history canvas to ensure immediate cleanup of lingering global scroll hooks.
+- **Deep Cook Cycles Dropdowns Minimization**:
+  - Fixed Tkinter elision checking in `toggle_cyc`, `toggle_draft`, and `toggle_mem` (`str(hist.tag_cget(t, "elide")) in ["1", "True", "true"]`), allowing collapsed states to toggle properly upon click.
+  - Tagged embedded Tk step buttons with `cyc_tag` upon creation so embedded controls collapse cleanly along with text.
+  - Recursively elided and un-elided all tracked `nested_tags_{t}` when toggling master cycle dropdowns.
+- **4K UI & Sliders Dynamic Scaling**:
+  - Persona slider: Dynamically scaled `depth_slider` trough thickness (`width`), thumb size (`sliderlength`), and dynamic length by combining DPI scale factor and window resize factor (`max(scale_factor, _window_scale_factor)`); expanded max length clamp from 160px to `min(360, int(event.width * 0.26 * scale_ratio))` on 4K.
+  - Settings sliders: Dynamically scaled `sc_scale` (video sub-chunk size) and `linger_scale` (status linger time) in Additional Settings tab, and `tex_scale` (texture intensity) in Personalize tab.
+  - Text scaling center: Scaled `scale_slider` and category offset sliders `s` trough width and thumb size with DPI scale factor.
+- **LaTeX Math Engine Overhaul**:
+  - Added recursive balanced-delimiter extraction `_extract_balanced_braces` to handle arbitrary nested LaTeX braces.
+  - Normalized and supported `/frac` (with nested fractions), `/sum` (with sub/sup limits), `/times` (`×`), `/mathbf`, `/left`, `/right`, and multiline equation wrappers.
+  - Quad dollars: Extended math delimiters to support quad dollars (`$$$$`).
+  - Currency protection: Implemented regex protection for standalone currency amounts (`$596,046,447,753,906` and `$200`) so they are never erroneously paired or mangled as math spans.
+- **Status Bar, Hardware Badge & Footer Layout**:
+  - Anchored `hw_mode_label` (`[APEX]`) to the right (`side=tk.RIGHT`) before `system_status_label`, ensuring hardware badge is never pushed off-screen.
+  - Added `_update_status_label_text` with filler removal ("Loaded: <basename>"), end-truncation (`...`), and full path preservation in ToolTip.
+  - Converted footer control buttons to dual lines (`Deep\nCook`, `Ghost:\nOFF`, `Hist:\nAll`, `[🌈]\nRGB`) for compact fitting across panel widths.
+  - Added Universal Marquee Toggle (`marquee_text_enabled`) in Settings -> Personalize (Appearance) tab.
+- **Dynamic Avatar Panel Scaling**:
+  - Replaced hardcoded 350x350 box with `_get_avatar_target_size` responsive to right panel canvas dimensions (`max(300, rw - 24)`, `max(300, int(rh * 0.48))`).
+  - Cached raw uncompressed PIL images in `self.avatar_pil_images` for high-quality Lanczos re-scaling.
+  - Added quantized dimension tracking in `_position_canvas_elements` to dynamically re-scale active avatar when right panel or sash is resized.
 
 ### Version 1.7.1
 - **Markdown Engine & Prompt Formatting Overhaul**:
