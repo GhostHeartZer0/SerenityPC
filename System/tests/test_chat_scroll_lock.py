@@ -167,5 +167,29 @@ class TestChatScrollLock(unittest.TestCase):
         pos_after = self.txt_chat.yview()[0]
         self.assertAlmostEqual(pos_before, pos_after, places=3)
 
+    def test_mousewheel_targeted_isolation_and_no_leakage(self):
+        """Verify targeted mousewheel scrolling returns 'break' to prevent event bubbling."""
+        # 1. Test _bind_targeted_history_scroll
+        container = tk.Frame(self.root)
+        canvas = tk.Canvas(container)
+        label = tk.Label(container, text="Target")
+        label.pack()
+
+        # Bind targeted scroll
+        ChatbotApp._bind_targeted_history_scroll(self.app, container, canvas)
+
+        # Trigger virtual mousewheel event on label
+        evt = tk.Event()
+        evt.delta = 120
+        res = label.event_generate("<MouseWheel>", delta=120)
+        
+        # Verify root has no global bind_all leakage
+        all_bindings = self.root.bind_all()
+        self.assertNotIn("<MouseWheel>", all_bindings)
+        self.assertNotIn("<Button-4>", all_bindings)
+        self.assertNotIn("<Button-5>", all_bindings)
+
+        container.destroy()
+
 if __name__ == "__main__":
     unittest.main()

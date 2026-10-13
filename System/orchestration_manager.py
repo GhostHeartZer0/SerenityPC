@@ -10,6 +10,16 @@ import re
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Any, Optional, Tuple
 
+def clean_model_display_name(p: str) -> str:
+    """Extracts clean, concise model name for banner and title displays."""
+    name = os.path.basename(str(p or '')).strip()
+    if name.lower().endswith('.gguf'):
+        name = name[:-5]
+    name = re.sub(r'[-_.](?:UD[-_.])?(?:q[0-9]+[a-z0-9_]*|bf16|f16|iq[0-9]+[a-z0-9_]*)$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'[-_.](?:it|instruct|uncensored|heretic)$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'[-_.](?:qat[-_.]UD|qat)$', '', name, flags=re.IGNORECASE)
+    return name or os.path.basename(str(p or ''))
+
 @dataclass
 class QueryProfile:
     """Normalized intent and feature vector extracted from user input."""
@@ -226,7 +236,7 @@ class UtilityDispatchEngine:
         3: {"weights": [0.20, 0.25, 0.05, 0.05, 0.70], "cost": 0.10, "name": "Lvl 3 (Collaborator)"},
         4: {"weights": [0.00, 0.05, 0.90, 0.10, 0.10], "cost": 0.10, "name": "Lvl 4 (The Confidant)"},
         5: {"weights": [0.15, 0.85, 0.00, 0.00, 0.35], "cost": 0.20, "name": "Lvl 5 (The Brains / Sage)"},
-        6: {"weights": [0.40, 0.50, 0.20, 0.10, 0.80], "cost": 0.25, "name": "Lvl 6 (Transcendent)"}
+        6: {"weights": [0.40, 0.50, 0.20, 0.10, 0.80], "cost": 0.25, "name": "Lvl 6 (Serenity Prime)"}
     }
 
     DISPATCH_THRESHOLD = 0.28
@@ -454,7 +464,23 @@ class OrchestrationManager:
 
         lvl_to_tier = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
 
+        def _set_subagent_banner(lvl: int):
+            if not pq:
+                return
+            tier = lvl_to_tier.get(lvl, "fast")
+            model_p = ""
+            if model_mode == "per_subagent_model" and hasattr(self.app, "model_paths"):
+                model_p = self.app.model_paths.get(tier, "")
+            if not model_p:
+                model_p = getattr(self.app, "model_path", "")
+            model_name = clean_model_display_name(model_p) if model_p else tier.upper()
+            try:
+                pq.put({"status": "subagent_status", "active": True, "level": lvl, "model": model_name})
+            except Exception:
+                pass
+
         def _swap_for_step(target_lvl: int):
+            _set_subagent_banner(target_lvl)
             if model_mode == "per_subagent_model" and hasattr(self.app, "model_paths"):
                 tier = lvl_to_tier.get(target_lvl)
                 target_path = self.app.model_paths.get(tier)
@@ -649,6 +675,9 @@ class OrchestrationManager:
 
         finally:
             _restore_orchestrator()
+            if pq:
+                try: pq.put({"status": "subagent_status", "active": False})
+                except Exception: pass
 
         # Final Master Briefing Assembly
         facts_summary = "\n".join([f"- {f}" for f in active_ctx.staged_facts]) or "Direct Knowledge"

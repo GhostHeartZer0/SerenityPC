@@ -6,6 +6,7 @@ def _is_thought_opening(text):
     t_raw_lower = text.lower().lstrip()
     openers_exact = (
         "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
+        "<|channel|>analysis", "<|channel|>thought", "<|channel|>reasoning",
         "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]",
         "to=self<|message|>", "<|start|>assistant to=self", "to=self",
         "here's a thinking process:", "here is a thinking process:", "\u27e6", "⟦"
@@ -23,7 +24,8 @@ def _is_thought_opening(text):
 def split_thoughts_and_answer(raw_output):
     closers = [
         r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
-        r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+        r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final', r'<\|channel\|>text', r'<\|channel\|>assistant',
+        r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
         r'\[\/thinking\]', r'\[\/thought\]', r'\[\/reasoning\]',
         r'[\u27e7⟧]\s*<\/think>', r'[\u27e7⟧]',
         r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
@@ -35,7 +37,7 @@ def split_thoughts_and_answer(raw_output):
             all_splits.append(m.end())
 
     if not all_splits and (
-        any(t in raw_output.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]", "to=self", "<|start|>assistant to=self", "here's a thinking process", "here is a thinking process", "\u27e6", "⟦"])
+        any(t in raw_output.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|channel|>analysis", "<|channel|>thought", "<|channel|>reasoning", "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]", "to=self", "<|start|>assistant to=self", "here's a thinking process", "here is a thinking process", "\u27e6", "⟦"])
         or _is_thought_opening(raw_output)
     ):
         all_splits.append(len(raw_output))
@@ -45,7 +47,7 @@ def split_thoughts_and_answer(raw_output):
     if all_splits:
         for split in all_splits:
             remaining = raw_output[split:].strip()
-            if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
+            if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
                 continue
             best_split = split
             break
@@ -56,7 +58,7 @@ def split_thoughts_and_answer(raw_output):
         think_log = raw_output[:best_split].strip()
         final_answer = raw_output[best_split:].strip()
     else:
-        has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', raw_output, re.IGNORECASE))
+        has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', raw_output, re.IGNORECASE))
         if has_thought_openers or _is_thought_opening(raw_output):
             think_log = raw_output
             final_answer = ""
@@ -64,7 +66,7 @@ def split_thoughts_and_answer(raw_output):
             think_log = ""
             final_answer = raw_output.strip()
 
-    tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
+    tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|channel\|?>final|<\|channel\|?>text|<\|channel\|?>assistant|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|message\|>|<\|start\|>|<\|end\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
     think_log = re.sub(tag_clean_pattern, '', think_log).strip()
     think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
     final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
@@ -161,6 +163,75 @@ def test_nemotron_thought_split():
     assert "⟧" not in ans and "</think>" not in ans
     print("[PASS] Nemotron Here's a thinking process...</think> correctly split")
 
+def test_message_tag_leak_cleaned():
+    sample = "<|message|>The answer is 42.<|message|>"
+    think, ans = split_thoughts_and_answer(sample)
+    assert "<|message|>" not in ans, f"Expected <|message|> to be stripped, got: {ans}"
+    assert ans == "The answer is 42."
+    print("[PASS] Leaked <|message|> tags cleanly stripped")
+
+def test_channel_analysis_final_split():
+    sample = "<|channel|>analysis\nAnalyzing the query thoroughly step by step.\n<|channel|>final\nHere is the complete solution."
+    think, ans = split_thoughts_and_answer(sample)
+    assert "Analyzing the query thoroughly step by step." in think
+    assert ans == "Here is the complete solution."
+    assert "<|channel|>analysis" not in think and "<|channel|>final" not in ans
+    print("[PASS] <|channel|>analysis...<|channel|>final correctly split")
+
+def test_muse_glimmer_streaming_transition():
+    # Simulates token streaming behavior with the transition buffer
+    closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<\|channel\|>final|<\|channel\|>text|<\|channel\|>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|[\u27e7⟧]\s*<\/think>|[\u27e7⟧]|<\|eom\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
+    transition_header_regex = r'^\s*(?:<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|channel\|?>\s*(?:final|text|assistant)|to=user<\|message\|>|<channel\|>|<\/channel\|?>|<\|message\|>)+'
+
+    tokens = [
+        " to=self<|message|>", "Thinking", "...", "<|eom|>",
+        "<|start|>", "assistant", " to=user", "<|message|>",
+        "Clean", " response."
+    ]
+    full_resp = ""
+    in_thought = False
+    thought_detected = False
+    thought_end_pos = 0
+    streamed_answer = ""
+    streamed_answer_chars = 0
+    openers_clean = r'(?i)to=self<\|message\|>'
+
+    for tok in tokens:
+        full_resp += tok
+        if not thought_detected:
+            if "to=self<|message|>" in full_resp:
+                thought_detected = True
+                in_thought = True
+        else:
+            if in_thought:
+                m = re.search(closers_regex, full_resp, flags=re.IGNORECASE)
+                if m:
+                    in_thought = False
+                    thought_end_pos = m.end()
+                    raw_after = full_resp[thought_end_pos:]
+                    m_trans = re.match(transition_header_regex, raw_after)
+                    if m_trans:
+                        thought_end_pos += m_trans.end()
+            else:
+                raw_after = full_resp[thought_end_pos:]
+                m_trans = re.match(transition_header_regex, raw_after)
+                if m_trans:
+                    thought_end_pos += m_trans.end()
+                    raw_after = full_resp[thought_end_pos:]
+                
+                clean_ans = raw_after.lstrip('\r\n')
+                if clean_ans.strip().startswith(("<|", "to=", "<channel")) and len(clean_ans.strip()) < 50:
+                    pass
+                else:
+                    chunk = clean_ans[streamed_answer_chars:]
+                    if chunk:
+                        streamed_answer += chunk
+                        streamed_answer_chars += len(chunk)
+
+    assert streamed_answer == "Clean response.", f"Expected 'Clean response.', got '{streamed_answer}'"
+    assert "<|start|>" not in streamed_answer and "to=user" not in streamed_answer
+    print("[PASS] Muse Glimmer streaming transition buffer prevents leaks and stall")
+
 if __name__ == "__main__":
     test_qwen_thought_split()
     test_deepseek_think_split()
@@ -174,4 +245,7 @@ if __name__ == "__main__":
     test_bare_thought_channel_split()
     test_bare_thought_channel_only_thoughts()
     test_no_thought_tags()
+    test_message_tag_leak_cleaned()
+    test_channel_analysis_final_split()
+    test_muse_glimmer_streaming_transition()
     print("\nALL THOUGHT ISOLATION TESTS PASSED.")

@@ -92,6 +92,82 @@ except ImportError:
     )
 
 
+def apply_theme_to_settings_window(win, app=None):
+    """
+    Recursively reapplies active THEME across the entire Settings window hierarchy
+    to ensure no text or button is stuck on Yellow Blacket or Apex.
+    """
+    from serenity_resources import THEME
+    bg = THEME.get("bg_color", "#121214")
+    fg = THEME.get("fg_color", "#ffaa44")
+    widget_bg = THEME.get("widget_bg_color", "#18181c")
+    btn_bg = THEME.get("button_bg_color", "#24201c")
+    btn_active = THEME.get("button_active_color", "#382e24")
+    accent = THEME.get("electric_blue", "#ff7700")
+    accent_hl = THEME.get("accent_highlight", "#ff8800")
+    chat_bg = THEME.get("chat_bg_color", widget_bg)
+    chat_fg = THEME.get("chat_fg_color", fg)
+
+    if not win or not win.winfo_exists():
+        return
+
+    def _style_widget(w):
+        try:
+            w_class = w.winfo_class()
+            if w_class in ("Frame", "TLabelframe"):
+                try: w.config(bg=bg)
+                except Exception: pass
+            elif w_class == "LabelFrame":
+                try: w.config(bg=bg, fg=accent)
+                except Exception: pass
+            elif w_class == "Label":
+                try:
+                    cur_fg = str(w.cget("fg")).lower()
+                    cur_bg = str(w.cget("bg")).lower()
+                    if cur_fg in ("#ffcc00", "white", "#ff8a8a", "#ff4444") and cur_bg in ("#330000", "#660000"):
+                        pass
+                    elif cur_fg in ("#888888", "#aaaaaa", "#777777"):
+                        w.config(bg=bg, fg="#888888")
+                    elif "header" in str(getattr(w, "_name", "")).lower() or cur_fg in ("#00ffcc", "#00e5ff", "#ff8800", "#ffff00"):
+                        w.config(bg=bg, fg=accent)
+                    else:
+                        w.config(bg=bg, fg=fg)
+                except Exception: pass
+            elif w_class == "Button":
+                try:
+                    txt = str(w.cget("text"))
+                    cur_bg = str(w.cget("bg")).lower()
+                    if "delete" in txt.lower() or "destroy" in txt.lower() or cur_bg in ("#660000", "#4a0000"):
+                        pass
+                    else:
+                        w.config(bg=btn_bg, fg=fg, activebackground=btn_active, activeforeground=accent_hl)
+                except Exception: pass
+            elif w_class == "Entry":
+                try:
+                    w.config(bg=widget_bg, fg=fg, insertbackground=accent)
+                except Exception: pass
+            elif w_class in ("Radiobutton", "Checkbutton"):
+                try:
+                    w.config(bg=bg, fg=fg, selectcolor=widget_bg, activebackground=bg, activeforeground=accent_hl)
+                except Exception: pass
+            elif w_class == "Canvas":
+                try:
+                    w.config(bg=bg)
+                except Exception: pass
+            elif w_class == "Text":
+                try:
+                    w.config(bg=chat_bg, fg=chat_fg)
+                except Exception: pass
+        except Exception:
+            pass
+
+        for child in w.winfo_children():
+            _style_widget(child)
+
+    win.config(bg=bg)
+    _style_widget(win)
+
+
 def open_settings_window(app, is_generating=None):
     """
     Opens the reorganized SerenityPC settings window (V1.7.0).
@@ -173,10 +249,22 @@ def open_settings_window(app, is_generating=None):
         v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         def _on_mousewheel(event):
-            if canvas.winfo_exists():
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                    return "break"
+            except Exception: pass
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _bind_settings_mousewheel(event):
+            try: win.bind_all("<MouseWheel>", _on_mousewheel)
+            except Exception: pass
+
+        def _unbind_settings_mousewheel(event):
+            try: win.unbind_all("<MouseWheel>")
+            except Exception: pass
+
+        win.bind("<Enter>", _bind_settings_mousewheel, add="+")
+        win.bind("<Leave>", _unbind_settings_mousewheel, add="+")
 
         def on_closing():
             try:
@@ -187,9 +275,9 @@ def open_settings_window(app, is_generating=None):
                         app.save_config()
             except Exception: pass
             try:
-                canvas.unbind_all("<MouseWheel>")
+                win.unbind_all("<MouseWheel>")
                 print("[UI] Settings listener detached.")
-            except: pass
+            except Exception: pass
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", on_closing)
 
@@ -216,14 +304,25 @@ def open_settings_window(app, is_generating=None):
         # Theme and Texture Mapping
         THEME_MAP = {
             "Apex (Default)": "apex",
+            "Goth": "goth",
             "Goth / Obsidian Dark": "goth",
+            "Obsidian Dark": "obsidian_dark",
             "Crystal Cavern": "crystal_cavern",
             "Yellow Blacket": "yellow_blacket",
             "Natural (Earth / Moss)": "natural",
             "Matrix (Cyber Green)": "matrix",
             "Persona (Level Dynamic)": "persona"
         }
-        THEME_REV_MAP = {v: k for k, v in THEME_MAP.items()}
+        THEME_REV_MAP = {
+            "apex": "Apex (Default)",
+            "goth": "Goth",
+            "obsidian_dark": "Obsidian Dark",
+            "crystal_cavern": "Crystal Cavern",
+            "yellow_blacket": "Yellow Blacket",
+            "natural": "Natural (Earth / Moss)",
+            "matrix": "Matrix (Cyber Green)",
+            "persona": "Persona (Level Dynamic)"
+        }
         curr_theme_key = app.config.get("theme", "apex")
         if curr_theme_key == "default": curr_theme_key = "apex"
 
@@ -297,8 +396,13 @@ def open_settings_window(app, is_generating=None):
             "delegation_model_mode_var": tk.StringVar(value=app.config.get("delegation_model_mode", "lvl6_7_model")),
             "subagent_density_var": tk.StringVar(value=app.config.get("subagent_selection_mode", "minimal")),
             "cecilia_mode_var": tk.StringVar(value=app.config.get("cecilia_delegation_mode", "shadow_wizard")),
+            "show_cecilia_slider_var": tk.BooleanVar(value=app.config.get("show_cecilia_slider", False)),
             "chain_preset_var": tk.StringVar(value=app.config.get("delegation_chain_preset", "standard")),
             "handoff_target_var": tk.StringVar(value=app.config.get("delegation_handoff_target", "lvl3_compiler")),
+            "deep_cook_cycles_var": tk.StringVar(value=str(app.config.get("deep_cook_cycles", "3")).lower()),
+            "deep_cook_coop_var": tk.StringVar(value=str(app.config.get("deep_cook_agent_coop", "otl_per_step"))),
+            "deep_cook_format_var": tk.StringVar(value=str(app.config.get("deep_cook_formatting", "per_step"))),
+            "normal_format_var": tk.StringVar(value=str(app.config.get("normal_generation_formatting", "inline"))),
             "offline_mode_var": tk.BooleanVar(value=app.config.get("offline_mode", False)),
             "auto_vram_var": tk.BooleanVar(value=app.config.get("auto_vram_offload", False)),
             "spec_draft_var": tk.BooleanVar(value=app.config.get("speculative_drafting", False)),
@@ -551,17 +655,18 @@ def open_settings_window(app, is_generating=None):
 
         # Build Navigation Buttons
         tab_defs = [
-            ("models", "Models & Params"),
-            ("inference", "Inference"),
-            ("agents", "Agents"),
-            ("additional", "Additional Settings"),
-            ("users", "Users & Security"),
-            ("personalize", "Personalize")
+            ("models", "Models &\nParams"),
+            ("inference", "Inference &\nExecution"),
+            ("agents", "Agents &\nDeep Cook"),
+            ("additional", "Additional\nSettings"),
+            ("users", "Users &\nSecurity"),
+            ("personalize", "Personalize\n& Theme")
         ]
         for t_key, t_title in tab_defs:
             btn = tk.Button(tab_nav_frame, text=t_title, command=lambda k=t_key: _switch_tab(k),
                             bg=THEME["button_bg_color"], fg=THEME["fg_color"],
-                            font=app.fonts["ui_button"], relief=tk.FLAT, padx=8, pady=2)
+                            font=app.fonts["ui_button"], relief=tk.FLAT, padx=8, pady=2,
+                            justify=tk.CENTER)
             btn.pack(side=tk.LEFT, padx=2)
             tab_buttons[t_key] = btn
 
@@ -643,6 +748,16 @@ def open_settings_window(app, is_generating=None):
             app.config["stt_device_index"] = dev_id_map.get(vars_dict["stt_dev_var"].get(), None)
             app.config["stt_language"] = vars_dict["stt_lang_var"].get()
 
+            if "deep_cook_cycles_var" in vars_dict:
+                c_raw = str(vars_dict["deep_cook_cycles_var"].get()).strip().lower()
+                app.config["deep_cook_cycles"] = "auto" if c_raw == "auto" else (int(c_raw) if c_raw.isdigit() else 3)
+            if "deep_cook_coop_var" in vars_dict:
+                app.config["deep_cook_agent_coop"] = vars_dict["deep_cook_coop_var"].get()
+            if "deep_cook_format_var" in vars_dict:
+                app.config["deep_cook_formatting"] = vars_dict["deep_cook_format_var"].get()
+            if "normal_format_var" in vars_dict:
+                app.config["normal_generation_formatting"] = vars_dict["normal_format_var"].get()
+
             if hasattr(app, 'vault_manager'):
                 try: app.vault_manager.set_auto_lock_seconds(int(vars_dict["auto_lock_var"].get()))
                 except: pass
@@ -708,6 +823,12 @@ def open_settings_window(app, is_generating=None):
 
             app.config["delegation_enabled"] = vars_dict["delegation_enabled_var"].get()
             app.config["cecilia_delegation_mode"] = vars_dict["cecilia_mode_var"].get()
+            app.config["show_cecilia_slider"] = vars_dict["show_cecilia_slider_var"].get()
+            if hasattr(app, "depth_slider") and app.depth_slider:
+                if app.config["show_cecilia_slider"]:
+                    app.depth_slider.config(to=7)
+                elif app.active_persona_level <= 6:
+                    app.depth_slider.config(to=6)
             app.config["subagent_selection_mode"] = vars_dict["subagent_density_var"].get()
             app.config["delegation_model_mode"] = vars_dict["delegation_model_mode_var"].get()
             app.config["delegation_chain_preset"] = vars_dict["chain_preset_var"].get()
@@ -761,6 +882,7 @@ def open_settings_window(app, is_generating=None):
                     scrollable_frame.config(bg=THEME["bg_color"])
                     btn_frame.config(bg=THEME["bg_color"])
                     tab_nav_frame.config(bg=THEME["bg_color"])
+                    apply_theme_to_settings_window(win, app)
                     _switch_tab(list(tab_frames.keys())[0])
             except Exception as te:
                 print(f"[SETTINGS] Failed to apply theme: {te}")
@@ -814,6 +936,8 @@ def open_settings_window(app, is_generating=None):
                                bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"], relief=tk.FLAT)
         btn_cancel.pack(side=tk.RIGHT, padx=3)
         ToolTip(btn_cancel, "Discard unapplied changes and close settings window.", app=app)
+
+        apply_theme_to_settings_window(win, app)
 
     except Exception as e:
         import traceback
@@ -1071,7 +1195,7 @@ def open_text_scaling_center(app, parent_win=None):
         def _fill_preview_content():
             prev_text.config(state='normal')
             prev_text.delete('1.0', tk.END)
-            prev_text.insert(tk.END, "You: ", ("user_lead",))
+            prev_text.insert(tk.END, "Prompt: ", ("user_lead",))
             prev_text.insert(tk.END, "Can you show me a sample code and status readout?\n\n", ("user",))
             prev_text.insert(tk.END, "Serenity: ", ("ai_lead",))
             prev_text.insert(tk.END, "# SerenityPC System Ready\n", ("md_header_1",))

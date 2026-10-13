@@ -143,56 +143,106 @@ def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_ar
                 return False
 
             val_str_pos, val_str_len, orig_arch = arch_key_info
-            print(f"[GGUF PATCH] Detected architecture string: '{orig_arch}'")
+            orig_arch_clean = orig_arch.rstrip("\x00")
+            print(f"[GGUF PATCH] Detected architecture string: '{orig_arch_clean}'")
 
             # Scan key prefixes and string metadata values in file first
             detected_prefix = None
+            tokenizer_model = None
+            general_name = None
             for rec in kv_records:
-                k_str = rec[2]
-                val_str = rec[7]
+                k_str = rec[2].rstrip("\x00")
+                val_str = rec[7].rstrip("\x00") if rec[7] else None
                 
                 # Dynamically determine the current key prefix used in the file
                 if ".context_length" in k_str or ".block_count" in k_str:
                     detected_prefix = k_str.split(".")[0].lower()
-                    break
                     
-                # Fallback to checking tokenizer string values
-                if val_str and val_str.lower() in ["gemma4", "gemma3", "llama"]:
-                    detected_prefix = val_str.lower()
-                    break
+                if k_str == "tokenizer.ggml.model" and val_str:
+                    tokenizer_model = val_str.lower()
+                elif k_str in ("general.name", "general.basename") and val_str:
+                    general_name = val_str.lower()
+
+            # Known architectures natively supported by llama.cpp
+            KNOWN_NATIVE_ARCHS = {
+                "llama", "gemma", "gemma2", "gemma3", "gemma3n", "gemma4", "gemma4-assistant",
+                "muse", "glimmer", "muse-glimmer", "nemotron", "nemotron_h", "nemotron_h_moe",
+                "gpt-oss", "olmo", "olmo2", "olmoe", "phi", "phi2", "phi3", "deepseek",
+                "deepseek2", "deepseek3", "qwen", "qwen2", "qwen35", "granite", "granitemoe",
+                "granitehybrid", "command-r", "cohere2", "dbrx", "chatglm", "glm4", "glm4moe",
+                "rwkv6", "rwkv7", "chameleon", "bitnet", "t5", "t5encoder", "exaone", "exaone4",
+                "exaone-moe", "smollm3", "lfm2", "lfm2moe", "mamba", "mamba2", "jamba",
+                "starcoder", "starcoder2", "internlm2", "minicpm", "minicpm3"
+            }
+
+            orig_arch_lower = orig_arch_clean.lower()
+            model_base = os.path.basename(model_path).lower()
+
+            # --- EDGE CASE GUARD PROTOCOL ---
+            # Guard 1: Detect damaged Gemma models that were corrupted to 'llama' by a previous buggy patch pass
+            is_corrupted_gemma = False
+            gemma_restore_arch = None
+            if orig_arch_lower == "llama":
+                if tokenizer_model and "gemma" in tokenizer_model:
+                    is_corrupted_gemma = True
+                    gemma_restore_arch = tokenizer_model
+                elif general_name and "gemma" in general_name:
+                    is_corrupted_gemma = True
+                    gemma_restore_arch = "gemma4" if ("gemma-4" in general_name or "gemma4" in general_name) else ("gemma2" if ("gemma-2" in general_name or "gemma2" in general_name) else "gemma")
+                elif "gemma" in model_base:
+                    is_corrupted_gemma = True
+                    gemma_restore_arch = "gemma4" if ("gemma-4" in model_base or "gemma4" in model_base) else ("gemma2" if ("gemma-2" in model_base or "gemma2" in model_base) else "gemma")
 
             # Determine target architecture
-            orig_arch_lower = orig_arch.lower()
-            if "muse" in orig_arch_lower or "glimmer" in orig_arch_lower:
-                target_arch = orig_arch
-            elif "gemma" in orig_arch_lower:
-                # If specific new_arch is explicitly requested (e.g. for standalone drafter adapter), honor it
-                if new_arch and new_arch.lower() != orig_arch_lower:
-                    target_arch = new_arch
-                else:
-                    target_arch = orig_arch
+            if is_corrupted_gemma and gemma_restore_arch:
+                print(f"[GGUF GUARD] Detected corrupted Gemma model tagged as llama; auto-restoring to '{gemma_restore_arch}'.")
+                target_arch = gemma_restore_arch
+            elif any(k in orig_arch_lower for k in ("muse", "glimmer")):
+                target_arch = orig_arch_clean
+            elif any(k in orig_arch_lower for k in ("gemma",)):
+                # Gemma variants are native and strictly incompatible with Llama architecture; NEVER patch to llama
+                target_arch = orig_arch_clean
+            elif orig_arch_lower == "spark2_5":
+                # spark2_5 utilizes fused QKV and sliding-window attention; cannot be patched to llama
+                print("[GGUF PATCH] 'spark2_5' is a specialized fused-QKV architecture; preserving original architecture string.")
+                target_arch = orig_arch_clean
+            elif orig_arch_lower in KNOWN_NATIVE_ARCHS:
+                target_arch = orig_arch_clean
             elif detected_prefix == "llama":
                 target_arch = "llama"
             else:
-                target_arch = new_arch or default_arch or orig_arch
+                target_arch = new_arch or default_arch or orig_arch_clean
 
             # Patch general.architecture if needed
-            if orig_arch != target_arch:
+            if orig_arch_clean != target_arch:
                 target_bytes = target_arch.encode("utf-8")
                 if len(target_bytes) <= val_str_len:
                     f.seek(val_str_pos + 8) # skip the 8-byte length prefix
                     f.write(target_bytes + b"\x00" * (val_str_len - len(target_bytes)))
-                    print(f"[GGUF PATCH] Patched general.architecture: '{orig_arch}' -> '{target_arch}'")
+                    print(f"[GGUF PATCH] Patched general.architecture: '{orig_arch_clean}' -> '{target_arch}'")
                     patched_anything = True
                 else:
-                    print(f"[GGUF PATCH] Cannot patch architecture string: '{target_arch}' is longer than '{orig_arch}'")
+                    print(f"[GGUF PATCH] Cannot patch architecture string: '{target_arch}' is longer than '{orig_arch_clean}'")
+
+            # Auto-heal: Repair unrecognized pre-tokenizers (e.g. minicpm5 -> default)
+            for rec in kv_records:
+                k_str, val_str_p, val_str_l, val_s = rec[2].rstrip("\x00"), rec[5], rec[6], rec[7]
+                if k_str == "tokenizer.ggml.pre" and val_s and val_str_p is not None:
+                    if val_s.rstrip("\x00").lower() == "minicpm5":
+                        new_pre = "default"
+                        new_pre_bytes = new_pre.encode("utf-8")
+                        if len(new_pre_bytes) <= val_str_l:
+                            f.seek(val_str_p + 8)
+                            f.write(new_pre_bytes + b"\x00" * (val_str_l - len(new_pre_bytes)))
+                            print(f"[GGUF PATCH] Patched tokenizer.ggml.pre: '{val_s}' -> '{new_pre}'")
+                            patched_anything = True
 
             # Auto-heal: If tokenizer.ggml.model was previously corrupted to 'llama' on a Gemma model, restore it back to 'gemma4' or 'gemma'
-            if "gemma" in orig_arch_lower:
+            if "gemma" in orig_arch_lower or is_corrupted_gemma:
                 for rec in kv_records:
-                    k_str, val_str_p, val_str_l, val_s = rec[2], rec[5], rec[6], rec[7]
+                    k_str, val_str_p, val_str_l, val_s = rec[2].rstrip("\x00"), rec[5], rec[6], rec[7]
                     if k_str == "tokenizer.ggml.model" and val_s and "llama" in val_s.lower() and val_str_p is not None:
-                        new_val = "gemma4" if val_str_l >= 6 else "gemma"
+                        new_val = gemma_restore_arch or ("gemma4" if val_str_l >= 6 else "gemma")
                         new_val_bytes = new_val.encode("utf-8")
                         if len(new_val_bytes) <= val_str_l:
                             f.seek(val_str_p + 8)
@@ -209,9 +259,10 @@ def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_ar
                     prefix_patched_count = 0
                     for rec in kv_records:
                         key_pos, key_len, key_str = rec[0], rec[1], rec[2]
-                        if key_str.startswith(old_prefix):
+                        clean_key = key_str.rstrip("\x00")
+                        if clean_key.startswith(old_prefix):
                             # Replace prefix, shift the rest of the string, and pad with \x00 at the end
-                            new_key_str = new_prefix + key_str[len(old_prefix):]
+                            new_key_str = new_prefix + clean_key[len(old_prefix):]
                             new_key_bytes = new_key_str.encode("utf-8")
                             
                             if len(new_key_bytes) <= key_len:
@@ -220,7 +271,7 @@ def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_ar
                                 f.write(padded_bytes)
                                 prefix_patched_count += 1
                             else:
-                                print(f"[GGUF PATCH] Cannot patch key '{key_str}' because new key '{new_key_str}' is longer.")
+                                print(f"[GGUF PATCH] Cannot patch key '{clean_key}' because new key '{new_key_str}' is longer.")
 
                     if prefix_patched_count > 0:
                         print(f"[GGUF PATCH] Patched {prefix_patched_count} KV key prefixes from '{old_prefix}' to '{new_prefix}'")
@@ -1400,10 +1451,10 @@ class DynamicStatusWidget(tk.Frame):
             
             if step == 1:
                 lvl = getattr(self.app, 'active_persona_level', 3) if self.app else 3
-                tier = getattr(self.app, 'current_model_tier', 'low') if self.app else 'low'
+                tier = (getattr(self.app, 'current_model_tier', 'low') or 'None') if self.app else 'low'
                 m_p = getattr(self.app, 'model_path', '') if self.app else ''
                 m_name = os.path.basename(m_p) if m_p else 'None'
-                self.label.config(text=f"[Lvl {lvl}] {tier.upper()} | Model: {m_name}")
+                self.label.config(text=f"[Lvl {lvl}] {str(tier).upper()} | Model: {m_name}")
                 self._update_fallback_info()
                 return
             elif step == 2:
@@ -1659,7 +1710,7 @@ TUTORIAL_SCREENS = [
             "Adjust the bottom Persona Slider from Level 1 to Level 6 to modulate depth and personality:\n\n"
             "• Lvl 1 - 2: Concise, direct utility and rapid facts.\n"
             "• Lvl 3 - 5: Balanced reasoning, thoughtful synthesis, and deep technical mastery.\n"
-            "• Lvl 6: The Transcendent One — comprehensive multi-angle philosophical synthesis.\n"
+            "• Lvl 6: Serenity Prime — comprehensive multi-angle philosophical synthesis.\n"
             "• Lvl 7 (Secret): Double-click the space between 'Persona:' and the slider to evolve the interface into Cecilia."
         ),
         "hint": "Each persona maintains separate dialogue history and memory context."

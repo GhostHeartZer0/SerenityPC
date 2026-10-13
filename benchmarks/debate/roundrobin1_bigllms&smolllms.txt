@@ -1,0 +1,29 @@
+	Big LLM Tourney
+
+Meta Muse Glimmer 30B
+NVIDIA Nemotron 30B-A3B
+Gemma-4-26B-A4B-it-qat
+Olmo-3-32B-Think
+Mistral-Small-24B-it-2501
+Qwen3.8-27B
+Granite-4.2-3B
+gemma-4-26B-A4B-q4_0-it
+
+	Mid Tier:
+gemma-4-12B-it-qat
+gemma-4-12B-it v2 yuxinlu
+codegemma-7B-it
+Granite-4.2-8b
+
+	Smol LLM Tourney
+
+Phi-4-mini-reasoning
+Sharp-MiniCPM5-2B
+Spark-X2.5
+gemma-3-1b-it-qat
+gemma-3-270m
+Olmo-3-7B-Think
+gemma-4-E2B-it-qat
+gemma-4-E4B-it-qat
+Granite-4.2-30b
+gemma-4-E4B-it-Coder
