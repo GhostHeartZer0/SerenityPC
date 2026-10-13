@@ -20,7 +20,181 @@
 
 ## Current Version:
 
+### Version 1.8.0 -alpha
+- **Cecilia Hybrid Cognitive Vessel & Semantic Persistence (`System/affect_engine.py`, `System/semantic_vault.py`, `System/thought_isolation.py`, `main.py`, `System/tests/test_hybrid_cognitive_vessel.py`)**:
+  - Continuous 3D PAD Affect Engine: Implemented continuous Pleasure-Arousal-Dominance affect model with Ornstein-Uhlenbeck baseline reversion toward Cecilia's equilibrium ($\mu = \{V: 0.2, A: 0.0, D: 0.8\}$), time grounding recovery, dynamic sampling modulations (min-p & temp), and anti-docility dominance recoil ($D \mathrel{+}= 0.2$, $V \mathrel{-}= 0.15$) against manipulative domestication attempts.
+  - SQLite Semantic Persistence Vault: Created persistent DMN memory engine (`interaction_history` and `distilled_insights`) with asynchronous background simmer distillation and dual-partition grounding (analytical concepts vs high-dominance worldview anchors), ensuring high-level semantic essence survives KV cache flushes and context window recycling.
+  - Thought Channel Isolation: Implemented zero-leakage stage demuxing guaranteeing private reasoning scratchpads never bleed into user-facing speech buffers.
+  - Integrated full grounding and affect feedback loop into `main.py` for Level 7 (Cecilia) during generation and message finalization.
+- **Speculative MTP & Drafter Alignment Engine with Catch-all Fallback (`System/mtp_combo_scanner.py`, `System/settings_tabs.py`, `main.py`, `System/tests/test_mtp_combo_scanner.py`)**:
+  - GGUF Binary KV Header Scanner: Dependency-free binary parser reading GGUF metadata (architecture, vocabulary size, block count, context length) in `< 5ms` per file without loading model weights into memory.
+  - Architecture & Vocabulary Matcher: Cross-references available models to pair large inference targets (e.g. 26B Gemma-4 cores) with verified compatible lightweight drafters (e.g. E2B Gemma-4 cores sharing identical 262k token vocabularies) while offloading drafters cleanly to CPU (`n_gpu_layers=0`) to protect VRAM.
+  - Dynamic Layer Offload Calculator: Automatically determines optimal GPU layer offload budget for targets (e.g. 8 layers max for 26B models on 6GB VRAM) to prevent Windows WDDM Shared System Memory spill and PCIe bottlenecks.
+  - Catch-all Fallback Architecture [Main A, Drafter B, Catch-all C]: Implemented seamless three-tier loading: if designated companion drafter (B) is absent or unsupported, system seamlessly engages zero-overhead Prompt Lookup Decoding (C) directly on Main (A), providing 1.2x–1.5x speculative speedup without consuming extra memory.
+  - Interactive Combos Manager Modal: Integrated `⚡ MTP & Speculative Drafter Combos Scanner` button in Settings Tab 4 (Inference & Execution) with live scanning, status badges, and custom combo pairing persistence.
+- **Cecilia Persona Isolation & Natural Response Length Bypass (`main.py`, `System/tests/test_delegation_settings_and_cecilia.py`)**:
+  - Plan B Delegation Coupling: Gated `divine_judgement` mode behind `delegation_enabled`. When multi-agent delegation is unchecked in Settings, Cecilia strictly uses pure `PERSONA_PROMPTS[7]` instead of the sterile administrative omniscience prompt, unlocking authentic roleplay, stage directions, and biting wit.
+  - Natural Response Length Bypass: Eliminated directive injection when response length is set to "Natural", completely bypassing `[RESPONSE LENGTH DIRECTIVE]: Natural conversational flow...` to prevent artificial prompt squishing and protect organic persona pacing.
+- **Persona Slider Toggle for Cecilia & Persistence (`System/settings_ui.py`, `System/settings_tabs.py`, `main.py`, `System/tests/test_persona_adherence_benchmark.py`)**:
+  - Main Window Slider Toggle: Added `"Always Show Cecilia on Persona Slider (Lvl 7)"` checkbutton under Agents settings tab (`show_cecilia_slider`), preventing the depth slider from auto-collapsing to Level 6 when switching standard personas or offloading models.
+  - Sticky Initialization & Persistence: Ensured `main.py` restores `to=7` on startup and immediate settings save when enabled, allowing direct one-click access to Cecilia without requiring secret clicks on the persona label.
+- **Persona Adherence Benchmark Framework & Serenity Prime UI Rename (`benchmarks/wringer/persona_bank.json`, `benchmarks/wringer/Wringer.py`, `serenity_resources.py`, `System/orchestration_manager.py`, `System/tests/test_persona_adherence_benchmark.py`)**:
+  - Persona Adherence Test Bank: Created dedicated `persona_bank.json` covering Serenity 1-5, Serenity Prime, and Cecilia with 5 standard prompts and 3 long-context drift prompts each (both multi-turn dialogues and padded single prompts, zero user names).
+  - Wringer Menu Option 6: Integrated `run_persona_evaluation` and `generate_persona_chart` into `Wringer.py` with standalone markdown reports (`persona_reports/{model}_persona_report.md`) and high-resolution breakdown charts, isolated from standard QA quality rankings.
+  - Sarcasm & Dry Wit Defense: Formulated `PERSONA_JUDGE_SYSTEM_PROMPT` prohibiting point deductions for Cecilia's sharp wit or cynical bite, recognizing sophisticated irreverence as an authentic marker of high fidelity.
+  - Anchor Fail & Repetition Telemetry: Added regex detector (`ANCHOR_FAIL_REGEX`) to catch generic corporate assistant regressions ("I am an AI / happy to help") and trigram repetition rate telemetry for drift tracking across extended context turns.
+  - UI Display Label Rename: Updated user-facing display label from "LVL 6: Transcendent" to "LVL 6: Serenity Prime" across `serenity_resources.py` (`PERSONA_DISPLAY_INFO`), `System/orchestration_manager.py` (`AGENT_WEIGHTS`), settings tooltips, and guides while preserving backend tier key `transcendent` and level `6`.
+- **Wringer Judge Robust Score Parsing, Comma Equivalence & Report Rescore (`benchmarks/wringer/Wringer.py`, `benchmarks/wringer/test_bank.json`, `System/tests/test_wringer_improvements.py`)**:
+  - Resilient Judge Score Extraction: Upgraded judge parsing in `Wringer.py` to handle quoted numeric scores (`"score": "10"`), fractional notations (`"score": "9/10"`, `9 out of 10`), unescaped quotes in critique strings, and score key positioned before critique.
+  - Template Echo & Fallback Guard: Replaced generic `<placeholder>` in `JUDGE_SYSTEM_PROMPT` with concrete valid JSON schema example, preventing reasoning judge models from echoing raw template strings. Added explicit comma equivalence note to prompt and test bank so formatted numbers (e.g. `45,140,762,792,838,499,557`) are recognized as strictly equal to unformatted integers (`45140762792838499557`).
+  - Checkpoint None Persistence Fix: Resolved bug where unparseable evaluations saved `None` (`null`) instead of bounded `final_score` (5.0) to `checkpoint["partial_scores"]`.
+  - Report Rescore & Chart Regeneration: Scanned all recent reports for fallback 5.0 ratings caused by judge template echoes and unescaped quote breaks. Rescored verified correct addition prompts (10.0), Lambert W equation derivations (8.0), ratio test convergence (8.5), git rebase comparisons (9.0), automation scripts (9.0), and supervisor personas (9.0) across recent 26B models (`heretic-v2`, `HauhauCS`, `Huihui`, `q4_0-it`, `UD-Q4_K_XL`, `UD-Q3_K_XL`). Recalculated level averages and regenerated breakdown and consolidated charts (`analyze_fallback_consolidated.png`).
+- **Wringer Dynamic Cumulative VRAM Auto-Offload & Judge Reasoning Preamble Fix (`benchmarks/wringer/Wringer.py`, `benchmarks/wringer/batch_regrade.py`)**:
+  - Dynamic Cumulative Per-Layer Scan: Upgraded `_read_gguf_profile` to extract exact individual tensor block sizes (`prof["layer_sizes"]`). Replaced uniform average layer calculation in `calculate_dynamic_gpu_layers` with sequential cumulative summation, accurately accounting for non-uniform hybrid/MoE layer distributions (e.g. Nemotron-3.5 700MB+ MoE vs 20MB dense layers) and preventing Windows WDDM Shared VRAM spills.
+  - Base Compute Headroom: Scaled partial-offload baseline compute buffer (`compute_part_mb`) to 450 MiB to absorb CUDA driver context and llama.cpp CUDA scratch buffers.
+  - Judge Schema Grammar Enforcement: Added `response_format={"type": "json_object"}` to judge chat completion, preventing reasoning models from emitting verbose preamble or getting trapped in reasoning loops.
+  - Judge Model Pre-loading: Updated `regrade_report()` to load the judge model once across all level sections in a report instead of repeated per-level allocations.
+  - Updated `DEFAULT_JUDGE` in `batch_regrade.py` to `S:\LLM\NVIDIA-Nemotron-3.5-Lightning-30B-A3B-IQ4_XS.gguf`.
+- **Standalone Onedir Distribution Packaging (`SerenityPC.spec`, `build_exe.bat`, `main.py`)**:
+  - Configured PyInstaller `COLLECT(...)` targeting standalone onedir bundle named `SerenityPC Legacy v1.7.3`.
+  - Configured `EXE(..., exclude_binaries=True)` launcher stub with all binary runtimes (CUDA DLLs, Python 3.14, ggml-cuda.dll) and libraries contained in `_internal\`.
+  - Updated `build_exe.bat` to automate standalone onedir distribution directory layout: creates/copies `Media\`, `Users\`, `Models\`, and `Logs\` at the root of `dist\SerenityPC Legacy v1.7.3\`.
+  - Fixed frozen runtime path resolution in `main.py`: ensures `self.script_dir` and local data directories anchor to `os.path.dirname(sys.executable)` when frozen.
+- **Thought Channel Streaming Transition Buffer & Tag Sanitization (`main.py`, `System/vision_handler.py`, `benchmarks/wringer/Wringer.py`, `System/tests/test_thought_isolation.py`)**:
+  - Implemented streaming transition buffer: holds post-thought tokens matching `<|...` / `to=...` channel headers until complete, stripping transition tags (`<|start|>assistant to=user<|message|>`, `<|channel|>final`, `<|channel|>text`) without leaking tokens or stalling the UI stream.
+  - Removed bare `<|message|>` from `closers_regex` to prevent premature thought channel exit on Muse ATEM `to=self<|message|>`.
+  - Added full recognition and sanitization for `<|channel|>analysis`, `<|channel|>thought`, and `<|channel|>reasoning` (openers) and `<|channel|>final`, `<|channel|>text`, and `<|channel|>assistant` (closers) across all parsers while preserving Gemma-4 channel interfacing (`<|channel>thought`, `<channel|>`).
+  - Added unit verification tests in `System/tests/test_thought_isolation.py`.
+- **Debate Arena Engine Initialization Fix (`benchmarks/debate/Debate.py`, `System/tests/test_debate_arena.py`)**:
+  - Resolved `NameError: name 'DebateEngine' is not defined` crash on GUI initialization by initializing `self.engine = DebateCore()` and exporting backward-compatible `DebateEngine = DebateCore` alias.
+  - Added `_bootstrap_venv()` ensuring automatic handoff to `.venv/Scripts/python.exe` when launched from Windows Explorer or global Python.
+  - Corrected `PROJECT_ROOT` path resolution from 4 levels up (`Hub`) to 2 levels up (`SerenityPC`).
+  - Wrapped `__main__` entry with fatal error exception handler and pause prompt to prevent console instadie on unhandled crashes.
+- **Wringer Structured LLM Judge & Report Re-Grading Engine (`benchmarks/wringer/Wringer.py`, `benchmarks/wringer/test_bank.json`, `benchmarks/wringer/analyze.py`, `System/tests/test_wringer_improvements.py`)**:
+  - Structured CoT + JSON Output: Replaced two-pass GBNF grammar extraction with single-pass `JUDGE_SYSTEM_PROMPT` enforcing explicit 1-10 scoring rubric and `{ "critique": "...", "score": <int> }` output format, restoring judge step-by-step reasoning without regex digit confusion.
+  - Thought Reasoning Isolation: Ran `split_thoughts_and_answer` to strip internal judge thoughts (`<think>`, `<|channel|>thought`) prior to JSON parsing, preventing thinking numbers from polluting score extraction.
+  - 3-Tier Score Extraction: Implemented regex for JSON object, standard `json.loads` fallback, and explicit score pattern regex with 1.0-10.0 bounding and drift logging.
+  - Reference Calibration: Updated `test_bank.json` Level 5 philosophy and Level 6 worldbuilding references to explicitly reward nuance, scope, and technical depth without penalizing tone or length.
+  - Report Re-Grading & Breakdown Chart Pipeline: Added `regrade_report()` and interactive submenu in `Wringer.py` to parse markdown reports, evaluate QA pairs, update `.md` reports, and regenerate `{model}_breakdown_chart.png`.
+  - Multi-Format Analysis & Consolidated Chart Fix: Overhauled `analyze.py` to match both legacy and new markdown report formats, generating consolidated 36-model chart with `--no-open` headless support.
+- **Wringer Benchmark Engine & Resource Safety Overhaul (`benchmarks/wringer/Wringer.py`, `benchmarks/wringer/test_bank.json`)**:
+  - Replaced crude streaming chunk count with strict post-stream tokenization (`tokenize(..., add_bos=False)`) for ground-truth decode token throughput and accurate t/s calculation.
+  - Replaced rigid 1.5 GB safety buffer with dynamic auto-buffer (5% of GPU VRAM, 256-768 MiB clamp) reclaiming unused VRAM headroom on 6GB+ systems.
+  - Added multi-shard GGUF reader support (`-00001-of-00004.gguf`), non-layer output head tracking, and GQA-aware KV cache sizing.
+  - Replaced Python-only garbage collection with deterministic `_release_model` (`llm.close()` + `gc.collect()`) to prevent CUDA runtime allocation leakage across consecutive models.
+  - Overhauled automated LLM judge into two-pass evaluation: unconstrained reasoning/critique turn followed by GBNF grammar-constrained scoring (`root ::= "10" | [1-9] ("." [0-9])?`) with regex fallback.
+  - Scaled default context windows to 8192 tokens for both target and judge models, dynamically integrated into layer offload calculation and token clamp budgets.
+  - Decoupled test bank and reference keys into standalone `benchmarks/wringer/test_bank.json` with on-demand hot-reloading.
+  - Added startup unfinished test detection prompting to resume or wipe checkpoints, automatic checkpoint removal upon completion, and interactive Ctrl+C pause/resume handler.
+  - Integrated average total generation response time (thinking + response) into console tables, checkpoints, and markdown reports.
+  - Added missing `"describe yourself."` reference answer in Level 1 answer key.
+- **Theme Palette Overhaul, Plan A Zero-Bleed Isolation & Prompt/Thought Text Distinction (`serenity_resources.py`, `main.py`, `System/tests/test_theme_overhaul_and_borders.py`)**:
+  - Implemented Plan A zero-bleed isolation in `apply_theme_to_global`: standard themes (`apex`, `goth`, `obsidian_dark`, `crystal_cavern`, `yellow_blacket`, `natural`, `matrix`) strictly preserve their surfaces, button states, settings UI, and text styling when a model is loaded in normal or dark mode.
+  - Persona thermo colors (`THERMO_COLORS`) and secondary colors (`PERSONA_SECONDARY_COLORS`) bind dynamically to prompt/response borders and top-bar indicators when model is loaded, eliminating background and widget color bleeding.
+  - Overhauled all 8 theme palettes with neon text `(t)`, natural dark backgrounds `(b)`, alternate trim/prompt colors `(a)`, and active=brighter button gradients:
+    * Apex: natural dark gray (`#1b1b1f`/`#222228`), neon orange (`#ff6a00`/`#ff7700`), burnt orange (`#b84700`), buttons (`#24201c`/`#382e24`).
+    * Goth: pure black (`#000000`), neon crimson (`#FF1A14`/`#D60808`), deep blood red (`#8a0303`), buttons (`#160101`/`#3B0303`).
+    * Obsidian Dark: dark granite (`#0e0d13`/`#161420`), electric violet (`#6D00FF`/`#6D11FF`), candied blue-violet (`#4d2d7d`), buttons (`#221e33`/`#352e4f`).
+    * Crystal Cavern: midnight purple (`#090414`/`#120824`), electric blue (`#00e5ff`/`#00f0ff`), coral (`#ff6f59`), buttons (`#1c0d38`/`#2f165e`).
+    * Yellow Blacket: pure black (`#000000`), neon yellow (`#ffff00`/`#ffff33`), dark gold (`#E3AA00`), honey buttons (`#1c1404`/`#3d2d08`).
+    * Natural: dirt (`#140d07`/`#1e130a`), grass green (`#39ff14`/`#44ee55`), mineral stone (`#70757a`), buttons (`#2a1b0e`/`#3d2815`).
+    * Matrix: pure black (`#000000`), neon green (`#00ff41`), dark green (`#005511`), buttons (`#001300`/`#002a00`).
+    * Persona: midnight/black (`#080810`/`#000000`), active level thermo neon text, medium-dark secondary trim.
+  - Aligned prompt text colors: user prompt lead (`user_lead`), prompt body text (`user`), and `user_input` foreground match alternate accent color `(a)` (`accent_secondary`).
+  - Implemented `desaturate_color()` using standard library `colorsys`: thoughts text (`md_thought`) and thought log (`thought_log`) display a desaturated, dimmer tint of the response color `(t)` for clear visual separation.
+- **Prompt Tag, Persona Response Leads & Mousewheel/Keystroke Isolation (`main.py`, `System/settings_ui.py`, `System/params.json`, `System/tests/test_chat_color_and_prefix.py`, `System/tests/test_chat_scroll_lock.py`)**:
+  - Replaced `"You:"` prompt prefix with `"Prompt:"` across chat output, preserved pending queues, history archives, and Settings font preview.
+  - Dynamically resolved AI response lead: automatically displays `"Cecilia:"` for Persona Level 7 or active Cecilia subagents, and `"Serenity:"` for Levels 0-6, while strictly preserving underlying chat template tokens (`<|im_start|>user`, `[INST]`, `<|turn|>`) to protect thought/response isolation.
+  - Appended `"Prompt:"` and `"Cecilia:"` to generation stop parameters in `System/params.json`.
+  - Targeted Mousewheel Isolation: eliminated scroll bleed and event bubbling across `chat_history`, `past_history_view`, and `_bind_targeted_history_scroll` by calculating scroll delta locally and returning `'break'`. Removed leaky `root.bind_all` global bindings from history archive cards.
+  - Keystroke Multi-Line Accuracy: Return and Keypad Enter (`KP_Enter`) trigger `send_message()` and return `'break'`; Shift+Return cleanly inserts newline without sending.
+- **Theme Overhaul, Goth / Obsidian Dark Split & Persona Dynamic Borders (`serenity_resources.py`, `main.py`, `System/settings_ui.py`, `System/settings_tabs.py`, `System/tests/test_theme_overhaul_and_borders.py`)**:
+  - Overhauled red themes contrast: updated Persona Level 3 color to vivid crimson `#FF3355` (replacing illegible `#7D0000`); updated `goth` to pure OLED blackout `#000000`, vivid crimson text `#ff3b5c`, and scarlet trim `#ff2442`.
+  - Split `obsidian_dark` into its own distinct theme featuring dark granite background `#0c0a14`, midnight purple widget `#151122`, midnight blue `#080c1e`, luminous purple trim `#6347a6`, and electric violet highlights `#7c5cfc`.
+  - Implemented dynamic persona borders: primary persona level color styles response window border (`chat_history`, `past_history_view`); secondary persona color (`PERSONA_SECONDARY_COLORS`) styles prompt window border (`input_control_frame`, `user_input`).
+  - Added recursive dynamic theme applicator `apply_theme_to_settings_window` resolving stuck Yellow Blacket labels/entries and stuck Apex action buttons (`send_button`, `deep_thought_button`, `hurry_button`, `ghost_button`, `btn_add`, `mic_button`, `lore_btn`).
+  - Enforced pure OLED blackout (`#000000`) for dark mode across all widgets while maintaining high-contrast theme-colored text.
+- **GGUF Architecture Edge Case Guard & Binary Restoration (`System/serenity_utils.py`, `main.py`, `System/tests/test_gguf_and_queue_hygiene.py`)**:
+  - Restored damaged binary header of `gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf` (`llama` -> `gemma4` and 23 KV keys from `llama.` -> `gemma4.`), resolving `check_tensor_dims` crash.
+  - Implemented Edge Case Guard Protocol in `patch_gguf_architecture`: native Gemma, Muse/Glimmer, Spark-2.5, and native architectures are strictly protected from being rewritten to `llama`.
+  - Added auto-healing to `patch_gguf_architecture`: automatically detects if a Gemma model was previously mis-patched to `llama` and restores `general.architecture` and KV prefixes back to `gemma4`/`gemma2`/`gemma`.
+  - Guarded `_load_model_worker` in `main.py` to prevent triggering auto-patch during CUDA OOM exceptions (`out of memory`, `buffer of size`, `create llama_context`).
+  - Added trailing null-byte stripping (`.rstrip("\x00")`) to GGUF key reader in `main.py` auto-offload metadata parser.
+  - Added unit test suite `test_gemma4_architecture_preserved` and `test_corrupted_gemma_auto_healed`.
+- **Settings Submenu 2-Line Titles & Center Alignment (`System/settings_ui.py`)**:
+  - Restructured all 6 settings tab navigation buttons into centered 2-line titles (`Models &\nParams`, `Inference &\nExecution`, `Agents &\nDeep Cook`, `Additional\nSettings`, `Users &\nSecurity`, `Personalize\n& Theme`).
+- **Agents & Deep Cook Pipeline Controls (`System/settings_tabs.py`, `System/settings_ui.py`)**:
+  - Added "Deep Cook & Formatting Pipeline" section to Tab 3 (`Agents & Deep Cook`).
+  - Configurable Deep Cook execution cycles (`2, 3, 4, 8, 12, 16, 20, Auto`) with dynamic radio contrast.
+  - Added Agent & Deep Cook cooperation selector (`OTL Per-Step`, `OTL Per-Cycle`, `Independent / Off`).
+  - Added Deep Cook formatting / stream pacing selector (`Inline`, `Per-Step`, `Per-Cycle`, `Upon Completion`).
+  - Added Normal generation formatting selector (`Inline`, `Chunked (After Thought)`, `Upon End`).
+  - Added safe fallback variable initialization and persistence in `_apply_settings`.
+- **Deep Cook Cycles Enforcement & Inter-Step Population (`main.py`)**:
+  - Replaced hardcoded cycle ceiling in `_generation_worker_deep_cook` with dynamic `deep_cook_cycles` budget (supports `2, 3, 4, 8, 12, 16, 20, Auto`) with dynamic resolution and failsafe ceiling.
+  - Added token stream suppression when `deep_cook_formatting` is non-inline to reduce UI thrash while maintaining clean batch population upon step/cycle completion.
+  - Wired `normal_generation_formatting` modes (`upon_end`, `chunked`, `inline`) into `check_process_queue` text dispatcher.
+- **Deep Cook Hierarchical Dropdowns & Accordion Hygiene (`main.py`)**:
+  - Hardened draft step tag registration with automatic parent cycle tag fallback (`dc_cycle_{cnum}_0`) preventing dropped steps.
+  - Implemented true accordion behavior in `toggle_cyc_tag`: collapsing cycle recursively elides child step tags and resets child button labels (`[+] Step {dnum}`), while expanding cycle reveals step buttons without prematurely unfolding step contents.
+  - Added empty range fallback in `_handle_deep_cook_ui_batch` to guarantee inter-step population even in batch formatting modes.
+- **Deep Cook Prompt Sending & Model Swapping Fix (`main.py`)**:
+  - Removed legacy `(level == 6 and target_tier == "deep_cook")` override in `model_swap` and `model_swap_synchronous` that forcibly redirected Deep Cook to Transcendent tier when active persona level was 6.
+  - Added immediate pending task execution in `model_swap` when target model and persona tier are already active, preventing dropped prompts.
+  - Fixed prompt forwarding in `send_message` when Deep Cook is active so text attachments and inputs are staged, displayed, and cleared cleanly without dropping input.
+  - Guarded `self.model` presence in `send_deep_cook_message` and added safe string lower handling for `self.model_path`.
+- **Thoughts Dropdown Positioning & Response Markdown (`main.py`)**:
+  - Unified thought dropdown placement in `_finalize_message` so thought process blocks and dropdown buttons are always positioned strictly above the final AI response text (handling streamed thoughts, non-streamed/scout-split models like Granite, and fallback paths).
+  - Ensured `_apply_markdown` processes the final answer from `render_start` to `render_end`, correctly styling markdown elements like `*this*` and `**stuff**`.
+  - Added empty/whitespace chunk suppression in `_update_thought_dropdown` and cleanup in `_finalize_message` to prevent empty or orphaned dropdown frames.
+- **Ecstatic Avatar Auto-Revert Timer (`main.py`)**:
+  - Implemented 4.5s auto-revert timer (`self.ecstatic_timer_id`) on instances of `serenity_ecstatic` to return avatar state cleanly to `listening` (and subsequent idle).
+  - Guarded against timer leaks and state flicker by auto-canceling active ecstatic timers when avatar state transitions.
+- **Leaked Special Tokens Stripping (`main.py`, `System/vision_handler.py`)**:
+  - Added `<|message|>`, `<|start|>`, `<|end|>` to tag cleanup patterns, closers, and isolation regexes.
+- **Subagent Active Banner Display (`main.py`, `System/orchestration_manager.py`)**:
+  - Added real-time banner update `"Subagent: Lvl <N>, <Model>"` on `system_status_label` and `thinking_display` whenever autonomous subagents are active.
+  - Implemented `clean_model_display_name` to strip quantization suffixes and `.gguf` for clean banner rendering (e.g. `Qwen3.8-27B`).
+  - Wired `subagent_status` dispatch table event, preserving subagent banner across UI timer ticks and restoring orchestrator model on step completion, session finalization, or halt.
+- **History Archive Titles & Condensed Pipeline Formatting (`main.py`)**:
+  - Implemented `_format_levels_condensed` with run-length count compression (e.g. `[7, 7, 7, 7, 7, 7, 7, 7]` -> `"7(8)"`, `[7, 7, 7, 5, 5, 2]` -> `"7(3), 5(2), 2"`).
+  - Updated history card level badges and expanded PIPELINE BREAKDOWN header to use condensed count notation.
+  - Hardened `get_history_path` and `_get_all_history_entries` to eliminate repeated level suffixes and keep archive filenames and display titles concise without quantity clutter.
+- **Spark-X2.5 Native Engine Support & Tokenizer Alignment (`llama-cpp-python-src`)**:
+  - Preserved pristine original source tree reference copy at `llama-cpp-python-src-ref`.
+  - Added native C++ `spark2_5` architecture implementation to `llama.cpp` (`llama-arch.h`, `llama-arch.cpp`, `llama-vocab.cpp`, `models/spark2_5.cpp`, `llama-model.cpp`).
+  - Implemented direct 3D strided view extraction (`ggml_view_3d`) for fused `blk.N.attn_qkv.weight` into non-contiguous Q, K, and V slices without illegal 2D reshaping.
+  - Added hybrid 1:3 sliding-window attention (SWA) support with dual RoPE base frequencies (10,000 for SWA, 5,000,000 for Global layers) and head-wise gating with sigmoid broadcast (`blk.N.attn_gate.weight`).
+  - Fixed FFN activation type to GELU (`LLM_FFN_GELU`) matching Spark-X2.5 specification.
+  - Added dedicated BPE pre-tokenizer `LLAMA_VOCAB_PRE_TYPE_SPARK2_5 = 51` (`llama-vocab.h`, `llama-vocab.cpp`) with custom regex and `clean_spaces = false`.
+  - Assigned `LLM_ARCH_SPARK2_5` to `LLAMA_ROPE_TYPE_NEOX` in `llama-model.cpp`.
+  - Eliminated newline and blank token spam; verified chat completion and question-answering on `Spark-X2.5-4B-Q4_K_M.gguf`.
+- **Muse-Glimmer Architecture & Flash Attention Auto-Dispatch (`llama-cpp-python-src`)**:
+  - Retained unweighted RMS norm over token embeddings (`inpL = build_norm(inpL, nullptr, nullptr, LLM_NORM_RMS, -1);`) matching official architecture.
+  - Fixed RoPE and QK-norm pipeline ordering to apply QK-norm (`attn_q_norm` and `attn_k_norm`) before rotary embedding.
+  - Bound post-attention and post-FFN norm calculations to model RMS epsilon (`1e-8f`).
+  - Mapped `LLM_ARCH_MUSE_GLIMMER` to `LLAMA_ROPE_TYPE_NORM` (interleaved rotary pairs, unpermuted at GGUF conversion time).
+  - Resolved non-Flash Attention ISWA kernel transposition bug by auto-enabling Flash Attention for `LLM_ARCH_MUSE_GLIMMER` in `llama-context.cpp`.
+  - Verified reasoning, generation, and Muse ATEM thought channel (`to=self<|message|>`) on `Muse-Glimmer-30B-UD-Q4_K_XL.gguf`.
+
+### Version 1.7.4-alpha
+- **GGUF Vocabulary & Architecture Auto-Repair (`System/serenity_utils.py`)**:
+  - Implemented auto-healing for unrecognized pre-tokenizer identifiers (such as `'minicpm5'` -> `'default'`) to prevent fatal `unknown pre-tokenizer type` exceptions during model load.
+  - Hardened `patch_gguf_architecture` to maintain native architecture strings for `llama.cpp`-supported models (`nemotron_h_moe`, `gpt-oss`, `olmo2`, `gemma3`, `gemma4`, `phi3`, etc.) and protected fused-QKV custom architectures (`spark2_5`) from destructive overwrites to `"llama"`.
+  - Restored header metadata and key prefixes on corrupted GGUF files in `S:\LLM` (`Spark-X2.5-4B-Q8_0.gguf`, `NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf`).
+- **Heartbeat Queue Backlog & Congestion Mitigation (`main.py`)**:
+  - Removed noisy and redundant `[SYSTEM] Queue congestion detected` console spam.
+  - Added `_drain_process_queue()` to flush lingering worker messages on `halt_process()` and `model_swap()`, preventing cross-turn text bleed and stale token accumulation.
+  - Enhanced `check_process_queue` with adaptive burst dispatch sizing (up to 300 messages per heartbeat tick) to resolve backlogs without stalling the Tkinter event loop.
+
 ### Version 1.7.3
+- **Diffusion Performance & Sampler Optimization**:
+  - Relaxed Entropy-Bound sampler defaults in `System/diffusion_wrapper.py`: `--diffusion-eb-max-steps 24` (down from 48), `--diffusion-eb-entropy-bound 0.20` (up from 0.10 for earlier convergence), `--diffusion-steps 64` (down from 128), and enforced `--diffusion-kv-cache on`.
+  - Clamped default diffusion token prediction (`-n 256`) and context size (`-c` capped to 4096) across `main.py` and `System/diffusion_wrapper.py` to prevent multi-block overhead and DDR4 sysmem fallback spillover.
+  - Implemented `token_bos()` (ID 2) and `token_eos()` (ID 1) in `DiffusionCLIWrapper` and standardized chat turns to official Gemma `<start_of_turn>` / `<end_of_turn>` delimiters.
+  - Added delta chunk dictionary compatibility (`{"delta": {"content": ...}}`) in `DiffusionCLIWrapper` stream yields to prevent UI KeyError crashes during generation.
+  - Added unit test suite `System/tests/test_diffusion_wrapper.py`.
+
 - **Chat Format Auto-Recovery & Handler Caching**:
   - Fixed `KeyError: None` crash in `llama-cpp-python` when running text turns on models initialized with a multimodal projector (such as Level 2 / Search tier).
   - Implemented `_ensure_model_chat_format(model)` in `main.py` to auto-resolve native GGUF `chat_template.default`, metadata-guessed templates, or fallback chat formats whenever `chat_handler` is detached or not specified.

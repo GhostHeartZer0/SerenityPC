@@ -14,6 +14,11 @@ for f in os.listdir(report_dir):
     with open(path, 'r', encoding='utf-8') as file:
         content = file.read()
         levels = re.findall(r'## (lvl\d+|carwash_test) \(Average: ([\d\.]+)/10, ([\d\.]+)%\)', content)
+        if not levels:
+            levels = re.findall(r'## (lvl\d+|carwash_test)\s*\n-\s*\*\*Quality Score\*\*:\s*([\d\.]+)/10\s*\(([\d\.]+)%\)', content)
+        if not levels:
+            raw_levels = re.findall(r'## (lvl\d+|carwash_test)\s*\n-\s*\*\*Quality Score\*\*:\s*([\d\.]+)/10', content)
+            levels = [(lvl, score, str(round(float(score) * 10, 1))) for lvl, score in raw_levels]
         if not levels: continue
         results[model] = {}
         for lvl, avg, pct in levels:
@@ -38,14 +43,27 @@ if not results:
     import sys
     sys.exit(0)
 
+def level_sort_key(lvl_name: str):
+    if lvl_name == "Overall":
+        return (-1, 0, "")
+    match = re.match(r"^lvl(\d+)", str(lvl_name), re.IGNORECASE)
+    if match:
+        return (0, int(match.group(1)), str(lvl_name))
+    return (1, 0, str(lvl_name))
+
+all_display_levels = sorted(list({lvl for m_data in results.values() for lvl in m_data.keys() if lvl != 'overall'}), key=level_sort_key)
+
 print("### Benchmark Analysis")
-print("| Model | Overall Score | " + " | ".join(sorted(list(results[list(results.keys())[0]].keys())[:-1])) + " |")
-print("|-------|---------------|" + "|".join(["---"] * (len(list(results.keys())[0]) - 1)) + "|")
+print("| Model | Overall Score | " + " | ".join(all_display_levels) + " |")
+print("|-------|---------------|" + "|".join(["---"] * len(all_display_levels)) + "|")
 
 for m, data in sorted_models:
     row = f"| {m} | {data['overall']:.2f}/10 |"
-    for lvl in sorted([k for k in data.keys() if k != 'overall']):
-        row += f" {data[lvl]['avg']:.2f} |"
+    for lvl in all_display_levels:
+        if lvl in data:
+            row += f" {data[lvl]['avg']:.2f} |"
+        else:
+            row += " - |"
     print(row)
 
 # Fallback chart generation
@@ -118,14 +136,15 @@ if chart_data:
         plt.close(fig)
         print(f"[+] Consolidated fallback chart saved to: {chart_path}")
         
-        if os.name == 'nt':
-            os.startfile(chart_path)
-        elif sys.platform == 'darwin':
-            import subprocess
-            subprocess.call(['open', chart_path])
-        else:
-            import subprocess
-            subprocess.call(['xdg-open', chart_path])
+        if '--no-open' not in sys.argv:
+            if os.name == 'nt':
+                os.startfile(chart_path)
+            elif sys.platform == 'darwin':
+                import subprocess
+                subprocess.call(['open', chart_path])
+            else:
+                import subprocess
+                subprocess.call(['xdg-open', chart_path])
             
     except ImportError:
         print("\n[-] Matplotlib not installed. Skipping chart generation.")
