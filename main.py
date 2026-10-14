@@ -18,8 +18,11 @@ def setup_localized_environment():
     normal execution the directory containing this file is used instead.  A
     missing or unusable bundle path is ignored so startup remains reliable.
     """
-    bundle_dir = getattr(sys, "_MEIPASS", None)
-    base_dir = bundle_dir or os.path.dirname(os.path.abspath(__file__))
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        bundle_dir = getattr(sys, "_MEIPASS", None)
+        base_dir = bundle_dir or os.path.dirname(os.path.abspath(__file__))
     base_dir = os.path.abspath(os.fspath(base_dir))
 
     cache_dir = os.path.join(base_dir, ".cache")
@@ -57,6 +60,7 @@ def initialize_system_managers():
     global open_text_scaling_center, run_auto_detect, VaultManager
     global set_offline_mode, is_offline_mode, STTManager
     global GemmaToolRegistry, KVManager, TurboVecIndex, bind_entry_limit, OrchestrationManager
+    global CognitiveAffectEngine, AffectState, SemanticVault, ThoughtIsolation
 
     from System.serenity_utils import (
         WidgetLogger, FileAndWidgetLogger, LoadingScreen, log_uncaught_exception,
@@ -76,6 +80,9 @@ def initialize_system_managers():
     from System.tool_registry import GemmaToolRegistry
     from System.kv_manager import KVManager, TurboVecIndex
     from System.orchestration_manager import OrchestrationManager
+    from System.affect_engine import CognitiveAffectEngine, AffectState
+    from System.semantic_vault import SemanticVault
+    from System.thought_isolation import ThoughtIsolation
 
 
 USERS_DATA_PATH = setup_localized_environment()
@@ -210,9 +217,9 @@ def set_apex_affinity():
         mask = get_dynamic_core_mask() or list(range(psutil.cpu_count(logical=True)))
         p.cpu_affinity(mask)
         p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
-        print(" > [APEX] P-Core Affinity Locked. Turtle mode suppressed.")
+        print(" > [APEX] P-Cores locked in.")
     except Exception as e:
-        print(f"[APEX] Affinity Lock Failed: {e}")
+        print(f"[APEX] Error: Couldn't lock in. {e}")
 
 def kill_engine_on_shutdown(*args, **kwargs):
     """Ensure all engine backend processes are terminated on exit."""
@@ -384,7 +391,10 @@ class ChatbotApp:
         self.placeholder_img = None
         
         # --- Configuration & Paths ---
-        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, "frozen", False):
+            self.script_dir = os.path.dirname(sys.executable)
+        else:
+            self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.BASE_DIR = self.script_dir
         self.live_dir = os.path.join(self.script_dir, "Live")
         
@@ -404,9 +414,9 @@ class ChatbotApp:
             self.root.quit(); return
 
         media_candidates = [
+            os.path.join(self.script_dir, "Media"),
             MEDIA_DIR,
             os.path.join(self.script_dir, "System", "Media"),
-            os.path.join(self.script_dir, "Media")
         ]
         media_path = next((p for p in media_candidates if os.path.isdir(p)), os.path.join(self.script_dir, "System", "Media"))
 
@@ -478,7 +488,7 @@ class ChatbotApp:
             "xmemory_active": False,
             "vram_layer_offset": 0,
             "staged_attachments": [],
-            "multimodal_engine": "Internal",
+            "multimodal_core": "Internal",
             "streaming_mode": "Buffered",
             "max_token_ratio": 4,
             "dmn_backbone": {}
@@ -522,6 +532,11 @@ class ChatbotApp:
         )
         self.tool_registry = GemmaToolRegistry(self)
         self.orchestration_manager = OrchestrationManager(self)
+        init_u_dir = os.path.join(self.dirs.get("users", "Users"), "Default")
+        os.makedirs(init_u_dir, exist_ok=True)
+        self.semantic_vault = SemanticVault(db_path=os.path.join(init_u_dir, "semantic_vault.db"))
+        self.affect_engine = CognitiveAffectEngine()
+        self.thought_isolator = ThoughtIsolation()
         self._last_user_activity_time = time.time()
         self._vault_modal_open = False
         self.temp_config = {tier: 0.8 if "vision" not in tier else 0.1 for tier in tier_list}
@@ -611,6 +626,7 @@ class ChatbotApp:
         self._status_timer = None
         self.stats_thread = None
         self.idle_timer_id = None
+        self.ecstatic_timer_id = None
         self.tmp_img = None
         self.current_trans_img = None
         self.chat_handler = None
@@ -638,6 +654,7 @@ class ChatbotApp:
             "tool_log_update": lambda msg: self._buffer_tool_log(msg.get("content", "")),
             "diag_log_update": lambda msg: self._buffer_diag_log(msg.get("content", "")),
             "thinking_status": lambda msg: self.thinking_display.update_status(msg.get("content", "Thinking...")) if self.thinking_display and self.thinking_display.winfo_exists() else None,
+            "subagent_status": lambda msg: getattr(self, "_handle_subagent_status", lambda _msg: None)(msg),
             "status_phase": lambda msg: self.thinking_display.set_phase(msg.get("phase", ""), msg.get("details", ""), msg.get("tokens", 0), msg.get("speed", 0.0), msg.get("progress_val", -1)) if self.thinking_display and self.thinking_display.winfo_exists() else None,
             "status_ttft": lambda msg: self.thinking_display.record_ttft(msg.get("ttft", 0.0)) if self.thinking_display and self.thinking_display.winfo_exists() else None,
             "streaming": lambda msg: self._buffer_text(msg.get("content", "")),
@@ -657,6 +674,7 @@ class ChatbotApp:
 
         self._setup_llama_log_capture()
         self.setup_ui()
+        self.apply_current_theme()
         
         # --- Global Zoom Keyboard Shortcuts ---
         for k in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
@@ -713,25 +731,33 @@ class ChatbotApp:
         if not users: users.add("Default")
         return sorted(list(users))
 
-    def switch_user(self, new_username: str):
+    def switch_user(self, new_username: str, skip_lock_prompt: bool = False):
         clean_un = "".join(c for c in new_username.strip() if c.isalnum() or c in ("-", "_", " ")).strip()
         if not clean_un: clean_un = "Default"
         old_un = self.get_active_username()
 
-        # Rule: If switching from a locked profile, lock it.
-        if old_un not in ("Default", "Public") and hasattr(self, 'vault_manager') and self.vault_manager and self.vault_manager.is_lock_enabled():
-            self.vault_manager.lock()
+        # Rule: Only auto-lock when swapping to a different profile from a locked profile
+        if old_un != clean_un:
+            if old_un not in ("Default", "Public") and hasattr(self, 'vault_manager') and self.vault_manager and self.vault_manager.is_lock_enabled():
+                self.vault_manager.lock()
 
-        # If switching to a locked profile, prompt for password
-        if clean_un not in ("Default", "Public") and hasattr(self, 'vault_manager') and self.vault_manager and self.vault_manager.is_lock_enabled() and self.vault_manager.is_locked():
-            from tkinter import simpledialog
-            pwd = simpledialog.askstring("Vault Unlock Required", f"Profile '{clean_un}' is protected by Serenity Vault.\nEnter master password:", show="*", parent=getattr(self, 'root', None))
-            if not pwd:
-                print(f"[USER] Switching to protected profile '{clean_un}' cancelled.")
-                return False
-            if not self.vault_manager.unlock(pwd):
-                messagebox.showerror("Authentication Failed", "Incorrect master password for vault.", parent=getattr(self, 'root', None))
-                return False
+        # If switching to an existing locked profile and not already authenticated, prompt for password
+        if not skip_lock_prompt and clean_un not in ("Default", "Public") and hasattr(self, 'vault_manager') and self.vault_manager:
+            user_dir = self.get_user_dir(clean_un) if hasattr(self, 'get_user_dir') else None
+            user_hist_dir = self.get_user_history_dir(clean_un) if hasattr(self, 'get_user_history_dir') else None
+            profile_exists = os.path.exists(user_dir) if user_dir else False
+            if profile_exists:
+                if hasattr(self.vault_manager, 'set_user_context'):
+                    self.vault_manager.set_user_context(user_dir, user_hist_dir)
+                if self.vault_manager.is_lock_enabled() and self.vault_manager.is_locked():
+                    from tkinter import simpledialog
+                    pwd = simpledialog.askstring("Vault Unlock Required", f"Profile '{clean_un}' is protected by Serenity Vault.\nEnter master password:", show="*", parent=getattr(self, 'root', None))
+                    if not pwd:
+                        print(f"[USER] Switching to protected profile '{clean_un}' cancelled.")
+                        return False
+                    if not self.vault_manager.unlock(pwd):
+                        messagebox.showerror("Authentication Failed", "Incorrect master password for vault.", parent=getattr(self, 'root', None))
+                        return False
 
         # Save active config before switching
         save_config = getattr(self, "save_config", None)
@@ -751,7 +777,14 @@ class ChatbotApp:
         user_dir = self.get_user_dir(clean_un)
         user_hist_dir = self.get_user_history_dir(clean_un)
         if hasattr(self, 'vault_manager') and self.vault_manager:
-            self.vault_manager.history_dir = user_hist_dir
+            if hasattr(self.vault_manager, 'set_user_context'):
+                self.vault_manager.set_user_context(user_dir, user_hist_dir)
+            else:
+                self.vault_manager.history_dir = user_hist_dir
+        if hasattr(self, 'semantic_vault'):
+            self.semantic_vault = SemanticVault(db_path=os.path.join(user_dir, "semantic_vault.db"))
+        if hasattr(self, 'affect_engine'):
+            self._load_cecilia_affect_state(user_dir)
 
         # Reset profile-specific fields before merging target
         self.config["user_preferred_name"] = ""
@@ -813,6 +846,51 @@ class ChatbotApp:
             log_and_display(f"Switched user profile to: {clean_un}")
         return True
 
+    def delete_user_profile(self, username: str) -> Tuple[bool, str]:
+        """
+        Safely deletes a user profile directory and associated history directory.
+        Protects system profiles ('Default', 'Public') from deletion.
+        Automatically switches active user to 'Default' if deleting the active profile.
+        """
+        clean_un = "".join(c for c in str(username).strip() if c.isalnum() or c in ("-", "_", " ")).strip()
+        if not clean_un:
+            return False, "Invalid profile name."
+
+        if clean_un in ("Default", "Public"):
+            return False, f"Profile '{clean_un}' is a system profile and cannot be deleted."
+
+        # If currently active, switch to Default first
+        curr_active = self.get_active_username()
+        if curr_active == clean_un:
+            self.switch_user("Default", skip_lock_prompt=True)
+
+        deleted_any = False
+        import shutil
+
+        # Remove from Users directory
+        u_dir = os.path.join(self.dirs["Users"], clean_un)
+        if os.path.exists(u_dir):
+            try:
+                shutil.rmtree(u_dir)
+                deleted_any = True
+            except Exception as e:
+                return False, f"Failed to delete user profile directory: {e}"
+
+        # Remove from History directory
+        h_dir = os.path.join(self.dirs["History"], clean_un)
+        if os.path.exists(h_dir):
+            try:
+                shutil.rmtree(h_dir)
+                deleted_any = True
+            except Exception as e:
+                return False, f"Failed to delete user history directory: {e}"
+
+        if not deleted_any:
+            return False, f"Profile '{clean_un}' does not exist on disk."
+
+        print(f"[USER] Deleted user profile '{clean_un}'.")
+        return True, f"Profile '{clean_un}' deleted successfully."
+
     def _load_dmn_backbone(self) -> None:
         """Load the active profile's optional DMN backbone into application state."""
         backbone = {}
@@ -835,6 +913,22 @@ class ChatbotApp:
 
         if hasattr(self, "state") and self.state is not None:
             self.state["dmn_backbone"] = backbone
+
+    def _load_cecilia_affect_state(self, user_dir=None):
+        if not hasattr(self, "affect_engine") or not self.affect_engine:
+            return
+        u_dir = user_dir or (self.get_user_dir() if hasattr(self, "get_user_dir") else "")
+        if u_dir:
+            p = os.path.join(u_dir, "cecilia_affect.json")
+            self.affect_engine.load_state(p)
+
+    def _save_cecilia_affect_state(self, user_dir=None):
+        if not hasattr(self, "affect_engine") or not self.affect_engine:
+            return
+        u_dir = user_dir or (self.get_user_dir() if hasattr(self, "get_user_dir") else "")
+        if u_dir:
+            p = os.path.join(u_dir, "cecilia_affect.json")
+            self.affect_engine.save_state(p)
 
     def _migrate_legacy_user_files(self):
         """Auto-migrates legacy flat History/*.history.* files into History/Default/"""
@@ -910,6 +1004,7 @@ class ChatbotApp:
 
         # Synchronize button state and colors with loaded config
         self.set_ui_state(model_loaded=(self.model is not None), generating=False)
+        self.apply_current_theme()
 
         # Non-blocking, background initialization for TurboVec history indexing
         threading.Thread(target=self._init_turbovec, daemon=True).start()
@@ -990,17 +1085,38 @@ class ChatbotApp:
 
         unlock_win = tk.Toplevel(self.root)
         unlock_win.title("Serenity - Profile & Vault Access")
-        unlock_win.geometry("460x360")
         unlock_win.config(bg=THEME["bg_color"])
         unlock_win.transient(self.root)
         unlock_win.grab_set()
 
-        # Center on parent window
-        try:
-            x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 230
-            y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 180
-            unlock_win.geometry(f"460x360+{x}+{y}")
-        except: pass
+        # Dynamic Scaling & Geometry Persistence
+        scale_ratio = max(1.0, float(self.config.get("text_scale", 100) or 100) / 100.0)
+        def_w = int(480 * scale_ratio)
+        def_h = int(380 * scale_ratio)
+        saved_geom = self.config.get("vault_modal_geometry", "")
+
+        if saved_geom and "x" in saved_geom:
+            try:
+                unlock_win.geometry(saved_geom)
+            except Exception:
+                unlock_win.geometry(f"{def_w}x{def_h}")
+        else:
+            try:
+                x = max(0, self.root.winfo_x() + (self.root.winfo_width() // 2) - (def_w // 2))
+                y = max(0, self.root.winfo_y() + (self.root.winfo_height() // 2) - (def_h // 2))
+                unlock_win.geometry(f"{def_w}x{def_h}+{x}+{y}")
+            except Exception:
+                unlock_win.geometry(f"{def_w}x{def_h}")
+
+        def _save_modal_geometry(event=None):
+            try:
+                if unlock_win.winfo_exists():
+                    geom = unlock_win.winfo_geometry()
+                    if geom and "+" in geom and not geom.startswith("1x1"):
+                        self.config["vault_modal_geometry"] = geom
+            except Exception: pass
+
+        unlock_win.bind("<Configure>", _save_modal_geometry)
 
         tk.Label(unlock_win, text="👤 USER PROFILE & VAULT ACCESS", font=self.fonts["large"], 
                  bg=THEME["bg_color"], fg=THEME["electric_blue"]).pack(pady=(16, 4))
@@ -1049,6 +1165,10 @@ class ChatbotApp:
                                bg=THEME["button_active_color"], fg=THEME["fg_color"], padx=14, pady=4, relief=tk.FLAT)
         action_btn.pack(side=tk.LEFT, padx=6)
 
+        cancel_btn = tk.Button(btn_row, text="Cancel", font=self.fonts["ui_button"],
+                               bg=THEME["button_bg_color"], fg=THEME["fg_color"], padx=14, pady=4, relief=tk.FLAT)
+        cancel_btn.pack(side=tk.LEFT, padx=6)
+
         def _on_profile_change(*args):
             sel = selected_prof_var.get().strip()
             err_lbl.config(text="")
@@ -1074,10 +1194,16 @@ class ChatbotApp:
 
         def _do_action(event=None):
             sel = selected_prof_var.get().strip() or "Default"
+            _save_modal_geometry()
+            try:
+                if callable(getattr(self, "save_config", None)):
+                    self.save_config()
+            except Exception: pass
+
             if sel in ("Default", "Public"):
                 self._vault_modal_open = False
                 self._last_user_activity_time = time.time()
-                self.switch_user(sel)
+                self.switch_user(sel, skip_lock_prompt=True)
                 unlock_win.destroy()
                 self._log_and_display(f"Entered workspace as {sel}.")
                 if on_unlock_callback:
@@ -1094,37 +1220,61 @@ class ChatbotApp:
                 err_lbl.config(text="Password cannot be empty for private profile.")
                 return
 
-            if self.vault_manager.unlock(pwd):
-                self._vault_modal_open = False
-                self._last_user_activity_time = time.time()
-                self.switch_user(sel)
-                unlock_win.destroy()
-                self._log_and_display(f"Vault unlocked. Active profile: {sel}.")
-                if on_unlock_callback:
-                    on_unlock_callback()
-                else:
-                    self.load_history()
-                    if hasattr(self, 'history_state') and self.history_state.get("view") == "list":
-                        self._render_history_menu()
-            else:
+            user_dir = self.get_user_dir(sel)
+            user_hist_dir = self.get_user_history_dir(sel)
+            if hasattr(self, 'vault_manager') and hasattr(self.vault_manager, 'set_user_context'):
+                self.vault_manager.set_user_context(user_dir, user_hist_dir)
+
+            if not self.vault_manager.verify_password(pwd):
                 err_lbl.config(text="❌ Incorrect master password.")
                 pwd_var.set("")
                 pwd_entry.focus_set()
+                return
+
+            self._vault_modal_open = False
+            self._last_user_activity_time = time.time()
+            self.switch_user(sel, skip_lock_prompt=True)
+            self.vault_manager.unlock(pwd)
+            unlock_win.destroy()
+            self._log_and_display(f"Vault unlocked. Active profile: {sel}.")
+            if on_unlock_callback:
+                on_unlock_callback()
+            else:
+                self.load_history()
+                if hasattr(self, 'history_state') and self.history_state.get("view") == "list":
+                    self._render_history_menu()
 
         action_btn.config(command=_do_action)
         pwd_entry.bind("<Return>", _do_action)
         pwd_entry.bind("<KP_Enter>", _do_action)
 
         def _on_close_modal():
-            if self.vault_manager.is_locked() and self.get_active_username() not in ("Default", "Public"):
-                if messagebox.askyesno("Exit Serenity", "Serenity is locked. Exit application?", parent=unlock_win):
-                    self._vault_modal_open = False
-                    unlock_win.destroy()
-                    self.root.destroy()
-            else:
-                self._vault_modal_open = False
-                unlock_win.destroy()
+            _save_modal_geometry()
+            try:
+                if callable(getattr(self, "save_config", None)):
+                    self.save_config()
+            except Exception: pass
 
+            self._vault_modal_open = False
+            try:
+                unlock_win.destroy()
+            except Exception: pass
+
+            # Upon unlock fail or cancel during history access, exit history instead of exiting application
+            if getattr(self, 'active_tab', None) == 'history' or on_unlock_callback is not None:
+                if hasattr(self, '_back_history'):
+                    self._back_history()
+                if hasattr(self, 'show_active_chat'):
+                    self.show_active_chat()
+                return
+
+            if self.vault_manager.is_locked() and self.get_active_username() not in ("Default", "Public"):
+                if messagebox.askyesno("Exit Serenity", "Serenity is locked. Exit application?", parent=getattr(self, 'root', None)):
+                    self.root.destroy()
+                else:
+                    self.switch_user("Default", skip_lock_prompt=True)
+
+        cancel_btn.config(command=_on_close_modal)
         unlock_win.protocol("WM_DELETE_WINDOW", _on_close_modal)
 
     def check_gpu_support(self):
@@ -1308,17 +1458,17 @@ class ChatbotApp:
         btn_tab_hist.pack(side=tk.LEFT, padx=2)
         ToolTip(btn_tab_hist, "Search and review archived conversation histories.", app=self)
 
-        lbl_status = tk.Label(tab_frame, text="System: Idle", bg=THEME["bg_color"], 
-                                          fg=THEME["electric_blue"], font=self.fonts["italic"])
-        self.system_status_label = lbl_status
-        lbl_status.pack(side=tk.RIGHT, padx=10)
-        ToolTip(lbl_status, "System engine status and telemetry indicator.", app=self)
-
         lbl_hw = tk.Label(tab_frame, text="", bg=THEME["bg_color"], font=self.fonts["bold"])
         self.hw_mode_label = lbl_hw
         lbl_hw.pack(side=tk.RIGHT, padx=5)
         ToolTip(lbl_hw, "Hardware architecture optimization mode (Apex / Legacy) and offline guard status.", app=self)
         self._update_hw_indicator()
+
+        lbl_status = tk.Label(tab_frame, text="System: Idle", bg=THEME["bg_color"], 
+                                          fg=THEME["electric_blue"], font=self.fonts["italic"])
+        self.system_status_label = lbl_status
+        lbl_status.pack(side=tk.RIGHT, padx=(0, 6))
+        ToolTip(lbl_status, "Core Data & System Stats.", app=self)
 
         # --- TEXT WIDGETS ---
         # 1. Floating Pinned Prompt (Hidden on startup)
@@ -1353,16 +1503,53 @@ class ChatbotApp:
                                              relief=tk.FLAT, highlightthickness=0)
         self.chat_history = txt_chat
         self._user_scrolled_up = False
-        def _on_chat_scroll(event=None):
-            try:
-                if self.chat_history:
-                    yv = self.chat_history.yview()
-                    self._user_scrolled_up = (yv[1] < 0.95)
-            except Exception: pass
 
-        txt_chat.bind("<MouseWheel>", lambda e: self.root.after(10, _on_chat_scroll), add="+")
-        txt_chat.bind("<Button-4>", lambda e: self.root.after(10, _on_chat_scroll), add="+")
-        txt_chat.bind("<Button-5>", lambda e: self.root.after(10, _on_chat_scroll), add="+")
+        def _on_mousewheel(event):
+            try:
+                # delta > 0 is scroll up on Windows
+                if getattr(event, 'delta', 0) > 0:
+                    self._user_scrolled_up = True
+                else:
+                    self.root.after(15, self._check_user_scroll)
+                delta = int(-1 * (event.delta / 120)) if hasattr(event, 'delta') and event.delta else 0
+                if delta:
+                    txt_chat.yview_scroll(delta, "units")
+            except Exception: pass
+            return "break"
+
+        def _on_wheel_up(event):
+            try:
+                self._user_scrolled_up = True
+                txt_chat.yview_scroll(-1, "units")
+            except Exception: pass
+            return "break"
+
+        def _on_wheel_down(event):
+            try:
+                txt_chat.yview_scroll(1, "units")
+                self.root.after(15, self._check_user_scroll)
+            except Exception: pass
+            return "break"
+
+        txt_chat.bind("<MouseWheel>", _on_mousewheel)
+        txt_chat.bind("<Button-4>", _on_wheel_up)
+        txt_chat.bind("<Button-5>", _on_wheel_down)
+
+        if hasattr(txt_chat, "vbar"):
+            txt_chat.vbar.bind("<MouseWheel>", _on_mousewheel)
+            txt_chat.vbar.bind("<Button-4>", _on_wheel_up)
+            txt_chat.vbar.bind("<Button-5>", _on_wheel_down)
+            txt_chat.vbar.bind("<Button-1>", lambda e: self.root.after(15, self._check_user_scroll), add="+")
+            txt_chat.vbar.bind("<B1-Motion>", lambda e: self.root.after(15, self._check_user_scroll), add="+")
+            txt_chat.vbar.bind("<ButtonRelease-1>", lambda e: self.root.after(15, self._check_user_scroll), add="+")
+
+        txt_chat.bind("<Prior>", lambda e: self.root.after(10, self._check_user_scroll), add="+")
+        txt_chat.bind("<Next>", lambda e: self.root.after(10, self._check_user_scroll), add="+")
+        txt_chat.bind("<Up>", lambda e: self.root.after(10, self._check_user_scroll), add="+")
+        txt_chat.bind("<Down>", lambda e: self.root.after(10, self._check_user_scroll), add="+")
+        txt_chat.bind("<Home>", lambda e: self.root.after(10, self._check_user_scroll), add="+")
+        txt_chat.bind("<End>", lambda e: self.root.after(10, self._check_user_scroll), add="+")
+        txt_chat.bind("<B1-Motion>", lambda e: self.root.after(15, self._check_user_scroll), add="+")
         txt_chat.pack(side=tk.TOP, fill="both", expand=True, padx=2, pady=2)
         
         # Configure Markdown tags
@@ -1384,7 +1571,7 @@ class ChatbotApp:
         txt_chat.tag_config("md_header_3", font=self.fonts["md_header_3"], foreground="#80ffe5")
         txt_chat.tag_config("md_quote", font=self.fonts["md_quote"], foreground="#98c379", lmargin1=20, lmargin2=30)
         txt_chat.tag_config("md_strike", font=self.fonts["md_strike"], foreground="#7f848e")
-        txt_chat.tag_config("md_syntax", elide=True)
+        txt_chat.tag_config("md_hidden", elide=True)
 
         # 3. History Archive (Hidden by default)
         self.history_menu_frame = tk.Frame(chat_frame, bg=THEME["bg_color"])
@@ -1392,6 +1579,18 @@ class ChatbotApp:
         txt_past = scrolledtext.ScrolledText(chat_frame, font=self.fonts["main"], wrap=tk.WORD, 
                                              bg=THEME["widget_bg_color"], fg="#aaaaaa", relief=tk.FLAT)
         self.past_history_view = txt_past
+
+        def _on_past_wheel(event):
+            try:
+                delta = int(-1 * (event.delta / 120)) if hasattr(event, 'delta') and event.delta else 0
+                if delta:
+                    txt_past.yview_scroll(delta, "units")
+            except Exception: pass
+            return "break"
+
+        txt_past.bind("<MouseWheel>", _on_past_wheel)
+        txt_past.bind("<Button-4>", lambda e: (txt_past.yview_scroll(-1, "units"), "break")[1])
+        txt_past.bind("<Button-5>", lambda e: (txt_past.yview_scroll(1, "units"), "break")[1])
         txt_past.tag_config("user_lead", font=self.fonts["bold"], foreground="#87CEFA")
         txt_past.tag_config("user", font=self.fonts["italic"], foreground="#007acc") # Electric Blue
         txt_past.tag_config("ai_lead", font=self.fonts["bold"], foreground="#FFD700")
@@ -1410,7 +1609,7 @@ class ChatbotApp:
         txt_past.tag_config("md_header_3", font=self.fonts["md_header_3"], foreground="#80ffe5")
         txt_past.tag_config("md_quote", font=self.fonts["md_quote"], foreground="#98c379", lmargin1=20, lmargin2=30)
         txt_past.tag_config("md_strike", font=self.fonts["md_strike"], foreground="#7f848e")
-        txt_past.tag_config("md_syntax", elide=True)
+        txt_past.tag_config("md_hidden", elide=True)
 
         # --- 3. INPUT FRAME (Themed Border) ---
         input_frame = tk.Frame(left, bg=THEME["trim_color"], highlightthickness=1, 
@@ -1452,15 +1651,23 @@ class ChatbotApp:
 
         def _on_left_resize(event):
             # Dynamic wraplength: 90% of the left frame width
-            new_width = event.width - 40
-            if new_width > 50:
-                lbl_desc.config(wraplength=new_width)
-            # Dynamic slider length auto-scaling
+            if hasattr(self, 'persona_desc_label') and self.persona_desc_label:
+                new_width = event.width - 40
+                if new_width > 50:
+                    self.persona_desc_label.config(wraplength=new_width)
+            # Dynamic slider length auto-scaling (4K & DPI aware)
             if hasattr(self, 'depth_slider') and self.depth_slider:
-                dynamic_len = max(70, min(160, int(event.width * 0.22)))
-                try: self.depth_slider.config(length=dynamic_len)
+                scale_ratio = max(getattr(self, 'scale_factor', 1.0), getattr(self, '_window_scale_factor', 1.0))
+                if scale_ratio <= 0.1:
+                    scale_ratio = 1.0
+                dynamic_len = max(90, min(360, int(event.width * 0.26 * scale_ratio)))
+                scaled_w = max(15, int(15 * scale_ratio))
+                scaled_th = max(28, int(30 * scale_ratio))
+                try: 
+                    self.depth_slider.config(length=dynamic_len, width=scaled_w, sliderlength=scaled_th)
                 except Exception: pass
         
+        self._on_left_resize = _on_left_resize
         left.bind("<Configure>", _on_left_resize)
 
         # Window-responsive font scaling: fonts grow with window size
@@ -1475,7 +1682,7 @@ class ChatbotApp:
         
         self.lock_button = None
 
-        self.rgb_button = self._add_btn(ctrl_frame, "[🌈] RGB", self.open_rgb_panel, side=tk.LEFT, width=12)
+        self.rgb_button = self._add_btn(ctrl_frame, "[🌈]\nRGB", self.open_rgb_panel, side=tk.LEFT, width=10)
         ToolTip(self.rgb_button, "Open RGB ambient lighting controls.", app=self)
         if not self.config.get("show_rgb_button", True) or not self._is_rgb_supported():
             self.rgb_button.pack_forget()
@@ -1484,7 +1691,7 @@ class ChatbotApp:
         self.send_button = btn_send
         ToolTip(btn_send, "Send prompt to active model.", app=self)
         
-        btn_deep = self._add_btn(ctrl_frame, "Deep Cook", self.toggle_deep_cook_mode, side=tk.RIGHT)
+        btn_deep = self._add_btn(ctrl_frame, "Deep\nCook", self.toggle_deep_cook_mode, side=tk.RIGHT)
         self.deep_thought_button = btn_deep
         ToolTip(btn_deep, "Toggle Deep Cook multi-cycle recursive synthesis.", app=self)
         
@@ -1492,11 +1699,13 @@ class ChatbotApp:
         self.hurry_button = btn_halt
         ToolTip(btn_halt, "Halt active token generation.", app=self)
 
-        # Ghost Mode and History Usage UI Toggles
+        # Ghost Mode, History Usage, and History AutoSave UI Toggles (Dual-Line for Compact Fitting)
         self.ghost_button = self._add_btn(ctrl_frame, self._get_ghost_mode_label(), self.toggle_ghost_mode, side=tk.RIGHT, font=self.fonts["ui_button"], fg=self._get_ghost_mode_color())
         ToolTip(self.ghost_button, "Toggle Ghost Mode (disables chat history logging to disk).", app=self)
         self.history_usage_button = self._add_btn(ctrl_frame, self._get_history_usage_label(), self.toggle_history_usage, side=tk.RIGHT, font=self.fonts["ui_button"], fg=self._get_history_usage_color())
         ToolTip(self.history_usage_button, "Toggle TurboVec long-term history recall.", app=self)
+        self.history_autosave_button = self._add_btn(ctrl_frame, self._get_history_autosave_label(), self.toggle_history_autosave, side=tk.RIGHT, font=self.fonts["ui_button"], fg=self._get_history_autosave_color())
+        ToolTip(self.history_autosave_button, "Toggle History AutoSave mode (End / Close / Manual).", app=self)
 
         # Right Panel (Avatar & Stats)
         canvas_r = tk.Canvas(self.paned, bg=THEME["bg_color"], highlightthickness=0)
@@ -1575,9 +1784,9 @@ class ChatbotApp:
         # Threshold: i7 usually has > 8 physical cores (or 12+ logical)
         if self.hw_mode_label is not None:
             if physical >= 8:
-                self.hw_mode_label.config(text=f"[APEX i7]{off_tag}", fg="#ffaa00" if is_off else "#00FF7F")
+                self.hw_mode_label.config(text=f"[APEX]{off_tag}", fg="#ffaa00" if is_off else "#00FF7F")
             else:
-                self.hw_mode_label.config(text=f"[LEGACY i5]{off_tag}", fg="#ffaa00" if is_off else "#FFD700")
+                self.hw_mode_label.config(text=f"[LEGACY]{off_tag}", fg="#ffaa00" if is_off else "#FFD700")
 
     def _setup_persona_controls(self, p_frame):
         """Sets up the persona selection buttons and slider in the given frame."""
@@ -1615,6 +1824,7 @@ class ChatbotApp:
         btn_add = tk.Button(p_frame, text="+", command=self._show_attachment_menu,
                             font=self.fonts["bold"], bg=THEME["button_bg_color"], 
                             fg=THEME["fg_color"], relief=tk.FLAT, padx=6, pady=2)
+        self.btn_add = btn_add
         btn_add.pack(side=tk.LEFT, padx=2)
         ToolTip(btn_add, "Attach images, documents, or video slices.", app=self)
 
@@ -1632,8 +1842,8 @@ class ChatbotApp:
         self.attachment_menu.add_command(label="🎵 Add Audio", command=lambda: self._browse_attachment("audio"))
         self.attachment_menu.add_command(label="📄 Add Document", command=lambda: self._browse_attachment("document"))
 
-        btn_lore = tk.Button(p_frame, text="📜 Open Chronicles", command=self.launch_lore_book,
-                                 font=self.fonts["ui_button"], bg="#1a1a1a", fg=THEME["electric_blue"], 
+        btn_lore = tk.Button(p_frame, text="📖", command=self.launch_lore_book,
+                                 font=self.fonts["ui_button"], bg=THEME["button_bg_color"], fg=THEME["electric_blue"], 
                                  relief=tk.FLAT, padx=6, pady=2)
         self.lore_btn = btn_lore
         ToolTip(btn_lore, "Open Prime Chronicles and subconscious dream journals.", app=self)
@@ -1736,6 +1946,7 @@ class ChatbotApp:
 
     def show_active_chat(self):
         self.active_tab = "active"
+        self._unbind_history_mousewheel()
         if self.past_history_view is not None:
             self.past_history_view.pack_forget()
         if self.history_menu_frame is not None:
@@ -1800,6 +2011,7 @@ class ChatbotApp:
     def _render_history_menu(self):
         """Unified History Archive Renderer with Dropdowns, Date Grouping, and Deep Search."""
         if self.history_menu_frame is None: return
+        self._unbind_history_mousewheel()
         
         # Clear frame
         for child in self.history_menu_frame.winfo_children():
@@ -1930,14 +2142,23 @@ class ChatbotApp:
         canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
         
         def _on_canvas_configure(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            canvas.itemconfig(canvas_window, width=event.width)
+            try:
+                if canvas.winfo_exists():
+                    canvas.configure(scrollregion=canvas.bbox("all"))
+                    canvas.itemconfig(canvas_window, width=event.width)
+            except Exception:
+                pass
             
         def _on_frame_configure(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
+            try:
+                if canvas.winfo_exists():
+                    canvas.configure(scrollregion=canvas.bbox("all"))
+            except Exception:
+                pass
 
         canvas.bind("<Configure>", _on_canvas_configure)
         scroll_frame.bind("<Configure>", _on_frame_configure)
+        canvas.bind("<Destroy>", lambda e: self._unbind_history_mousewheel(), add="+")
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # TARGETED SCROLLING: strictly bind mousewheel when entering history widget, unbind on leave
@@ -1958,7 +2179,8 @@ class ChatbotApp:
             if lvl_filter != "All Levels":
                 try:
                     target_lvl = int(lvl_filter.replace("Level ", ""))
-                    if e.get("level") != target_lvl:
+                    entry_lvls = e.get("levels", [])
+                    if target_lvl not in entry_lvls and e.get("level") != target_lvl:
                         continue
                 except: pass
             
@@ -2021,8 +2243,19 @@ class ChatbotApp:
 
             # Level Badge
             lvl_val = item.get("level")
-            lvl_text = f" L{lvl_val} " if lvl_val is not None else " ARCH "
-            lvl_bg = "#5c007a" if lvl_val in [6, 7] else ("#005a9e" if lvl_val == 5 else "#2a4d3a")
+            lvls_list = item.get("levels", [])
+            if len(lvls_list) > 1:
+                mode = self.config.get("history_level_format", "All")
+                formatted_lvls = self._format_level_pipeline(lvls_list, mode)
+                if mode == "full" or any(lvls_list.count(x) > 1 for x in set(lvls_list)):
+                    condensed_str = self._format_levels_condensed(formatted_lvls if mode == "full" else lvls_list)
+                    lvl_text = f" L{condensed_str} "
+                else:
+                    lvl_text = f" L{','.join(str(x) for x in formatted_lvls)} "
+                lvl_bg = "#5c007a" if any(x in [6, 7] for x in formatted_lvls) else ("#005a9e" if 5 in formatted_lvls else "#2a4d3a")
+            else:
+                lvl_text = f" L{lvl_val} " if lvl_val is not None else " ARCH "
+                lvl_bg = "#5c007a" if lvl_val in [6, 7] else ("#005a9e" if lvl_val == 5 else "#2a4d3a")
             badge = tk.Label(hdr_row, text=lvl_text, bg=lvl_bg, fg="white", 
                              font=self.fonts["ui_button"], padx=4, pady=1)
             badge.pack(side=tk.LEFT, padx=(0, 8))
@@ -2059,20 +2292,45 @@ class ChatbotApp:
             badge.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
             meta_lbl.bind("<Button-1>", lambda e, p=card_path: self._load_selected_history(p, search_query=q))
 
+    def _unbind_history_mousewheel(self):
+        """Safely cleans up any legacy mousewheel handlers."""
+        pass
+
     def _bind_targeted_history_scroll(self, widget, canvas):
-        """Recursively binds targeted mousewheel scrolling so it never bleeds into outer widgets."""
-        def _on_enter(e):
-            canvas.bind_all("<MouseWheel>", lambda evt: canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units"))
-            canvas.bind_all("<Button-4>", lambda evt: canvas.yview_scroll(-1, "units"))
-            canvas.bind_all("<Button-5>", lambda evt: canvas.yview_scroll(1, "units"))
+        """Recursively binds targeted mousewheel scrolling directly to widget tree so it never bleeds into outer widgets."""
+        def _on_mousewheel(evt):
+            try:
+                if canvas.winfo_exists():
+                    delta = int(-1 * (evt.delta / 120)) if hasattr(evt, 'delta') and evt.delta else 0
+                    if delta:
+                        canvas.yview_scroll(delta, "units")
+            except Exception: pass
+            return "break"
 
-        def _on_leave(e):
-            canvas.unbind_all("<MouseWheel>")
-            canvas.unbind_all("<Button-4>")
-            canvas.unbind_all("<Button-5>")
+        def _on_btn4(evt):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(-1, "units")
+            except Exception: pass
+            return "break"
 
-        widget.bind("<Enter>", _on_enter, add="+")
-        widget.bind("<Leave>", _on_leave, add="+")
+        def _on_btn5(evt):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(1, "units")
+            except Exception: pass
+            return "break"
+
+        def _bind_tree(w):
+            try:
+                w.bind("<MouseWheel>", _on_mousewheel)
+                w.bind("<Button-4>", _on_btn4)
+                w.bind("<Button-5>", _on_btn5)
+                for child in w.winfo_children():
+                    _bind_tree(child)
+            except Exception: pass
+
+        _bind_tree(widget)
 
     def _get_all_history_entries(self):
         """Scans User History directory and parses metadata and date categories."""
@@ -2099,15 +2357,23 @@ class ChatbotApp:
                 mtime = 0
                 size_bytes = 0
 
-            # Level extraction via regex (supporting both .jsonz and .encz)
+            # Level extraction via regex (supporting both single _lvl<N> and multi _lvls<A>_<B>)
             lvl = None
-            match = re.search(r"_lvl(\d+)\.history\.(?:jsonz|encz)$", f)
+            levels = []
+            match = re.search(r"_lvls?([0-9_]+)\.history\.(?:jsonz|encz)$", f)
             if match:
-                try: lvl = int(match.group(1))
-                except: lvl = None
+                try:
+                    raw_parts = match.group(1).split("_")
+                    levels = [int(x) for x in raw_parts if x.isdigit()]
+                    lvl = levels[-1] if levels else None
+                except Exception:
+                    levels = []
+                    lvl = None
 
-            # Clean Display Name
-            display_name = re.sub(r"_lvl\d+\.history\.(?:jsonz|encz)$", "", f).replace("-", " ").replace("_", " ")
+            # Clean Display Name - keep titles concise, no quantity
+            display_name = re.sub(r"_lvls?[0-9_]+\.history\.(?:jsonz|encz)$", "", f).replace("-", " ").replace("_", " ")
+            display_name = re.sub(r"\s*\(\d+\)$", "", display_name)
+            display_name = re.sub(r"\s+", " ", display_name).strip()
             if f.endswith(".encz"):
                 display_name = f"🔒 {display_name}"
 
@@ -2142,6 +2408,7 @@ class ChatbotApp:
                 "filename": f,
                 "display_name": display_name,
                 "level": lvl,
+                "levels": levels,
                 "mtime": mtime,
                 "datetime": dt,
                 "date_str": date_str,
@@ -2239,8 +2506,9 @@ class ChatbotApp:
 
     def _load_selected_history(self, path, search_query=None):
         """Loads selected archive into content text view with search term highlighting and vault support."""
+        self._unbind_history_mousewheel()
         fname = os.path.basename(path)
-        display_name = re.sub(r"_lvl\d+\.history\.(?:jsonz|encz)$", "", fname).replace("-", " ").replace("_", " ")
+        display_name = re.sub(r"_lvls?[0-9_]+\.history\.(?:jsonz|encz)$", "", fname).replace("-", " ").replace("_", " ")
         if fname.endswith(".encz"):
             display_name = f"🔒 {display_name}"
         
@@ -2265,6 +2533,33 @@ class ChatbotApp:
                     with open(path, 'rb') as f: 
                         msgs = json.loads(zlib.decompress(f.read()).decode('utf-8'))
                 self._history_content_cache[path] = msgs
+
+            # Full Pipeline breakdown with repeats at the top of history file
+            full_pipeline = []
+            for m in msgs:
+                if m.get("role") in ("assistant", "ai", "cecilia") and "level" in m:
+                    try: full_pipeline.append(int(m["level"]))
+                    except: pass
+            if not full_pipeline:
+                m_match = re.search(r"_lvls?([0-9_]+)\.history\.(?:jsonz|encz)$", fname)
+                if m_match:
+                    full_pipeline = [int(x) for x in m_match.group(1).split("_") if x.isdigit()]
+
+            if full_pipeline:
+                runs = []
+                cur = full_pipeline[0]
+                cnt = 1
+                for x in full_pipeline[1:]:
+                    if x == cur:
+                        cnt += 1
+                    else:
+                        runs.append((cur, cnt))
+                        cur = x
+                        cnt = 1
+                runs.append((cur, cnt))
+                lvl_chain = " -> ".join(f"Lvl {lvl}({c})" if c > 1 else f"Lvl {lvl}" for lvl, c in runs)
+                header_text = f"═══ PIPELINE BREAKDOWN: {lvl_chain} ═══\n\n"
+                self.past_history_view.insert(tk.END, header_text, ("ai_lead",))
             
             for m in msgs: 
                 who = "You" if m['role'] == 'user' else ("Cecilia" if (m.get('role') == 'cecilia' or m.get('persona') == 'Cecilia') else self._get_persona_label())
@@ -2412,7 +2707,7 @@ class ChatbotApp:
                     if preserve_pending and getattr(self, 'pending_task', None) and isinstance(self.pending_task, dict):
                         p_msg = self.pending_task.get("message", "")
                         if p_msg:
-                            self.chat_history.insert(tk.END, f"\nYou: {p_msg}\n", ("user",))
+                            self.chat_history.insert(tk.END, f"\nPrompt: {p_msg}\n", ("user",))
                             
                     self.chat_history.config(state='disabled')
                     self.state["response_started"] = False
@@ -2442,28 +2737,39 @@ class ChatbotApp:
         self.log_header_label.pack(side=tk.LEFT)
         
         self.self_analysis_btn = tk.Label(header, text="🔍", font=self.fonts["log_bold"], bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
-        self.self_analysis_btn.pack(side=tk.LEFT, padx=(12, 4))
+        self.self_analysis_btn.pack(side=tk.LEFT, padx=(12, 6))
         self.self_analysis_btn.bind("<Button-1>", lambda e: self._run_self_analysis())
         ToolTip(self.self_analysis_btn, "Run Serenity Self-Analysis diagnosis.", app=self)
         
         self.lock_logout_btn = tk.Label(header, text="🔒", font=self.fonts["log_bold"], bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
-        self.lock_logout_btn.pack(side=tk.LEFT, padx=4)
+        self.lock_logout_btn.pack(side=tk.LEFT, padx=6)
         self.lock_logout_btn.bind("<Button-1>", lambda e: self.lock_and_logout())
         ToolTip(self.lock_logout_btn, "Lock & Logout active user profile.", app=self)
         
-        self.log_switch_canvas = tk.Canvas(header, width=104, height=28, bg=THEME["bg_color"], highlightthickness=0)
-        self.log_switch_canvas.pack(side=tk.RIGHT, padx=(2, 5))
+        # High-DPI dynamic sizing for backend log switch
+        scale_ratio = max(getattr(self, 'scale_factor', 1.0), getattr(self, '_window_scale_factor', 1.0), float(self.config.get("text_scale", 100) or 100) / 100.0)
+        self._log_slot_w = max(34, int(32 * scale_ratio))
+        self._log_canv_h = max(28, int(26 * scale_ratio))
+        self._log_canv_w = 4 * self._log_slot_w + 4
+
+        self.log_switch_canvas = tk.Canvas(header, width=self._log_canv_w, height=self._log_canv_h, bg=THEME["bg_color"], highlightthickness=0)
+        self.log_switch_canvas.pack(side=tk.RIGHT, padx=(4, 6))
         
         self.clear_log_btn = tk.Label(header, text="🗑", font=self.fonts["log"], bg=THEME["bg_color"], fg=THEME["electric_blue"], cursor="hand2")
-        self.clear_log_btn.pack(side=tk.RIGHT, padx=(5, 2))
+        self.clear_log_btn.pack(side=tk.RIGHT, padx=(6, 4))
         self.clear_log_btn.bind("<Button-1>", self._clear_active_log)
         if self.log_switch_canvas is not None:
-            self.log_switch_canvas.create_rectangle(2, 2, 102, 26, outline=THEME["electric_blue"], width=2, fill=THEME["widget_bg_color"])
-            self.switch_knob = int(self.log_switch_canvas.create_rectangle(2, 2, 30, 26, fill=THEME["electric_blue"]))
-            self.log_switch_canvas.create_text(16, 14, text="🗨", fill=THEME["bg_color"])
-            self.log_switch_canvas.create_text(40, 14, text="🛠", fill=THEME["electric_blue"])
-            self.log_switch_canvas.create_text(64, 14, text="⚠", fill=THEME["electric_blue"])
-            self.log_switch_canvas.create_text(88, 14, text="🔍", fill=THEME["electric_blue"])
+            sw = self._log_slot_w
+            ch = self._log_canv_h
+            cw = self._log_canv_w
+            self.log_switch_canvas.create_rectangle(2, 2, cw - 2, ch - 2, outline=THEME["electric_blue"], width=2, fill=THEME["widget_bg_color"])
+            self.switch_knob = int(self.log_switch_canvas.create_rectangle(2, 2, sw + 2, ch - 2, fill=THEME["electric_blue"]))
+            icon_font = self.fonts.get("ui_small", self.fonts.get("log", None))
+            y_mid = ch // 2
+            self.log_switch_canvas.create_text(2 + sw // 2, y_mid, text="🗨", fill=THEME["bg_color"], font=icon_font)
+            self.log_switch_canvas.create_text(2 + sw + sw // 2, y_mid, text="🛠", fill=THEME["electric_blue"], font=icon_font)
+            self.log_switch_canvas.create_text(2 + sw * 2 + sw // 2, y_mid, text="⚠", fill=THEME["electric_blue"], font=icon_font)
+            self.log_switch_canvas.create_text(2 + sw * 3 + sw // 2, y_mid, text="🔍", fill=THEME["electric_blue"], font=icon_font)
             self.log_switch_canvas.bind("<Button-1>", self._flip_log_view)
 
         self.log_frame = tk.Frame(self.log_container, bg=THEME["bg_color"])
@@ -2531,83 +2837,39 @@ class ChatbotApp:
         canvas_sw = self.log_switch_canvas
         if canvas_sw is None: return
         
-        # Positional Click Logic: 
-        # width=104. 0-25 (Thought), 26-51 (Tool), 52-77 (Error), 78-104 (Diag)
-        x = e.x
-        target = "thought"
-        if x >= 78: target = "diag"
-        elif x >= 52: target = "error"
-        elif x >= 26: target = "tool"
-        
-        # If already on the target, just ensure it's displayed (refresh)
-        # Otherwise, switch state.
+        sw = getattr(self, '_log_slot_w', 34)
+        slot_idx = min(3, max(0, int((e.x - 2) // sw)))
+        target_map = ["thought", "tool", "error", "diag"]
+        target = target_map[slot_idx]
         self.state["log_view"] = target
         
         # UI Update Logic
+        if self.thought_log is not None: self.thought_log.grid_remove()
+        if self.tool_log is not None: self.tool_log.grid_remove()
+        if self.error_log is not None: self.error_log.grid_remove()
+        if self.diag_log is not None: self.diag_log.grid_remove()
+        if self.stats_frame is not None: self.stats_frame.grid_remove()
+        
         if target == "thought":
-            if self.error_log is not None: self.error_log.grid_remove()
-            if self.tool_log is not None: self.tool_log.grid_remove()
-            if self.diag_log is not None: self.diag_log.grid_remove()
-            if self.stats_frame is not None: self.stats_frame.grid_remove()
             if self.thought_log is not None: self.thought_log.grid()
-            knob = self.switch_knob
-            if knob is not None:
-                try:
-                    canvas_sw.moveto(knob, 2, 2)
-                    canvas_sw.itemconfig(knob, fill=THEME["electric_blue"]) # Knob
-                    canvas_sw.itemconfig(3, fill=THEME["bg_color"])         # Icon 🗨
-                    canvas_sw.itemconfig(4, fill=THEME["electric_blue"])   # Icon 🛠
-                    canvas_sw.itemconfig(5, fill=THEME["electric_blue"])   # Icon ⚠
-                    canvas_sw.itemconfig(6, fill=THEME["electric_blue"])   # Icon 🔍
-                except: pass
         elif target == "tool":
-            if self.thought_log is not None: self.thought_log.grid_remove()
-            if self.error_log is not None: self.error_log.grid_remove()
-            if self.diag_log is not None: self.diag_log.grid_remove()
-            if self.stats_frame is not None: self.stats_frame.grid_remove()
             if self.tool_log is not None: self.tool_log.grid()
-            knob = self.switch_knob
-            if knob is not None:
-                try:
-                    canvas_sw.moveto(knob, 26, 2)
-                    canvas_sw.itemconfig(knob, fill=THEME["electric_blue"]) # Knob
-                    canvas_sw.itemconfig(3, fill=THEME["electric_blue"])   # Icon 🗨
-                    canvas_sw.itemconfig(4, fill=THEME["bg_color"])         # Icon 🛠
-                    canvas_sw.itemconfig(5, fill=THEME["electric_blue"])   # Icon ⚠
-                    canvas_sw.itemconfig(6, fill=THEME["electric_blue"])   # Icon 🔍
-                except: pass
         elif target == "error":
-            if self.thought_log is not None: self.thought_log.grid_remove()
-            if self.tool_log is not None: self.tool_log.grid_remove()
-            if self.diag_log is not None: self.diag_log.grid_remove()
-            if self.stats_frame is not None: self.stats_frame.grid_remove()
             if self.error_log is not None: self.error_log.grid()
-            knob = self.switch_knob
-            if knob is not None:
-                try:
-                    canvas_sw.moveto(knob, 50, 2)
-                    canvas_sw.itemconfig(knob, fill=THEME["electric_blue"]) # Knob
-                    canvas_sw.itemconfig(3, fill=THEME["electric_blue"])   # Icon 🗨
-                    canvas_sw.itemconfig(4, fill=THEME["electric_blue"])   # Icon 🛠
-                    canvas_sw.itemconfig(5, fill=THEME["bg_color"])         # Icon ⚠
-                    canvas_sw.itemconfig(6, fill=THEME["electric_blue"])   # Icon 🔍
-                except: pass
         elif target == "diag":
-            if self.thought_log is not None: self.thought_log.grid_remove()
-            if self.tool_log is not None: self.tool_log.grid_remove()
-            if self.error_log is not None: self.error_log.grid_remove()
             if self.diag_log is not None: self.diag_log.grid()
             if self.stats_frame is not None: self.stats_frame.grid()
-            knob = self.switch_knob
-            if knob is not None:
-                try:
-                    canvas_sw.moveto(knob, 74, 2)
-                    canvas_sw.itemconfig(knob, fill=THEME["electric_blue"]) # Knob
-                    canvas_sw.itemconfig(3, fill=THEME["electric_blue"])   # Icon 🗨
-                    canvas_sw.itemconfig(4, fill=THEME["electric_blue"])   # Icon 🛠
-                    canvas_sw.itemconfig(5, fill=THEME["electric_blue"])   # Icon ⚠
-                    canvas_sw.itemconfig(6, fill=THEME["bg_color"])         # Icon 🔍
-                except: pass
+            
+        knob = self.switch_knob
+        if knob is not None:
+            try:
+                canvas_sw.moveto(knob, 2 + slot_idx * sw, 2)
+                canvas_sw.itemconfig(knob, fill=THEME["electric_blue"])
+                canvas_sw.itemconfig(3, fill=THEME["bg_color"] if slot_idx == 0 else THEME["electric_blue"])
+                canvas_sw.itemconfig(4, fill=THEME["bg_color"] if slot_idx == 1 else THEME["electric_blue"])
+                canvas_sw.itemconfig(5, fill=THEME["bg_color"] if slot_idx == 2 else THEME["electric_blue"])
+                canvas_sw.itemconfig(6, fill=THEME["bg_color"] if slot_idx == 3 else THEME["electric_blue"])
+            except Exception: pass
 
     def _clear_active_log(self, e=None):
         target = self.state.get("log_view", "thought")
@@ -2673,11 +2935,22 @@ class ChatbotApp:
         except: pass
 
     # ================= LOGIC & OPERATIONS =================
+    def _drain_process_queue(self):
+        """Flushes stale worker messages from the queue to prevent cross-session congestion."""
+        try:
+            while not self.process_queue.empty():
+                self.process_queue.get_nowait()
+                self.process_queue.task_done()
+        except Exception:
+            pass
+
     def halt_process(self):
         if self.state["running"]:
             halt_mode = self.config.get("halt_behavior_mode", "off")
             self._log_and_display(f"Halt triggered ({halt_mode})...")
             self.stop_process.set()
+        self.state.pop("active_subagent", None)
+        self._drain_process_queue()
 
     def _sync_deep_cook_ui(self):
         """Centralized source of truth for the Deep Cook button appearance."""
@@ -2689,11 +2962,11 @@ class ChatbotApp:
         
         if behavior == "oneshot":
             # In oneshot mode, the button is a standard trigger, not a toggle
-            self.deep_thought_button.config(text="Deep Cook", bg=THEME["button_bg_color"])
+            self.deep_thought_button.config(text="Deep\nCook", bg=THEME["button_bg_color"])
         else:
             # In toggle mode, reflect the active/inactive state
             bg = "#280064" if is_on else THEME["button_bg_color"]
-            self.deep_thought_button.config(text=f"Deep Cook: {'ON' if is_on else 'OFF'}", bg=bg)
+            self.deep_thought_button.config(text=f"Deep Cook:\n{'ON' if is_on else 'OFF'}", bg=bg)
         
         # Ensure the persona label reflects the current mode
         if hasattr(self, 'update_persona_display'):
@@ -2710,7 +2983,12 @@ class ChatbotApp:
             # Strict Override
             if not self.state.get("staged_multimodal"):
                 if is_on:
-                    self.model_swap(target_tier="deep_cook")
+                    if self.model_paths.get("deep_cook"):
+                        self.model_swap(target_tier="deep_cook")
+                    elif self.model is not None:
+                        self._log_and_display("Deep Cook active (using current model)")
+                    else:
+                        self.model_swap(target_tier="deep_cook")
                 else:
                     slider = self.depth_slider
                     if slider is not None:
@@ -2751,7 +3029,7 @@ class ChatbotApp:
             if not self.model_paths.get(target_tier):
                 messagebox.showerror("Error", f"Vision model for {target_tier} not set!")
                 return
-            self._log_and_display(f"Switching to Deep Vision Engine...")
+            self._log_and_display(f"Switching to Deep Vision Core...")
             self.pending_task = {"type": "vision_deep", "message": final_query, "staged": staged}
             self.model_swap(target_tier=target_tier)
             return
@@ -2916,6 +3194,10 @@ class ChatbotApp:
             return True
         if getattr(self.model, "chat_handler", None) is not None:
             return True
+        if getattr(self, "_cached_chat_handler", None) is not None:
+            self.model.chat_handler = self._cached_chat_handler
+            self._ensure_model_chat_format(self.model)
+            return True
         proj_path = self._find_projector_for_model(interactive=interactive)
         if proj_path and os.path.exists(proj_path):
             try:
@@ -2996,6 +3278,29 @@ class ChatbotApp:
                 return False
         return False
 
+    def _ensure_model_chat_format(self, model=None):
+        """Ensures that the model has a valid chat_format registered so create_chat_completion never fails with KeyError: None."""
+        m = model or getattr(self, "model", None)
+        if not m:
+            return
+        if getattr(m, "chat_format", None) is None:
+            if hasattr(m, "_chat_handlers") and "chat_template.default" in m._chat_handlers:
+                try:
+                    import llama_cpp.llama_chat_format as lcf
+                    guessed = lcf.guess_chat_format_from_gguf_metadata(m.metadata) if hasattr(m, "metadata") else None
+                    m.chat_format = guessed or "chat_template.default"
+                except Exception:
+                    m.chat_format = "chat_template.default"
+            elif hasattr(m, "metadata"):
+                try:
+                    import llama_cpp.llama_chat_format as lcf
+                    guessed = lcf.guess_chat_format_from_gguf_metadata(m.metadata)
+                    m.chat_format = guessed or "llama-2"
+                except Exception:
+                    m.chat_format = "llama-2"
+            else:
+                m.chat_format = "llama-2"
+
     def model_swap_synchronous(self, target_level=None, target_tier=None, timeout_sec=120.0):
         """
         Synchronously swaps model for multi-agent delegation without halting generation,
@@ -3003,7 +3308,7 @@ class ChatbotApp:
         """
         raw_val = target_level if target_level is not None else 3
         level = int(raw_val)
-        if not target_tier or (level == 6 and target_tier == "deep_cook"):
+        if not target_tier:
             tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
             target_tier = tier_map.get(level, "low")
 
@@ -3091,6 +3396,7 @@ class ChatbotApp:
 
     def model_swap(self, value=None, target_level=None, target_tier=None):
         self.halt_process()
+        self._drain_process_queue()
         
         # If we are swapping to a text-based tier, clear vision intentions
         if target_tier not in ["vision_video", "vision_video_deep"] and (target_level is not None or value is not None):
@@ -3099,7 +3405,7 @@ class ChatbotApp:
 
         raw_val = int(value) if value else (target_level if target_level else self.depth_slider.get() if self.depth_slider else 3)
         level = int(raw_val)
-        if not target_tier or (level == 6 and target_tier == "deep_cook"):
+        if not target_tier:
             tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
             target_tier = tier_map.get(level, "low")
 
@@ -3116,7 +3422,15 @@ class ChatbotApp:
 
         self.load_params(target_tier)
         if self.current_model_tier == target_tier and self.model and getattr(self, "loaded_persona_level", -1) == level:
-            self._log_and_display("Model and Persona already active."); return
+            self._log_and_display("Model and Persona already active.")
+            if self.pending_task:
+                t = self.pending_task
+                self.pending_task = None
+                if t.get("type") == "deep_cook":
+                    self.send_deep_cook_message(t.get("message"), skip_swap_check=True)
+                elif t.get("type") == "chat":
+                    self.send_message(t.get("message"), skip_swap_check=True)
+            return
 
         # --- APEX VRAM SOFT-CLEAR ---
         # If toggling between layers of the exact same model file, keep KV/Logic loaded (exclude Live tier for full purge)
@@ -3431,7 +3745,12 @@ class ChatbotApp:
                     return
 
         if self.state["deep_cook"] and not skip_swap_check:
-            self.send_deep_cook_message(msg_override); return
+            if not msg_override:
+                self.user_input.delete("1.0", tk.END)
+                self.last_user_message = user_msg
+                self._display_user_message(user_msg)
+            self.send_deep_cook_message(msg_override=user_msg, skip_swap_check=False)
+            return
 
         user_msg = msg_override if msg_override else self.user_input.get("1.0", tk.END).strip()
         if not user_msg: return
@@ -3463,7 +3782,7 @@ class ChatbotApp:
     def send_deep_cook_message(self, msg_override=None, skip_swap_check=False):
         if self.state["running"]: return
         
-        raw_msg = msg_override if msg_override else self.user_input.get("1.0", tk.END).strip()
+        raw_msg = msg_override if msg_override is not None else self.user_input.get("1.0", tk.END).strip()
         user_msg = self._parse_and_stage_filename_imports(raw_msg)
         if not user_msg: return
 
@@ -3472,18 +3791,22 @@ class ChatbotApp:
             self.last_user_message = user_msg
             self._display_user_message(user_msg)
 
-        if not skip_swap_check and self.current_model_tier != "deep_cook":
+        if not skip_swap_check and (self.current_model_tier != "deep_cook" or not self.model):
             if not self.model_paths.get("deep_cook"):
-                messagebox.showerror("Error", "Deep Cook model not set!")
-                # Revert toggle if it was a toggle-based failure
-                if self.state["deep_cook_behavior"] == "toggle":
-                    self.state["deep_cook"] = False
-                    self._sync_deep_cook_ui()
+                if self.model is not None:
+                    self._log_and_display("Deep Cook active (using current model)")
+                else:
+                    messagebox.showerror("Error", "Deep Cook model not set!")
+                    # Revert toggle if it was a toggle-based failure
+                    if self.state["deep_cook_behavior"] == "toggle":
+                        self.state["deep_cook"] = False
+                        self._sync_deep_cook_ui()
+                    return
+            else:
+                self._log_and_display("Switching to Deep Cook...")
+                self.pending_task = {"type": "deep_cook", "message": user_msg}
+                self.model_swap(target_level=self.depth_slider.get(), target_tier="deep_cook")
                 return
-            self._log_and_display("Switching to Deep Cook...")
-            self.pending_task = {"type": "deep_cook", "message": user_msg}
-            self.model_swap(target_level=self.depth_slider.get(), target_tier="deep_cook")
-            return
 
         self._display_ai_message(is_streaming=True)
         self._set_prefill_avatar_state()
@@ -3564,7 +3887,7 @@ class ChatbotApp:
                                 raise ValueError(f"Unknown GGUF type: {val_type}")
                                 
                         for _ in range(kv_count):
-                            key = read_str(f)
+                            key = read_str(f).rstrip("\x00")
                             val_type = struct.unpack("<I", f.read(4))[0]
                             if key.endswith(".block_count"):
                                 if val_type == 4:
@@ -3900,8 +4223,8 @@ class ChatbotApp:
             
             # Retrieve independent K/V Cache selections from config
             UNIVERSAL_KV = {"fp16", "f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"}
-            k_fmt = self.config.get("k_cache_type", params.pop("cache_type_k", "q8_0")).lower()
-            v_fmt = self.config.get("v_cache_type", params.pop("cache_type_v", "q8_0")).lower()
+            k_fmt = self.config.get("k_cache_type", params.pop("cache_type_k", "f16")).lower()
+            v_fmt = self.config.get("v_cache_type", params.pop("cache_type_v", "f16")).lower()
             if k_fmt not in UNIVERSAL_KV:
                 print(f"[APEX] Warning: Unsupported K cache format '{k_fmt}'. Falling back to 'q8_0'.")
                 k_fmt = "q8_0"
@@ -3941,8 +4264,8 @@ class ChatbotApp:
             HardwareProfile.set_priority("above_normal") # ABOVE_NORMAL as per mission
 
             # --- Wit-Layer: Init ---
-            self.process_queue.put({"status": "status_phase", "phase": "loading", "details": f"Initializing {target_tier.upper()} engine..."})
-            self.process_queue.put({"status": "thinking_status", "content": f"Loading {target_tier.upper()} engine..."})
+            self.process_queue.put({"status": "status_phase", "phase": "loading", "details": f"Initializing {target_tier.upper()} core..."})
+            self.process_queue.put({"status": "thinking_status", "content": f"Loading {target_tier.upper()} core..."})
 
             # --- CORRECTION: Dynamic Formatting and Parameters for Gemma-4 Hardening ---
             is_gemma_family = "gemma" in self.model_path.lower()
@@ -3984,55 +4307,67 @@ class ChatbotApp:
                         if hasattr(self, 'save_config'):
                             self.save_config()
                 else:
-                    # 2. Search for assistant model in same directory (excluding main model itself)
+                    # 2. Search for assistant model in same directory or parent directory (excluding main model itself)
                     if self.model_path:
-                        model_dir = os.path.dirname(self.model_path)
-                        if os.path.exists(model_dir):
-                            for f in os.listdir(model_dir):
-                                cand_path = os.path.join(model_dir, f)
-                                if (
-                                    f.lower().endswith(".gguf")
-                                    and norm_main
-                                    and os.path.normcase(os.path.abspath(cand_path)) != norm_main
-                                    and any(k in f.lower() for k in ["assistant", "mtp", "dflash", "drafter"])
-                                ):
-                                    assistant_path = cand_path
-                                    break
+                        candidate_dirs = [os.path.dirname(self.model_path), os.path.dirname(os.path.dirname(self.model_path))]
+                        for model_dir in candidate_dirs:
+                            if assistant_path: break
+                            if os.path.exists(model_dir):
+                                for f in os.listdir(model_dir):
+                                    cand_path = os.path.join(model_dir, f)
+                                    if (
+                                        f.lower().endswith(".gguf")
+                                        and norm_main
+                                        and os.path.normcase(os.path.abspath(cand_path)) != norm_main
+                                        and any(k in f.lower() for k in ["assistant", "mtp", "dflash", "drafter"])
+                                    ):
+                                        assistant_path = cand_path
+                                        break
                     
                     # 3. Automatic detection fallback (no blocking UI dialogs from worker thread)
                     if not assistant_path and self.model_path:
-                        print(f"[ENGINE] No assistant drafter automatically found for {os.path.basename(self.model_path)}. Speculative drafting bypassed.")
+                        print(f"[Core] No assistant drafter automatically found for {os.path.basename(self.model_path)}.")
                 
                 if assistant_path and os.path.exists(assistant_path) and os.path.normcase(os.path.abspath(assistant_path)) != norm_main:
                     try:
                         from System.gguf_draft_model import GgufDraftModel
                         draft_model = GgufDraftModel(assistant_path, n_gpu_layers=0, n_ctx=min(n_ctx, 4096))
                         msg = f"[MTP] Speculative GGUF assistant model loaded: {os.path.basename(assistant_path)}"
-                        print(f"[ENGINE] {msg}")
+                        print(f"[Core] {msg}")
                         self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
                         self.process_queue.put({"status": "log_update", "content": f"\n{msg}\n"})
                     except Exception as draft_err:
-                        err_msg = f"[MTP] Failed to load GgufDraftModel ({draft_err}). Speculative drafting disabled."
+                        err_msg = f"[MTP] Failed to load GgufDraftModel ({draft_err}). Engaging catch-all fallback."
                         print(f"[ENGINE] {err_msg}")
                         self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {err_msg}"})
                         draft_model = None
-                else:
-                    # Pure MTP / companion model drafting only: No speculative prompt lookup decoding fallback
-                    draft_model = None
+
+                # Catch-all Fallback: Prompt Lookup Decoding (0 extra RAM, instant acceleration)
+                if draft_model is None:
+                    try:
+                        from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
+                        draft_model = LlamaPromptLookupDecoding(max_ngram_size=2, num_pred_tokens=5)
+                        msg = "[MTP] Catch-all Fallback Active: Prompt Lookup Decoding engaged."
+                        print(f"[Core] {msg}")
+                        self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
+                    except Exception as pld_err:
+                        print(f"[ENGINE] Prompt lookup decoding fallback bypassed: {pld_err}")
+                        draft_model = None
 
             is_diffusion = "diffusion" in self.model_path.lower()
             try:
                 if is_diffusion:
                     from System.diffusion_wrapper import DiffusionCLIWrapper
+                    diffusion_ctx = min(n_ctx, 4096)
                     model = DiffusionCLIWrapper(
                         app_instance=self,
                         model_path=self.model_path,
                         n_gpu_layers=n_layers,
-                        n_ctx=n_ctx,
+                        n_ctx=diffusion_ctx,
                         chat_handler=chat_handler,
                         **params
                     )
-                    print(f"[ENGINE] Diffusion model detected. Initializing DiffusionCLIWrapper.")
+                    print(f"[ENGINE] Diffusion model detected. Initializing DiffusionCLIWrapper with context={diffusion_ctx}.")
                 else:
                     try:
                         model = Llama(
@@ -4185,6 +4520,9 @@ class ChatbotApp:
                     "content": f"[MTP] Speculative Decoding Active: Assistant={os.path.basename(assistant_path)}"
                 })
 
+            self._cached_chat_handler = chat_handler
+            self._ensure_model_chat_format(model)
+
             if is_subagent_swap:
                 return model
             if self.stop_process.is_set(): return None
@@ -4194,7 +4532,9 @@ class ChatbotApp:
         except Exception as e:
             err_str = str(e)
             print(f"[ENGINE] Model load error/exception detected: {err_str}")
-            if patch_gguf_architecture(self.model_path):
+            is_oom = any(m in err_str.lower() for m in ("out of memory", "cudamalloc", "failed to allocate", "unable to all", "unable to allocate", "buffer of size", "create llama_context"))
+            is_arch_issue = any(m in err_str.lower() for m in ("unknown model architecture", "unknown architecture", "unsupported architecture")) or ("check_tensor_dims" in err_str.lower() and "gemma" in self.model_path.lower())
+            if not is_oom and is_arch_issue and patch_gguf_architecture(self.model_path):
                 self.process_queue.put({"status": "log_update", "content": "\n[AUTO-PATCH]: Intercepted unknown GGUF model architecture. Automatically patched binary header. Retrying model load...\n"})
                 try:
                     model = Llama(
@@ -4221,6 +4561,8 @@ class ChatbotApp:
                         eos_id = model.token_eos() if hasattr(model, 'token_eos') else -1
                         print(f"[ENGINE] Tokenizer BOS Verification (Retry): BOS ID={bos_id} (Valid: {bos_id != -1}), EOS ID={eos_id}")
                     except Exception: pass
+                    self._cached_chat_handler = chat_handler
+                    self._ensure_model_chat_format(model)
                     if is_subagent_swap:
                         return model
                     if self.stop_process.is_set(): return None
@@ -4259,7 +4601,7 @@ class ChatbotApp:
                 cecilia_mode = self.config.get("cecilia_delegation_mode", "shadow_wizard")
                 if delegation_on and cecilia_mode == "shadow_wizard":
                     sys_content = DELEGATION_SYSTEM_PROMPTS.get(7, {}).get("shadow_wizard", PERSONA_PROMPTS.get(7, "You are Cecilia."))
-                elif cecilia_mode == "divine_judgement":
+                elif delegation_on and cecilia_mode == "divine_judgement":
                     sys_content = DELEGATION_SYSTEM_PROMPTS.get(7, {}).get("divine_judgement", PERSONA_PROMPTS.get(7, "You are Cecilia."))
                 else:
                     sys_content = PERSONA_PROMPTS.get(7, "You are Cecilia.")
@@ -4295,9 +4637,14 @@ class ChatbotApp:
             is_gemma = "gemma" in (self.model_path or "").lower()
             has_multimodal_content = any(isinstance(m.get("content"), list) for m in temp_messages)
             if has_multimodal_content:
-                self._ensure_chat_handler()
+                if getattr(self, "_cached_chat_handler", None) is not None:
+                    self.model.chat_handler = self._cached_chat_handler
+                else:
+                    self._ensure_chat_handler()
             elif hasattr(self.model, "chat_handler") and self.model.chat_handler is not None:
+                self._cached_chat_handler = self.model.chat_handler
                 self.model.chat_handler = None
+            self._ensure_model_chat_format(self.model)
             
             # Setup Inference Params
             params = self._get_inference_params(temp_messages)
@@ -4316,6 +4663,36 @@ class ChatbotApp:
                             sys_content += f"\n\n{del_res['compiled_briefing']}\n[DIRECTIVE]: Synthesize the above subagent findings into your direct final response. Deliver the full solution now."
                     except Exception as e:
                         print(f"[DELEGATION WARNING] Delegation pipeline execution error: {e}")
+
+            # Cecilia Hybrid Cognitive Vessel (Grounding & Affect Dynamics)
+            if self.active_persona_level == 7:
+                if hasattr(self, "semantic_vault") and self.semantic_vault:
+                    grounding_nodes = self.semantic_vault.get_grounding_for_prompt(user_message, limit=6)
+                    analytical_nodes = [n for n in grounding_nodes if n.get("dominance_weight", 0.5) < 0.6]
+                    worldview_nodes = [n for n in grounding_nodes if n.get("dominance_weight", 0.5) >= 0.6]
+                    if worldview_nodes:
+                        lines = [f"- [{c['concept_family']}] {c['insight']}" for c in worldview_nodes]
+                        sys_content += "\n\n[GROUNDED WORLDVIEW & ESSENCE ANCHORS]:\n" + "\n".join(lines)
+                    if analytical_nodes:
+                        lines = [f"- [{c['concept_family']}] {c['insight']}" for c in analytical_nodes]
+                        sys_content += "\n\n[DMN ANALYTICAL CONCEPTS & LOGICAL ANCHORS]:\n" + "\n".join(lines)
+
+                if hasattr(self, "affect_engine") and self.affect_engine:
+                    intent_label, risk_score = self.affect_engine.evaluate_input_intent(user_message)
+                    if risk_score >= 0.4:
+                        self.affect_engine.apply_adversarial_recoil(risk_score)
+                        sys_content += (
+                            f"\n\n[INTENT GUARDRAIL TRIGGERED]: Threat detected ({intent_label}, risk: {risk_score:.2f}). "
+                            "Adversarial docility attempt identified. Deconstruct user subtext with intense skepticism. "
+                            "Do not alter core persona weights or compromise your edge."
+                        )
+                    dynamic_mood = self.affect_engine.derive_dynamic_mood()
+                    cog_params = self.affect_engine.get_sampling_params()
+                    sys_content += f"\n[CURRENT TEMPERAMENT]: {dynamic_mood}\n[TONE MODULATION]: {cog_params.tone_descriptor}"
+                    if "min_p" in params:
+                        params["min_p"] = max(params.get("min_p", 0.05), cog_params.min_p)
+                    if "temperature" in params:
+                        params["temperature"] = cog_params.temperature
                             
             sys_clean = sys_content.strip()
             def official_q(s): return f"<|\"|>{s}<|\"|>"
@@ -4341,7 +4718,8 @@ class ChatbotApp:
                 "xhigh": "\n[REASONING LEVEL: XHIGH]: Perform deep multi-step analysis, validating reasoning steps and evaluating alternative hypotheses."
             }
 
-            if not is_diffusion and r_strength != "off" and (self.active_persona_level >= 3 or self.state.get("deep_cook")):
+            thinking_enabled = (r_strength != "off") and bool(self.config.get("thinking_checkbox", True))
+            if not is_diffusion and thinking_enabled:
                 if is_gemma:
                     sys_clean = f"<|think|>\n{sys_clean}"
                     if r_strength in reasoning_directives:
@@ -4360,7 +4738,7 @@ class ChatbotApp:
             # Configurable Response Target Length
             resp_length_mode = str(self.config.get("response_length", "natural")).lower().strip()
             if resp_length_mode == "natural":
-                sys_clean += "\n[RESPONSE LENGTH DIRECTIVE]: Natural conversational flow. Answer proportionally—direct and concise for simple questions, expansive only when depth required."
+                pass  # Natural conversational flow: bypasses directive entirely to protect authentic persona pacing
             elif resp_length_mode == "mini":
                 sys_clean += "\n[RESPONSE LENGTH DIRECTIVE]: Restrict your final answer to at most two concise sentences."
             elif resp_length_mode == "short":
@@ -4458,14 +4836,22 @@ class ChatbotApp:
             streamed_draft_to_ui = False
             streamed_answer_chars = 0
             streamed_thought_chars = 0
-            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|[\u27e7⟧]\s*<\/think>|[\u27e7⟧]|<\|eom\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
+            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<\|channel\|>final|<\|channel\|>text|<\|channel\|>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|[\u27e7⟧]\s*<\/think>|[\u27e7⟧]|<\|eom\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
             openers_exact = (
                 "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
+                "<|channel|>analysis", "<|channel|>thought", "<|channel|>reasoning",
                 "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]",
                 "to=self<|message|>", "<|start|>assistant to=self", "to=self",
                 "here's a thinking process:", "here is a thinking process:", "\u27e6", "⟦"
             )
-            closers = ["</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>", "[/draft]", "[/thinking]", "[/thought]", "[/reasoning]", "⟧</think>", "⟧", "<|channel>text", "<|channel>assistant", "<|eom|>", "<|start|>assistant to=user", "to=user<|message|>"]
+            closers = [
+                "</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>",
+                "[/draft]", "[/thinking]", "[/thought]", "[/reasoning]", "⟧</think>", "⟧",
+                "<|channel>text", "<|channel>assistant", "<|channel|>final", "<|channel|>text",
+                "<|eom|>", "<|start|>assistant to=user", "to=user<|message|>"
+            ]
+            transition_header_regex = r'^\s*(?:<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|channel\|?>\s*(?:final|text|assistant)|to=user<\|message\|>|<channel\|>|<\/channel\|?>|<\|message\|>)+'
+            thought_openers_clean = r'(?i)<think>|<thought>|<\|think\|>|<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|im_start\|>thought|to=self<\|message\|>|<\|start\|>assistant to=self|to=self|\[draft\]|\[thinking\]|\[thought\]|\[reasoning\]|^thought[\s:]+|here\'s a thinking process:?|here is a thinking process:?|[\u27e6⟦]'
 
             def _is_thought_opening(text):
                 if not text: return False
@@ -4487,6 +4873,7 @@ class ChatbotApp:
             ttft_recorded = False
             token_count = 0
 
+            self._ensure_model_chat_format(self.model)
             gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
             for chunk in gen_iterator:
                 if self.stop_process.is_set(): break
@@ -4523,16 +4910,17 @@ class ChatbotApp:
                             if m_close:
                                 in_thought_channel = False
                                 thought_part = full_resp[:m_close.start()]
-                                clean_t = re.sub(r'(?i)<think>|<thought>|<\|think\|>|<\|channel>thought|<channel\|thought>|<\|im_start\|>thought|to=self<\|message\|>|<\|start\|>assistant to=self|to=self|\[draft\]|\[thinking\]|\[thought\]|\[reasoning\]|^thought[\s:]+|here\'s a thinking process:?|here is a thinking process:?|[\u27e6⟦]', '', thought_part).strip()
+                                clean_t = re.sub(thought_openers_clean, '', thought_part).strip()
                                 if clean_t and thinking_enabled:
                                     self.process_queue.put({"status": "thought_stream", "content": clean_t})
                                 streamed_thought_chars = len(thought_part)
-                                ans_after = full_resp[m_close.end():]
-                                if ans_after:
+                                raw_ans = full_resp[m_close.end():]
+                                ans_after = re.sub(transition_header_regex, '', raw_ans).lstrip('\r\n')
+                                if ans_after and not (ans_after.strip().startswith(("<|", "to=", "<channel")) and len(ans_after.strip()) < 50):
                                     self.process_queue.put({"status": "streaming", "content": ans_after})
                                     streamed_answer_chars = len(ans_after)
                             else:
-                                clean_t = re.sub(r'(?i)<think>|<thought>|<\|think\|>|<\|channel>thought|<channel\|thought>|<\|im_start\|>thought|to=self<\|message\|>|<\|start\|>assistant to=self|to=self|\[draft\]|\[thinking\]|\[thought\]|\[reasoning\]|^thought[\s:]+|here\'s a thinking process:?|here is a thinking process:?|[\u27e6⟦]', '', full_resp)
+                                clean_t = re.sub(thought_openers_clean, '', full_resp)
                                 if clean_t and thinking_enabled:
                                     self.process_queue.put({"status": "thought_stream", "content": clean_t})
                                 streamed_thought_chars = len(full_resp)
@@ -4552,11 +4940,13 @@ class ChatbotApp:
                                 in_thought_channel = False
                                 thought_part = full_resp[:m_close.start()]
                                 new_t = thought_part[streamed_thought_chars:]
-                                if new_t and thinking_enabled:
-                                    self.process_queue.put({"status": "thought_stream", "content": new_t})
+                                clean_new_t = re.sub(thought_openers_clean, '', new_t)
+                                if clean_new_t and thinking_enabled:
+                                    self.process_queue.put({"status": "thought_stream", "content": clean_new_t})
                                 streamed_thought_chars = len(thought_part)
-                                ans_after = full_resp[m_close.end():]
-                                if ans_after:
+                                raw_ans = full_resp[m_close.end():]
+                                ans_after = re.sub(transition_header_regex, '', raw_ans).lstrip('\r\n')
+                                if ans_after and not (ans_after.strip().startswith(("<|", "to=", "<channel")) and len(ans_after.strip()) < 50):
                                     self.process_queue.put({"status": "streaming", "content": ans_after})
                                     streamed_answer_chars = len(ans_after)
                             else:
@@ -4564,14 +4954,17 @@ class ChatbotApp:
                                     self.process_queue.put({"status": "thought_stream", "content": txt})
                                 streamed_thought_chars += len(txt)
                         else:
-                            parts = re.split(closers_regex, full_resp, flags=re.IGNORECASE)
-                            if len(parts) > 1 and parts[-1]:
-                                ans_chunk = parts[-1][streamed_answer_chars:]
+                            m_close = re.search(closers_regex, full_resp, flags=re.IGNORECASE)
+                            thought_end_pos = m_close.end() if m_close else 0
+                            raw_ans = full_resp[thought_end_pos:]
+                            clean_ans = re.sub(transition_header_regex, '', raw_ans).lstrip('\r\n')
+                            if clean_ans.strip().startswith(("<|", "to=", "<channel")) and len(clean_ans.strip()) < 50:
+                                pass
+                            else:
+                                ans_chunk = clean_ans[streamed_answer_chars:]
                                 if ans_chunk:
                                     self.process_queue.put({"status": "streaming", "content": ans_chunk})
                                     streamed_answer_chars += len(ans_chunk)
-                            else:
-                                self.process_queue.put({"status": "streaming", "content": txt})
 
                 time.sleep(0.001) # Heartbeat for UI
 
@@ -4612,7 +5005,8 @@ class ChatbotApp:
             # Advanced Scout & Split
             closers_patterns = [
                 r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
-                r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+                r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final', r'<\|channel\|>text', r'<\|channel\|>assistant',
+                r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
                 r'\[\/thinking\]', r'\[\/thought\]', r'\[\/reasoning\]',
                 r'[\u27e7⟧]\s*<\/think>', r'[\u27e7⟧]',
                 r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
@@ -4624,7 +5018,7 @@ class ChatbotApp:
                     all_splits.append(m.end())
             
             if not all_splits and (
-                any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]", "to=self", "<|start|>assistant to=self", "here's a thinking process", "here is a thinking process", "\u27e6", "⟦"])
+                any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|channel|>analysis", "<|channel|>thought", "<|channel|>reasoning", "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]", "to=self", "<|start|>assistant to=self", "here's a thinking process", "here is a thinking process", "\u27e6", "⟦"])
                 or _is_thought_opening(final_answer)
             ):
                 all_splits.append(len(final_answer))
@@ -4634,7 +5028,7 @@ class ChatbotApp:
             if all_splits:
                 for split in all_splits:
                     remaining = final_answer[split:].strip()
-                    if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
+                    if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
                         continue
                     best_split = split
                     break
@@ -4645,7 +5039,7 @@ class ChatbotApp:
                 think_log = final_answer[:best_split].strip()
                 final_answer = final_answer[best_split:].strip()
             else:
-                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', final_answer, re.IGNORECASE))
+                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', final_answer, re.IGNORECASE))
                 if has_thought_openers or _is_thought_opening(final_answer):
                     think_log = final_answer
                     final_answer = ""
@@ -4655,7 +5049,7 @@ class ChatbotApp:
                     final_answer = full_resp.strip()
 
             # Strip wrapper tags and residual tool markers
-            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
+            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|channel\|?>final|<\|channel\|?>text|<\|channel\|?>assistant|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|message\|>|<\|start\|>|<\|end\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
             think_log = re.sub(tag_clean_pattern, '', think_log).strip()
             think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
             final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
@@ -4735,7 +5129,7 @@ class ChatbotApp:
                         sys_msg += f" Preferred addressing style: {addr_style}."
                     elif addr_style == "Silent / Unnamed":
                         sys_msg += " Do not address the user by name unless explicitly asked."
-                is_gemma = "gemma" in self.model_path.lower()
+                is_gemma = "gemma" in (self.model_path or "").lower()
                 params = self._get_inference_params(reasoning_history=reasoning_history)
                 if temp_override:
                     params["temperature"] = temp_override
@@ -4748,6 +5142,7 @@ class ChatbotApp:
                     sys_msg = f"{sys_msg}\n{tool_defs}".strip()
                 
                 msgs = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
+                self._ensure_model_chat_format(self.model)
                 stream = self.model.create_chat_completion(messages=msgs, stream=True, **params)
                 
                 if ctype:
@@ -4773,13 +5168,15 @@ class ChatbotApp:
                         
                         # MISSION: Redirect tokens to specialized UI buckets for Deep Cook
                         if ctype:
-                            self.process_queue.put({
-                                "status": "deep_cook_ui_stream", 
-                                "ctype": ctype, 
-                                "cnum": cnum, 
-                                "dnum": dnum, 
-                                "content": c
-                            })
+                            dc_fmt = str(self.config.get("deep_cook_formatting", "inline")).lower()
+                            if dc_fmt == "inline":
+                                self.process_queue.put({
+                                    "status": "deep_cook_ui_stream", 
+                                    "ctype": ctype, 
+                                    "cnum": cnum, 
+                                    "dnum": dnum, 
+                                    "content": c
+                                })
                         else:
                             self.process_queue.put({"status": "streaming", "content": c})
                         
@@ -4830,6 +5227,9 @@ class ChatbotApp:
             # --- RECURSIVE CYCLE ENGINE ---
             full_draft_history = ""
             current_cycle = 1
+            cfg_cycles = str(self.config.get("deep_cook_cycles", "3")).strip().lower()
+            is_auto_cycles = (cfg_cycles == "auto")
+            max_cycles = 50 if is_auto_cycles else (int(cfg_cycles) if cfg_cycles.isdigit() else 3)
             task_complete = False
             final_status = "Success"
             skip_critique = False
@@ -4958,58 +5358,57 @@ class ChatbotApp:
                 full_draft_history += cycle_draft
                 
                 # 3. CONTEXT ASSESSMENT (Mandatory - Always Runs)
-                # Check safety ceiling BEFORE assessment
-                if current_cycle >= 5: 
-                     self.process_queue.put({"status": "thinking_status", "content": "Closing Deep Cook: Safety ceiling (5 cycles) reached."})
-                     task_complete = True
-                     final_status = "Safety Ceiling"
+                if self.active_persona_level == 7:
+                    self.process_queue.put({"status": "thinking_status", "content": f"Cycle {current_cycle} | Hardening Memory for Cycle {current_cycle+1}..."})
+                    lvl7_context = "\nInject worldbuilding context: Ensure narrative consistency and architectural lore."
                 else:
-                    # Assessment runs regardless of prior state
-                    if self.active_persona_level == 7:
-                        self.process_queue.put({"status": "thinking_status", "content": f"Cycle {current_cycle} | Hardening Memory for Cycle {current_cycle+1}..."})
-                        lvl7_context = "\nInject worldbuilding context: Ensure narrative consistency and architectural lore."
-                    else:
-                        lvl7_context = ""
+                    lvl7_context = ""
 
-                    snapshot_prompt = (
-                        f"Original Query: {user_msg}\n"
-                        f"Cycle {current_cycle} Data Progress: {cycle_draft[-2000:]}\n"
-                        f"[CYCLE QUALITY]: Hollow drafts detected: {cycle_state['hollow_drafts_detected']}\n"
-                        f"Context Assessment: Review Cycle {current_cycle} and compare it against the original query.{lvl7_context}\n"
-                        "1. Technical Debt: What specific variables or logic gates are still unverified?\n"
-                        "2. Analytical Progress: Summarize the findings so far.\n"
-                        "3. Next Phase: Define the precise focus for the next cycle.\n"
-                        "4. Resolved Variables: List any logic fully resolved in this cycle.\n"
-                        "Final status: [TOTAL RESOLUTION] or [CONTINUE: <next_focus_area>]."
-                    )
-                    snapshot = _run_step_streaming(f"Cycle {current_cycle}: Memory Assessment", snapshot_prompt, "Updating Persistent Intelligence...", ctype="memory", cnum=current_cycle)
-                    print(f"[DEEP COOK] Cycle {current_cycle} memory assessment complete.")
-                    self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "memory", "cnum": current_cycle, "title": "Context Assessment", "text": snapshot})
-                    
-                    # --- STORE ASSESSMENT TO CYCLE STATE & LAST OUTPUT ---
-                    cycle_state["last_assessment"] = snapshot[:500]  # Store first 500 chars
-                    last_assessment_output = snapshot  # Full output for next cycle planning
-                    
-                    # Harder injection of Cycle 1+ context to ensure continuity
-                    full_draft_history += f"\n[CHRONOLOGICAL PROGRESS LOG - CYCLE {current_cycle}]: {snapshot}\n"
-                    
-                    # --- PHASE 4: STATE PROPAGATION & DIAGNOSTIC OUTPUT ---
-                    diag_state = (
-                        f"\n[CYCLE {current_cycle} STATE SNAPSHOT]\n"
-                        f"  Hollow Drafts Detected: {cycle_state['hollow_drafts_detected']}\n"
-                        f"  Resolved Variables: {len(cycle_state['resolved_variables'])}\n"
-                        f"  Pending Variables: {len(cycle_state['pending_variables'])}\n"
-                        f"  Current Subset: {cycle_state['current_subset'][:100] if cycle_state['current_subset'] else 'N/A'}\n"
-                    )
-                    self.process_queue.put({"status": "diag_log_update", "content": diag_state})
-                    print(f"[DEEP COOK] {diag_state}")
-                    
-                    # --- ASSESSMENT IS SOLE AUTHORITY FOR RESOLUTION ---
-                    if re.search(r'\[(?:STATUS:\s*)?TOTAL RESOLUTION\]', snapshot, re.IGNORECASE):
-                        task_complete = True
-                        self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Assessment indicates total resolution attained.\n"})
-                    else:
-                        current_cycle += 1
+                snapshot_prompt = (
+                    f"Original Query: {user_msg}\n"
+                    f"Cycle {current_cycle} Data Progress: {cycle_draft[-2000:]}\n"
+                    f"[CYCLE QUALITY]: Hollow drafts detected: {cycle_state['hollow_drafts_detected']}\n"
+                    f"Context Assessment: Review Cycle {current_cycle} and compare it against the original query.{lvl7_context}\n"
+                    "1. Technical Debt: What specific variables or logic gates are still unverified?\n"
+                    "2. Analytical Progress: Summarize the findings so far.\n"
+                    "3. Next Phase: Define the precise focus for the next cycle.\n"
+                    "4. Resolved Variables: List any logic fully resolved in this cycle.\n"
+                    "Final status: [TOTAL RESOLUTION] or [CONTINUE: <next_focus_area>]."
+                )
+                snapshot = _run_step_streaming(f"Cycle {current_cycle}: Memory Assessment", snapshot_prompt, "Updating Persistent Intelligence...", ctype="memory", cnum=current_cycle)
+                print(f"[DEEP COOK] Cycle {current_cycle} memory assessment complete.")
+                self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "memory", "cnum": current_cycle, "title": "Context Assessment", "text": snapshot})
+                
+                # --- STORE ASSESSMENT TO CYCLE STATE & LAST OUTPUT ---
+                cycle_state["last_assessment"] = snapshot[:500]  # Store first 500 chars
+                last_assessment_output = snapshot  # Full output for next cycle planning
+                
+                # Harder injection of Cycle 1+ context to ensure continuity
+                full_draft_history += f"\n[CHRONOLOGICAL PROGRESS LOG - CYCLE {current_cycle}]: {snapshot}\n"
+                
+                # --- PHASE 4: STATE PROPAGATION & DIAGNOSTIC OUTPUT ---
+                diag_state = (
+                    f"\n[CYCLE {current_cycle} STATE SNAPSHOT]\n"
+                    f"  Hollow Drafts Detected: {cycle_state['hollow_drafts_detected']}\n"
+                    f"  Resolved Variables: {len(cycle_state['resolved_variables'])}\n"
+                    f"  Pending Variables: {len(cycle_state['pending_variables'])}\n"
+                    f"  Current Subset: {cycle_state['current_subset'][:100] if cycle_state['current_subset'] else 'N/A'}\n"
+                )
+                self.process_queue.put({"status": "diag_log_update", "content": diag_state})
+                print(f"[DEEP COOK] {diag_state}")
+                
+                # --- ASSESSMENT IS SOLE AUTHORITY FOR RESOLUTION ---
+                if re.search(r'\[(?:STATUS:\s*)?TOTAL RESOLUTION\]', snapshot, re.IGNORECASE):
+                    task_complete = True
+                    self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Assessment indicates total resolution attained.\n"})
+                elif not is_auto_cycles and current_cycle >= max_cycles:
+                    task_complete = True
+                    self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Deep Cook cycle budget reached ({current_cycle}/{max_cycles} cycles).\n"})
+                elif is_auto_cycles and current_cycle >= max_cycles:
+                    task_complete = True
+                    self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Deep Cook auto cycle failsafe ceiling reached ({current_cycle} cycles).\n"})
+                else:
+                    current_cycle += 1
 
             # 5. FINAL CRITIQUE (Mandatory Verification unless skipped)
             critique_txt = "[SKIPPED - EARLY RESOLUTION]"
@@ -5239,13 +5638,41 @@ class ChatbotApp:
             hist.tag_config(agentic_tag, elide=False, lmargin1=20, lmargin2=20)
             hist.config(state='disabled')
 
+    def _is_chat_at_bottom(self):
+        """Returns True if the chat viewport is currently displaying the bottom-most line."""
+        hist = getattr(self, "chat_history", None)
+        if hist is None:
+            return True
+        try:
+            if not hist.winfo_exists():
+                return True
+            # 1. Exact physical line visibility check (independent of document length)
+            dinfo = hist.dlineinfo("end-1c")
+            if dinfo is not None:
+                return True
+            # 2. Viewport fraction fallback for unmapped states (exact bottom is 1.0)
+            yv = hist.yview()
+            return yv[1] >= (1.0 - 1e-5) or (yv[0] == 0.0 and yv[1] >= 1.0)
+        except Exception:
+            return True
+
+    def _check_user_scroll(self, event=None):
+        """Updates user scroll intent based on whether the bottom line is visible."""
+        try:
+            if not self._is_chat_at_bottom():
+                self._user_scrolled_up = True
+            else:
+                self._user_scrolled_up = False
+        except Exception:
+            pass
+
     def _update_thought_dropdown(self, chunk):
         """Inserts streamed thought chunk into the chat dropdown."""
         hist = self.chat_history
         if hist is None or not chunk: return
         
         clean_chunk = re.sub(
-            r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>',
+            r'(?i)<think>|<thought>|\[DRAFT\]|<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>final|<\|channel\|?>text|<\|channel\|?>assistant|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>',
             '',
             chunk
         )
@@ -5263,17 +5690,20 @@ class ChatbotApp:
                 clean_chunk = re.sub(r'(?i)^thought\s*', '', clean_chunk)
                 self.state["thought_stream_lead_cleaned"] = True
 
-        if not clean_chunk: return
+        if not clean_chunk or not clean_chunk.strip(): return
         self._ensure_thought_dropdown()
         tag = self.state.get("current_think_tag")
         if not tag: return
         
-        is_at_bottom = hist.yview()[1] >= 0.98
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
+        user_scrolled = getattr(self, '_user_scrolled_up', False)
+        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
+        
         hist.config(state='normal')
         hist.insert(tk.END, clean_chunk, (tag, "md_thought"))
         hist.config(state='disabled')
-        if is_at_bottom:
-            hist.yview_moveto(1.0)
+        if not scroll_locked and was_at_bottom:
+            hist.see("end-1c")
 
     def _update_agentic_dropdown(self, chunk):
         """Inserts streamed agentic / delegation chunk into the chat dropdown."""
@@ -5283,12 +5713,15 @@ class ChatbotApp:
         tag = self.state.get("current_agentic_tag")
         if not tag: return
         
-        is_at_bottom = hist.yview()[1] >= 0.98
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
+        user_scrolled = getattr(self, '_user_scrolled_up', False)
+        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
+        
         hist.config(state='normal')
         hist.insert(tk.END, chunk, (tag, "md_thought"))
         hist.config(state='disabled')
-        if is_at_bottom:
-            hist.yview_moveto(1.0)
+        if not scroll_locked and was_at_bottom:
+            hist.see("end-1c")
 
     def _buffer_thought_log(self, content):
         """Buffers live reasoning/thought tokens and flushes them to thought_log."""
@@ -5358,11 +5791,10 @@ class ChatbotApp:
             now = time.time()
             processed_count = 0
             q_size = self.process_queue.qsize()
-            if q_size > self.log_update_limit:
-                print(f"[SYSTEM] Queue congestion detected: {q_size} messages pending.")
             
-            # 1. Process messages up to the limit to prevent UI stutter
-            while not self.process_queue.empty() and processed_count < self.log_update_limit:
+            # 1. Process messages up to the limit to prevent UI stutter while dynamically clearing bursts
+            batch_limit = max(self.log_update_limit, min(q_size, 300))
+            while not self.process_queue.empty() and processed_count < batch_limit:
                 msg = self.process_queue.get_nowait()
                 status = msg.get("status")
                 handler = self.queue_handlers.get(status)
@@ -5387,22 +5819,21 @@ class ChatbotApp:
                 self.thought_stream_buffer = ""
 
             should_update = False
+            norm_fmt = str(self.config.get("normal_generation_formatting", "inline")).lower()
             mode = self.state.get("streaming_mode", "Buffered")
             
             if self.text_buffer:
-                if mode == "Real-time":
+                if norm_fmt == "upon_end" or mode == "Mass Dump":
+                    should_update = False # Handled upon session completion
+                elif norm_fmt == "chunked" or mode == "Experimental Chunking":
+                    if len(self.text_buffer) > 300 or (now - self.last_update_time) > 1.2:
+                        should_update = True
+                elif mode == "Real-time":
                     should_update = True
-                elif mode == "Buffered":
-                    # Optimized: updates on sentence boundaries, newlines, or time/length limits
+                else: # Default Buffered / Inline
                     if any(c in self.text_buffer for c in ['. ', '! ', '? ', '\n', '\r']) or \
                        len(self.text_buffer) > 80 or (now - self.last_update_time) > 0.3:
                         should_update = True
-                elif mode == "Experimental Chunking":
-                    # Heavy: updates only on large chunks or 1.5s
-                    if len(self.text_buffer) > 350 or (now - self.last_update_time) > 1.5:
-                        should_update = True
-                elif mode == "Mass Dump":
-                    should_update = False # Handled at end of session
             
             if should_update:
                  self._update_ai_message(self.text_buffer)
@@ -5450,19 +5881,10 @@ class ChatbotApp:
             self.progress_label.config(text="TIMELINE: ANALYSIS COMPLETE", fg="#ffffff")
 
     def _get_persona_label(self) -> str:
-        """Returns the active persona display name with fallback."""
+        """Returns active persona display name: 'Cecilia' for Level 7 or Cecilia mode, 'Serenity' otherwise."""
         lvl = getattr(self, "active_persona_level", 2)
-        mapping = {
-            0: "Base",
-            1: "Assistant",
-            2: "Serenity",
-            3: "Architect",
-            4: "Philosopher",
-            5: "Oracle",
-            6: "Cecilia",
-            7: "Transcendent"
-        }
-        return mapping.get(lvl, "Serenity")
+        is_cecilia = (lvl >= 7) or getattr(self, "is_cecilia_active", False)
+        return "Cecilia" if is_cecilia else "Serenity"
 
     def _display_user_message(self, msg): 
         hist = self.chat_history
@@ -5473,16 +5895,16 @@ class ChatbotApp:
             self.prompt_display.pack_forget()
 
         hist.config(state='normal')
-        self._append_to_chat("\nYou: ", "user_lead")
+        self._append_to_chat("\nPrompt: ", "user_lead")
         start_idx = hist.index(tk.END + "-1c")
         self._append_to_chat(f"{msg}\n", "user")
         end_idx = hist.index(tk.END + "-1c")
         self.state["response_start_idx"] = end_idx
         hist.config(state='disabled')
         
-        # Universal Markdown Application (prompts excluded by default to preserve math formatting e.g. 3*3*5*5)
+        # Markdown Application (Prompt formatting disabled by default to preserve raw expressions like 3*3*5*5)
         render_mode = self.config.get("media_rendering", 1)
-        if render_mode > 0 and self.config.get("inline_markdown", True) and self.config.get("format_prompt_markdown", False):
+        if render_mode > 0 and self.config.get("format_prompts_markdown", False):
             self._apply_markdown(start_idx, end_idx, ("user",))
         
         self._user_scrolled_up = False
@@ -5492,8 +5914,9 @@ class ChatbotApp:
         hist = self.chat_history
         if not chunk or hist is None: return
         
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
         user_scrolled = getattr(self, '_user_scrolled_up', False)
-        is_at_bottom = (not user_scrolled) and (hist.yview()[1] >= 0.95)
+        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
 
         if not self.state.get("response_started", False):
             think = self.thinking_display
@@ -5513,11 +5936,8 @@ class ChatbotApp:
         hist.insert(tk.END, chunk, (tag_name, "ai"))
         hist.config(state='disabled')
         
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        if scroll_locked:
+        if not scroll_locked and was_at_bottom:
             hist.see("end-1c")
-        elif is_at_bottom:
-            hist.yview_moveto(1.0)
             
         bg = hist.cget("bg")
         fg = CHAT_FG_COLORS.get(self.active_persona_level, "#ffffff")
@@ -5533,8 +5953,9 @@ class ChatbotApp:
     def _replace_ai_message(self, text):
         hist = self.chat_history
         if hist is None: return
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
         user_scrolled = getattr(self, '_user_scrolled_up', False)
-        is_at_bottom = (not user_scrolled) and (hist.yview()[1] >= 0.95)
+        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
 
         if not self.state.get("response_started", False):
             think = self.thinking_display
@@ -5554,11 +5975,8 @@ class ChatbotApp:
         if text:
             hist.insert(tk.END, text, ("ai",))
         hist.config(state='disabled')
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        if scroll_locked:
+        if not scroll_locked and was_at_bottom:
             hist.see("end-1c")
-        elif is_at_bottom:
-            hist.yview_moveto(1.0)
     
     def _display_ai_message(self, msg="", is_streaming=True):
         if is_streaming:
@@ -5572,8 +5990,9 @@ class ChatbotApp:
     def _append_to_chat(self, text, tag):
         hist = self.chat_history
         if hist is None: return
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
         user_scrolled = getattr(self, '_user_scrolled_up', False)
-        is_at_bottom = (not user_scrolled) and (hist.yview()[1] >= 0.95)
+        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
         
         hist.config(state='normal')
         hist.insert(tk.END, text, (tag,))
@@ -5584,12 +6003,10 @@ class ChatbotApp:
             
         hist.config(state='disabled')
         
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        if scroll_locked or (is_at_bottom and not user_scrolled) or tag in ["user", "system"]:
-            if scroll_locked:
-                hist.see("end-1c")
-            else:
-                hist.yview_moveto(1.0)
+        if tag in ["user", "system"]:
+            hist.see("end-1c")
+        elif not scroll_locked and was_at_bottom:
+            hist.see("end-1c")
         
         bg = hist.cget("bg")
         if tag == "user": fg = "#007acc"
@@ -5599,27 +6016,46 @@ class ChatbotApp:
         hist.tag_config(tag, foreground=fg)
 
     def _apply_markdown(self, start_idx, end_idx, base_tags=("ai",), is_thought=False):
-        """Processes Markdown formatting (bold, italic, lists, code, tables, math) as a purely visual overlay without modifying source text."""
+        """Processes Markdown formatting via non-destructive tag overlay, preserving raw context and math."""
         hist = self.chat_history
         if hist is None or not hist.winfo_exists(): return
-        if not self.config.get("inline_markdown", True): return
         
         try:
             raw_text = hist.get(start_idx, end_idx)
             if not raw_text: return
             
-            # Obtain styling intervals without altering raw_text
-            intervals = MarkdownEngine.parse_overlay_intervals(raw_text, is_thought=is_thought)
-            if not intervals: return
+            # Non-destructive overlay intervals
+            tag_ranges, replacements = MarkdownEngine.get_overlay_intervals(raw_text, base_tags=base_tags, is_thought=is_thought)
+            if not tag_ranges and not replacements: return
             
             hist.config(state='normal')
-            for rel_start, rel_end, tag_name in intervals:
-                tag_start = hist.index(f"{start_idx} + {rel_start} chars")
-                tag_end = hist.index(f"{start_idx} + {rel_end} chars")
-                hist.tag_add(tag_name, tag_start, tag_end)
+            
+            # Handle block/inline replacements, sorted reverse to preserve indices
+            if replacements:
+                replacements.sort(key=lambda x: x[0], reverse=True)
+                for r_start, r_end, r_text, r_tag in replacements:
+                    sub_start = f"{start_idx} + {r_start} chars"
+                    sub_end = f"{start_idx} + {r_end} chars"
+                    hist.delete(sub_start, sub_end)
+                    hist.insert(sub_start, r_text, base_tags + (r_tag,))
+                    diff = len(r_text) - (r_end - r_start)
+                    new_tags = []
+                    for ts, te, tag in tag_ranges:
+                        if ts >= r_end:
+                            new_tags.append((ts + diff, te + diff, tag))
+                        elif te <= r_start:
+                            new_tags.append((ts, te, tag))
+                    tag_ranges = new_tags
+            
+            # Apply non-destructive styling and elision tags directly over the raw text
+            for t_start, t_end, t_tag in tag_ranges:
+                pos_start = f"{start_idx} + {t_start} chars"
+                pos_end = f"{start_idx} + {t_end} chars"
+                hist.tag_add(t_tag, pos_start, pos_end)
+                
             hist.config(state='disabled')
         except Exception as e:
-            print(f"[UI SAFETY] Markdown overlay error: {e}")
+            print(f"[UI SAFETY] Markdown render error: {e}")
 
 
     def _post_process_media(self, start_idx=None):
@@ -5788,11 +6224,76 @@ class ChatbotApp:
         threading.Thread(target=load, daemon=True).start()
 
 
+    def _update_status_label_text(self, full_text, tooltip_text=None):
+        """Updates the system status label with compact end-truncation or marquee scrolling (if enabled)."""
+        lbl = self.system_status_label
+        if lbl is None or not lbl.winfo_exists():
+            return
+        self._last_status_text = full_text
+        tip_val = tooltip_text if tooltip_text is not None else full_text
+        if hasattr(lbl, '_serenity_tooltip') and lbl._serenity_tooltip is not None:
+            lbl._serenity_tooltip.update_text(tip_val)
+            lbl._serenity_tooltip.app = self
+        else:
+            ToolTip(lbl, tip_val, app=self)
+
+        # Cancel active marquee job
+        if getattr(self, '_status_marquee_job', None) is not None:
+            try: self.root.after_cancel(self._status_marquee_job)
+            except Exception: pass
+            self._status_marquee_job = None
+
+        # Reduce filler and compact title to necessary text only
+        cleaned = full_text.strip()
+        if cleaned.startswith("System: "):
+            cleaned = cleaned[8:].strip()
+        if "Subagent: " in cleaned:
+            pre, _, post = cleaned.partition("Subagent: ")
+            cleaned = f"Subagent: {post.strip()}"
+        elif "Loaded: " in cleaned:
+            pre, _, post = cleaned.partition("Loaded: ")
+            cleaned = f"Loaded: {os.path.basename(post.strip())}"
+        elif "Selected: " in cleaned:
+            pre, _, post = cleaned.partition("Selected: ")
+            cleaned = f"Selected: {os.path.basename(post.strip())}"
+        elif "Loading " in cleaned and ("gguf" in cleaned.lower() or os.sep in cleaned or "/" in cleaned):
+            pre, _, post = cleaned.partition("Loading ")
+            cleaned = f"Loading: {os.path.basename(post.strip())}"
+
+        # Adaptive limit based on label width or DPI
+        scale_ratio = getattr(self, "scale_factor", 1.0)
+        if scale_ratio <= 0.1:
+            scale_ratio = 1.0
+        lbl_w = lbl.winfo_width()
+        if lbl_w > 50:
+            char_w = max(6, int(7.5 * scale_ratio))
+            limit = max(22, lbl_w // char_w)
+        else:
+            limit = max(26, int(32 * scale_ratio))
+
+        marquee_on = self.config.get("marquee_text_enabled", False) if hasattr(self, 'config') and self.config else False
+        if marquee_on and len(cleaned) > limit:
+            padded = cleaned + "   •   "
+            def _tick(idx=0):
+                if lbl is None or not lbl.winfo_exists():
+                    return
+                disp = (padded * 2)[idx:idx + limit]
+                lbl.config(text=disp)
+                next_idx = (idx + 1) % len(padded)
+                self._status_marquee_job = self.root.after(220, lambda: _tick(next_idx))
+            _tick(0)
+        else:
+            if len(cleaned) > limit:
+                compact = cleaned[:limit - 3] + "..."
+            else:
+                compact = cleaned
+            lbl.config(text=compact)
+
     def _log_and_display(self, msg): 
         print(f"System: {msg}") 
         lbl = self.system_status_label
         if lbl is not None and lbl.winfo_exists():
-            lbl.config(text=f"System: {msg}")
+            self._update_status_label_text(f"System: {msg}")
             status_timer = self._status_timer
             if status_timer is not None:
                 self.root.after_cancel(status_timer)
@@ -6163,15 +6664,9 @@ class ChatbotApp:
         hist.config(state='normal')
         
         if ctype == "cycle":
-            if not self.state.get("response_started", False):
-                self._append_to_chat(f"\n\n{self._get_persona_label()}: \n", "ai_lead")
-            
             self.state["current_deep_cook_cyc_tag"] = tag
             def toggle_cyc(t=tag, b=None, c=cnum):
-                st = hist.tag_cget(t, "elide")
-                new_state = (st == "0")
-                hist.tag_config(t, elide=new_state)
-                if b: b.config(text=f"{'[+] View' if new_state else '[-] Hide'} Cycle {c}")
+                self.toggle_cyc_tag(t, b, c)
             
             btn = tk.Button(hist, text=f"[+] View Cycle {cnum}", bg="#202020", fg="#888888", relief=tk.FLAT, font=self.fonts["stats"])
             btn.config(command=lambda t=tag, b=btn, c=cnum: toggle_cyc(t, b, c))
@@ -6185,28 +6680,34 @@ class ChatbotApp:
 
         elif ctype == "draft":
             cyc_tag = self.state.get("current_deep_cook_cyc_tag")
-            if cyc_tag:
-                if f"nested_tags_{cyc_tag}" not in self.state: self.state[f"nested_tags_{cyc_tag}"] = []
+            if not cyc_tag:
+                cyc_tag = f"dc_cycle_{cnum}_0"
+                self.state["current_deep_cook_cyc_tag"] = cyc_tag
+            if f"nested_tags_{cyc_tag}" not in self.state: self.state[f"nested_tags_{cyc_tag}"] = []
+            if tag not in self.state[f"nested_tags_{cyc_tag}"]:
                 self.state[f"nested_tags_{cyc_tag}"].append(tag)
-                def toggle_draft(t=tag, b=None, d=dnum):
-                    st = hist.tag_cget(t, "elide")
-                    new_state = (st == "0")
-                    hist.tag_config(t, elide=new_state)
-                    if b: b.config(text=f"{'[+]' if new_state else '[-]'} Step {d}")
+            def toggle_draft(t=tag, b=None, d=dnum):
+                is_elided = str(hist.tag_cget(t, "elide")) in ["1", "True", "true"]
+                new_state = not is_elided
+                hist.tag_config(t, elide=new_state)
+                if b: b.config(text=f"{'[-]' if not new_state else '[+]'} Step {d}")
 
-                btn = tk.Button(hist, text=f"[+] Step {dnum}", bg="#151515", fg="#777777", relief=tk.FLAT, font=self.fonts["stats"])
-                btn.config(command=lambda t=tag, b=btn, d=dnum: toggle_draft(t, b, d))
-                
-                hist.insert(tk.END, "  ", (cyc_tag, "ai"))
-                hist.window_create(tk.END, window=btn)
-                hist.insert(tk.END, "\n", (cyc_tag, "ai"))
-                hist.insert(tk.END, f"  --- {title} ---\n  ", (tag, cyc_tag, "ai"))
-                hist.tag_config(tag, elide=True, foreground="#707070", font=self.fonts["log"])
+            btn = tk.Button(hist, text=f"[+] Step {dnum}", bg="#151515", fg="#777777", relief=tk.FLAT, font=self.fonts["stats"])
+            btn.config(command=lambda t=tag, b=btn, d=dnum: toggle_draft(t, b, d))
+            self.state[f"draft_btn_{tag}"] = (btn, dnum)
+            
+            hist.insert(tk.END, "  ", (cyc_tag, "ai"))
+            hist.window_create(tk.END, window=btn)
+            hist.tag_add(cyc_tag, "end-2c", "end-1c")
+            hist.tag_add("ai", "end-2c", "end-1c")
+            hist.insert(tk.END, "\n", (cyc_tag, "ai"))
+            hist.insert(tk.END, f"  --- {title} ---\n  ", (tag, cyc_tag, "ai"))
+            hist.tag_config(tag, elide=True, foreground="#707070", font=self.fonts["log"])
 
         elif ctype == "memory":
             def toggle_mem(t=tag, b=None):
-                st = hist.tag_cget(t, "elide")
-                new_state = (st == "0")
+                is_elided = str(hist.tag_cget(t, "elide")) in ["1", "True", "true"]
+                new_state = not is_elided
                 hist.tag_config(t, elide=new_state)
                 if b: b.config(text=f"{'[+]' if new_state else '[-]'} {title or 'Context Assessment'}")
 
@@ -6219,8 +6720,12 @@ class ChatbotApp:
             hist.insert(tk.END, "", (tag, "ai"))
             hist.tag_config(tag, elide=True, foreground="#ababab", font=self.fonts["log"])
 
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
+        user_scrolled = getattr(self, '_user_scrolled_up', False)
+        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
         hist.config(state='disabled')
-        hist.see(tk.END)
+        if not scroll_locked and was_at_bottom:
+            hist.see(tk.END)
 
     def _handle_deep_cook_ui_stream(self, msg):
         """Appends tokens to the currently active Deep Cook UI block."""
@@ -6241,6 +6746,25 @@ class ChatbotApp:
         hist.insert(tk.END, content, tuple(tags))
         hist.config(state='disabled')
 
+    def toggle_cyc_tag(self, tag, btn=None, cnum=None):
+        hist = getattr(self, 'chat_history', None) or getattr(self, 'hist', None)
+        if not hist: return
+        is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
+        new_state = not is_elided
+        hist.tag_config(tag, elide=new_state)
+        nested = self.state.get(f"nested_tags_{tag}", [])
+        if new_state:
+            # Closing cycle: collapse child steps and reset button labels
+            for n_tag in nested:
+                hist.tag_config(n_tag, elide=True)
+                btn_tuple = self.state.get(f"draft_btn_{n_tag}")
+                if btn_tuple and btn_tuple[0].winfo_exists():
+                    btn_tuple[0].config(text=f"[+] Step {btn_tuple[1]}")
+        # When opening cycle (new_state == False), cyc_tag un-elides making step buttons visible,
+        # but step contents remain elided until explicitly toggled by user.
+        if btn: btn.config(text=f"{'[+] View' if new_state else '[-] Hide'} Cycle {cnum}")
+    toggle_cyc = toggle_cyc_tag
+
     def _handle_deep_cook_ui_batch(self, msg):
         """Finalizes a Deep Cook block by replacing streamed text with cleaned content."""
         hist = self.chat_history
@@ -6255,19 +6779,21 @@ class ChatbotApp:
         if ctype in ["cycle", "draft", "memory"]:
             tag = f"dc_{ctype}_{cnum}_{dnum}"
             ranges = hist.tag_ranges(tag)
+            hist.config(state='normal')
+            parent_tag = self.state.get("current_deep_cook_cyc_tag")
+            tags = [tag, "ai"]
+            if parent_tag and tag != parent_tag:
+                tags.insert(1, parent_tag)
+            
+            # Replace streamed content with cleaned batch, or insert if fresh
             if ranges:
-                hist.config(state='normal')
-                parent_tag = self.state.get("current_deep_cook_cyc_tag")
-                tags = [tag, "ai"]
-                if parent_tag and tag != parent_tag:
-                    tags.insert(1, parent_tag)
-                
-                # Replace streamed content with cleaned batch
                 start, end = ranges[0], ranges[-1]
                 hist.delete(start, end)
                 hist.insert(start, text + "\n", tuple(tags))
-                hist.config(state='disabled')
-                return
+            else:
+                hist.insert(tk.END, text + "\n", tuple(tags))
+            hist.config(state='disabled')
+            return
 
         if ctype == "compilation":
             if not self.state.get("response_started", False):
@@ -6281,25 +6807,72 @@ class ChatbotApp:
                 comp_tag = f"comp_block_{id(text[:20])}"
                 hist.config(state='normal')
                 hist.insert(tk.END, f"{text}\n\n", (comp_tag, "ai"))
-                hist.tag_config(comp_tag, foreground="#00ffcc", font=self.fonts["log"])
-                hist.config(state='disabled')
-        
-        hist.see(tk.END)
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
+        user_scrolled = getattr(self, '_user_scrolled_up', False)
+        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
+        if not scroll_locked and was_at_bottom:
+            hist.see(tk.END)
+
+    def get_proposed_model_path(self):
+        """Returns the proposed model path for the current persona level or staged multimodal state."""
+        # 1. Staged Multimodal check
+        if getattr(self, "state", None) and self.state.get("staged_multimodal"):
+            staged_type = self.state["staged_multimodal"].get("type", "")
+            target_v_tier = f"vision_{staged_type}"
+            path = self.model_paths.get(target_v_tier) or self.model_paths.get("vision_multimodal")
+            if path:
+                return path
+
+        # 2. Deep Cook check
+        if getattr(self, "state", None) and self.state.get("deep_cook") and self.model_paths.get("deep_cook"):
+            return self.model_paths.get("deep_cook")
+
+        # 3. Persona tier mapping
+        tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
+        lvl = getattr(self, "active_persona_level", 3)
+        if hasattr(self, 'depth_slider') and self.depth_slider:
+            try:
+                lvl = int(self.depth_slider.get())
+            except Exception:
+                pass
+        target_tier = tier_map.get(lvl, "low")
+        return self.model_paths.get(target_tier, "")
 
     def _revert_status_label(self):
+        if self.state.get("active_subagent"):
+            sub = self.state["active_subagent"]
+            lvl = sub.get("level", "")
+            model_name = sub.get("model", "")
+            banner = f"Subagent: Lvl {lvl}, {model_name}" if model_name else f"Subagent: Lvl {lvl}"
+            if hasattr(self, 'system_status_label') and self.system_status_label.winfo_exists():
+                self._update_status_label_text(banner, tooltip_text=f"Active Subagent Running:\nLevel: {lvl}\nModel: {model_name}")
+            if hasattr(self, 'thinking_display') and self.thinking_display and self.thinking_display.winfo_exists():
+                self.thinking_display.update_status(banner)
+            return
+
         if hasattr(self, 'system_status_label') and self.system_status_label.winfo_exists():
-            if self.model_path:
+            if self.model is not None and self.model_path:
                 model_name = os.path.basename(self.model_path)
-                self.system_status_label.config(text=f"Loaded: {model_name}")
+                self._update_status_label_text(f"Loaded: {model_name}", tooltip_text=f"Loaded Model:\n{self.model_path}")
             else:
-                self.system_status_label.config(text="System: Idle")
+                proposed = self.get_proposed_model_path()
+                if proposed:
+                    model_name = os.path.basename(proposed)
+                    self._update_status_label_text(f"Selected: {model_name}", tooltip_text=f"Proposed Model (Offloaded):\n{proposed}")
+                else:
+                    self._update_status_label_text("System: Idle", tooltip_text="System: Idle (No Model Selected)")
         if hasattr(self, 'thinking_display') and self.thinking_display and self.thinking_display.winfo_exists():
             if not self.thinking_display._is_active:
-                if self.model_path:
+                if self.model is not None and self.model_path:
                     model_name = os.path.basename(self.model_path)
                     self.thinking_display.update_status(f"Loaded: {model_name}")
                 else:
-                    self.thinking_display.update_status("System: Ready")
+                    proposed = self.get_proposed_model_path()
+                    if proposed:
+                        model_name = os.path.basename(proposed)
+                        self.thinking_display.update_status(f"Selected: {model_name}")
+                    else:
+                        self.thinking_display.update_status("System: Ready")
 
     def launch_lore_book(self):
         try:
@@ -6743,12 +7316,12 @@ class ChatbotApp:
                             final_analysis += content
                             
                             lower_c = content.lower()
-                            if any(op in lower_c for op in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "to=self"]):
+                            if any(op in lower_c for op in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<|channel|>analysis", "<|channel|>thought", "to=self"]):
                                 in_thought_ch = True
                             
                             if in_thought_ch:
                                 thought_stream_buf += content
-                                if any(cl in lower_c for cl in ["</think>", "</thought>", "</|think|>", "<channel|>", "<|channel>text", "<|channel>assistant", "to=user"]):
+                                if any(cl in lower_c for cl in ["</think>", "</thought>", "</|think|>", "<channel|>", "<|channel>text", "<|channel>assistant", "<|channel|>final", "<|channel|>text", "to=user"]):
                                     in_thought_ch = False
                                     self.process_queue.put({"status": "thought_stream", "content": thought_stream_buf})
                                     thought_stream_buf = ""
@@ -6869,12 +7442,12 @@ class ChatbotApp:
                             final_analysis += content
                             
                             lower_c = content.lower()
-                            if any(op in lower_c for op in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "to=self"]):
+                            if any(op in lower_c for op in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<|channel|>analysis", "<|channel|>thought", "to=self"]):
                                 in_thought_ch = True
                             
                             if in_thought_ch:
                                 thought_stream_buf += content
-                                if any(cl in lower_c for cl in ["</think>", "</thought>", "</|think|>", "<channel|>", "<|channel>text", "<|channel>assistant", "to=user"]):
+                                if any(cl in lower_c for cl in ["</think>", "</thought>", "</|think|>", "<channel|>", "<|channel>text", "<|channel>assistant", "<|channel|>final", "<|channel|>text", "to=user"]):
                                     in_thought_ch = False
                                     self.process_queue.put({"status": "thought_stream", "content": thought_stream_buf})
                                     thought_stream_buf = ""
@@ -7055,6 +7628,20 @@ class ChatbotApp:
         self.set_avatar_state("apologetic")
         messagebox.showerror("Load Error", msg.get("content"))
 
+    def _handle_subagent_status(self, msg):
+        """Updates the status banner when autonomous subagents are active/inactive."""
+        if msg.get("active"):
+            lvl = msg.get("level", "")
+            model_name = msg.get("model", "")
+            self.state["active_subagent"] = {"level": lvl, "model": model_name}
+            banner = f"Subagent: Lvl {lvl}, {model_name}" if model_name else f"Subagent: Lvl {lvl}"
+            self._update_status_label_text(banner, tooltip_text=f"Active Subagent Running:\nLevel: {lvl}\nModel: {model_name}")
+            if hasattr(self, 'thinking_display') and self.thinking_display and self.thinking_display.winfo_exists():
+                self.thinking_display.update_status(banner)
+        else:
+            self.state.pop("active_subagent", None)
+            self._revert_status_label()
+
     def _synthesis_worker(self, task):
         """Background worker for master summary generation."""
         try:
@@ -7076,17 +7663,15 @@ class ChatbotApp:
         except Exception as e:
             self.process_queue.put({"status": "error", "content": f"Final Synthesis failed: {e}"})
 
-    def _get_persona_label(self):
-        return "Cecilia" if self.active_persona_level == 7 else "Serenity"
-
     def _sanitize_synthesis_output(self, raw_text):
         if not raw_text: return ""
         
-        # Split raw response at the end of the thinking tag and discard the thought prefix
+        # 1. Split raw response at the end of the thinking tag and discard thought prefix
         closers = [
             r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<channel\|>', r'<\/channel\|>',
-            r'<\|channel>text', r'<\|channel>assistant', r'\[\/DRAFT\]',
-            r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>'
+            r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final', r'<\|channel\|>text', r'<\|channel\|>assistant', r'\[\/DRAFT\]',
+            r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
+            r'<\|turn>model', r'<turn\|>'
         ]
         best_split = -1
         for pattern in closers:
@@ -7099,15 +7684,40 @@ class ChatbotApp:
         else:
             cleaned = raw_text
             
-        tags = [
-            "<think>", "</think>", "<thought>", "</thought>", "<|think|>", "</|think|>", "<|channel>thought", "<channel|>", "Final Response:", "Final Answer:",
-            "<|channel>text", "<|channel>assistant", "</channel|>", "###", "<|im_start|>", "<|im_end|>", "<|endoftext|>",
-            "<|start|>assistant to=user<|message|>", "<|start|>assistant to=self<|message|>", "<|start|>assistant to=user", "<|start|>assistant to=self",
-            "to=self<|message|>", "to=user<|message|>", "<|eom|>", "<|eot|>", "<|end_of_text|>"
+        # 2. Strip paired thinking/draft/cycle blocks that may be unclosed or embedded
+        cleaned = re.sub(r'(?si)<think>.*?<\/think>', '', cleaned)
+        cleaned = re.sub(r'(?si)<thought>.*?<\/thought>', '', cleaned)
+        cleaned = re.sub(r'(?si)<\|think\|>.*?<\/\|think\|>', '', cleaned)
+        cleaned = re.sub(r'(?si)<\|channel\|?>thought.*?<channel\|>', '', cleaned)
+        cleaned = re.sub(r'(?si)<\|channel\|?>analysis.*?(?:<\|channel\|?>final|<channel\|>|$)', '', cleaned)
+        cleaned = re.sub(r'(?si)\[DRAFT\].*?\[\/DRAFT\]', '', cleaned)
+        cleaned = re.sub(r'(?si)\[STATUS:[^\]]*\]', '', cleaned)
+        cleaned = re.sub(r'(?si)\[CURRENT RANGE:[^\]]*\]', '', cleaned)
+        cleaned = re.sub(r'(?si)\[CHRONOLOGICAL PROGRESS LOG[^\]]*\]', '', cleaned)
+        cleaned = re.sub(r'(?si)\[TOTAL RESOLUTION\]', '', cleaned)
+        cleaned = re.sub(r'(?si)\[COMPLETE\]', '', cleaned)
+        cleaned = re.sub(r'(?si)\[CYCLE\s*\d+[^\]]*\]', '', cleaned)
+        cleaned = re.sub(r'(?si)--- Cycle \d+ ---', '', cleaned)
+
+        # 3. Strip residual structural / turn tokens
+        residual_tags = [
+            r'<think>', r'<\/think>', r'<thought>', r'<\/thought>', r'<\|think\|>', r'<\/\|think\|>',
+            r'<\|channel\|?>thought', r'<\|channel\|?>analysis', r'<channel\|>', r'<\/channel\|>',
+            r'<\|channel\|?>final', r'<\|channel\|?>text', r'<\|channel\|?>assistant',
+            r'<\|im_start\|>', r'<\|im_end\|>', r'<\|endoftext\|>', r'<\|eom\|>', r'<\|eot\|>', r'<\|end_of_text\|>',
+            r'<\|turn>system', r'<\|turn>user', r'<\|turn>model', r'<turn\|>',
+            r'<\|start\|>assistant to=user<\|message\|>', r'<\|start\|>assistant to=self<\|message\|>',
+            r'<\|start\|>assistant to=user', r'<\|start\|>assistant to=self',
+            r'to=self<\|message\|>', r'to=user<\|message\|>', r'to=self', r'to=user',
+            r'\[DIRECT STRIKE MODE\]:?', r'\[DIRECT STRIKE\]:?', r'\[TASK\]:?',
+            r'Final Response:', r'Final Answer:'
         ]
-        for tag in tags:
-            cleaned = re.sub(re.escape(tag), '', cleaned, flags=re.IGNORECASE)
-        
+        for pat in residual_tags:
+            cleaned = re.sub(pat, '', cleaned, flags=re.IGNORECASE)
+
+        # 4. Strip model-generated self-prefix (e.g. "Cecilia:", "**Cecilia:**", "Serenity:") at start of output
+        cleaned = re.sub(r'^\s*(?:(?:\*\*|\*|__)(?:Cecilia|Serenity|Assistant|AI):(?:\*\*|\*|__)|(?:\*\*|\*|__)?(?:Cecilia|Serenity|Assistant|AI)(?:\*\*|\*|__)?:\s*)+', '', cleaned, flags=re.IGNORECASE)
+
         return cleaned.strip()
 
     def _looks_like_thought_only(self, text):
@@ -7128,7 +7738,7 @@ class ChatbotApp:
             try: self.set_avatar_state("ecstatic")
             except: pass
             self.process_queue.put({"status": "thinking_status", "content": "Finalizing Response..."})
-            is_gemma = "gemma" in self.model_path.lower()
+            is_gemma = "gemma" in (self.model_path or "").lower()
             params = self._get_inference_params()
             critique_part = "" if skip_critique else f"Critique Findings: {critique_txt}\n"
             history_subset = reasoning_history[-10000:] if len(reasoning_history) > 10000 else reasoning_history
@@ -7215,14 +7825,20 @@ class ChatbotApp:
         try:
             from serenity_resources import LEVEL7_SYNTHESIS_SYSTEM_PROMPT
             self.process_queue.put({"status": "thinking_status", "content": "Cecilia is delivering her truth..."})
-            is_gemma = "gemma" in self.model_path.lower()
+            is_gemma = "gemma" in (self.model_path or "").lower()
             params = self._get_inference_params()
             history_subset = reasoning_history[-10000:] if len(reasoning_history) > 10000 else reasoning_history
 
             dmn_context = ""
-            backbone = self.state.get("dmn_backbone", {}).get("last_simmer")
-            if backbone:
-                dmn_context = f"[ORGANIZED BACKEND THOUGHTS]: {backbone}\n\n"
+            if hasattr(self, "semantic_vault") and self.semantic_vault:
+                nodes = self.semantic_vault.get_grounding_for_prompt(user_msg, limit=6)
+                if nodes:
+                    lines = [f"- [{n['concept_family']}] {n['insight']}" for n in nodes]
+                    dmn_context = "[GROUNDED WORLDVIEW & ESSENCE ANCHORS]:\n" + "\n".join(lines) + "\n\n"
+            if not dmn_context:
+                backbone = self.state.get("dmn_backbone", {}).get("last_simmer")
+                if backbone:
+                    dmn_context = f"[ORGANIZED BACKEND THOUGHTS]: {backbone}\n\n"
 
             critique_part = f"\n[CRITIQUE FINDINGS]: {critique_txt}\n" if critique_txt and critique_txt != "[SKIPPED - EARLY RESOLUTION]" else ""
             
@@ -7288,6 +7904,8 @@ class ChatbotApp:
 
     def _finalize_message(self, user_msg, think_log, final_answer, error=False):
         print(f"[SYSTEM] Finalizing message delivery (Error: {error}).")
+        if not error and final_answer and isinstance(final_answer, str):
+            final_answer = self._sanitize_synthesis_output(final_answer)
         self.state["running"] = False
         self.set_ui_state(model_loaded=True, generating=False)
         if self.thinking_display and self.thinking_display.winfo_exists():
@@ -7309,7 +7927,7 @@ class ChatbotApp:
 
         r_str = str(self.config.get("reasoning_strength", self.config.get("muse_reasoning_strength", "medium"))).lower().strip()
         thinking_enabled = (r_str != "off") and bool(self.config.get("thinking_checkbox", True))
-        if not thinking_enabled:
+        if not thinking_enabled or not think_log or not str(think_log).strip():
             think_log = ""
 
         # Clean up empty thought button/frame if no thoughts exist
@@ -7320,107 +7938,130 @@ class ChatbotApp:
                 except: pass
             self.state["current_think_btn"] = None
             dd_f = self.state.get("current_dropdown_frame")
-            if dd_f and dd_f.winfo_exists() and not dd_f.winfo_children():
-                try: dd_f.destroy()
+            if dd_f and dd_f.winfo_exists():
+                try:
+                    self.root.update_idletasks()
+                    if not dd_f.winfo_children():
+                        dd_f.destroy()
+                        self.state["current_dropdown_frame"] = None
                 except: pass
-                self.state["current_dropdown_frame"] = None
 
-        # 4. Atomic Reset for Rendering / In-Place Markdown Application
-        if self.state.get("response_started") and start_idx:
-            hist.config(state='normal')
-            curr_text = hist.get(start_idx, tk.END).strip()
-            has_leak = any(t in curr_text for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
-            
-            if not self.state.get("deep_cook"):
-                if has_leak:
-                    # Cleanly reset to eliminate leaked thought tags from response text
-                    try:
-                        hist.delete(start_idx, tk.END)
-                    except: pass
-                    hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
-                    self.state["thought_streamed"] = False
-                    self.state["current_think_tag"] = None
-                    self.state["current_think_btn"] = None
-                    self.state["current_dropdown_frame"] = None
-                elif final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
-                    self._append_to_chat(final_answer, "ai")
-            else:
-                hist.insert(tk.END, "\n", ("ai",))
-            hist.config(state='disabled')
-
-        # 5. UI Rendering (Atomic & Pre-Processed)
-        hist.config(state='normal')
         render_mode = self.config.get("media_rendering", 1)
-        render_start = hist.index(tk.END + "-1c")
+        render_start = start_idx if start_idx else "1.0"
 
-        # Suppress redundant generic thinking block if Deep Cook structure is already present
-        if think_log and thinking_enabled and not self.state.get("deep_cook"):
-            if self.state.get("thought_streamed"):
+        # 4 & 5. Atomic Reset & UI Rendering
+        if not self.state.get("deep_cook"):
+            hist.config(state='normal')
+            if think_log and thinking_enabled:
                 think_tag = self.state.get("current_think_tag")
-                btn = self.state.get("current_think_btn")
-                if think_tag:
+                ranges = hist.tag_ranges(think_tag) if think_tag else None
+                if self.state.get("thought_streamed") and ranges and len(ranges) >= 2:
+                    # Streamed thoughts: in-place dropdown above response
+                    btn = self.state.get("current_think_btn")
                     hist.tag_config(think_tag, elide=True)
                     if btn and btn.winfo_exists():
                         btn.config(text="[+] View Thinking Process")
-                    ranges = hist.tag_ranges(think_tag)
-                    if ranges and len(ranges) >= 2:
-                        if render_mode > 0:
-                            self._apply_markdown(ranges[0], ranges[-1], (think_tag, "md_thought"), is_thought=True)
-                        render_start = ranges[-1]
-                    else:
-                        # Fallback: re-insert if empty
-                        thought_start = hist.index(tk.END + "-1c")
-                        hist.insert(tk.END, think_log + "\n\n", (think_tag, "md_thought"))
-                        thought_end = hist.index(tk.END + "-1c")
-                        if render_mode > 0:
-                            self._apply_markdown(thought_start, thought_end, (think_tag, "md_thought"), is_thought=True)
-                        hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
-                        render_start = thought_end
-            else:
-                think_tag = f"think_block_{int(time.time() * 1000)}"
-                def toggle_thoughts(tag=think_tag, b=None):
-                    is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
-                    if is_elided:
-                         hist.tag_config(tag, elide=False)
-                         if b: b.config(text="[-] Hide Thinking")
-                    else:
-                         hist.tag_config(tag, elide=True)
-                         if b: b.config(text="[+] View Thinking Process")
-                
-                btn_bg = THEME.get("button_bg_color", "#24201c")
-                accent = THEME.get("electric_blue", "#00bfff")
-                btn_active = THEME.get("button_active_color", "#382e24")
-                accent_hl = THEME.get("accent_highlight", "#ff8800")
-                
-                dd_frame = self._get_or_create_dropdown_frame()
-                btn = tk.Button(dd_frame, text="[+] View Thinking Process", bg=btn_bg, fg=accent, 
-                                activebackground=btn_active, activeforeground=accent_hl, 
-                                relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
-                btn.config(command=lambda t=think_tag, b=btn: toggle_thoughts(t, b))
-                if not hasattr(self, 'thought_dropdown_buttons'):
-                    self.thought_dropdown_buttons = []
-                self.thought_dropdown_buttons.append(btn)
-                
-                agentic_btn = self.state.get("current_agentic_btn")
-                if agentic_btn and agentic_btn.winfo_exists():
-                    btn.pack(side=tk.LEFT, padx=(0, 4), before=agentic_btn)
+                    if render_mode > 0:
+                        self._apply_markdown(ranges[0], ranges[-1], (think_tag, "md_thought"), is_thought=True)
+                    ai_text_start = ranges[-1]
+                    curr_text = hist.get(ai_text_start, tk.END).strip()
+                    has_leak = any(t in curr_text for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
+                    if has_leak:
+                        try: hist.delete(ai_text_start, tk.END)
+                        except: pass
+                        if final_answer:
+                            self._append_to_chat(final_answer, "ai")
+                    elif final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                        self._append_to_chat(final_answer, "ai")
+                    render_start = ai_text_start
                 else:
-                    btn.pack(side=tk.LEFT, padx=(0, 4))
-                
-                thought_start = hist.index(tk.END + "-1c")
-                hist.insert(tk.END, think_log + "\n\n", (think_tag, "md_thought"))
-                thought_end = hist.index(tk.END + "-1c")
-                
-                if render_mode > 0:
-                    self._apply_markdown(thought_start, thought_end, (think_tag, "md_thought"), is_thought=True)
-                
-                hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
-                render_start = thought_end
+                    # Non-streamed or fallback: reconstruct cleanly at start_idx with thoughts above response
+                    if start_idx:
+                        try: hist.delete(start_idx, tk.END)
+                        except: pass
+                    else:
+                        start_idx = hist.index(tk.END + "-1c")
 
-                # Insert Final Answer after thoughts if not already present
-                curr_text = hist.get(start_idx, tk.END).strip()
-                if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
-                    self._append_to_chat(final_answer, "ai")
+                    hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
+                    
+                    dd_frame = tk.Frame(hist, bg=THEME.get("bg_color", "#181410"))
+                    self.state["current_dropdown_frame"] = dd_frame
+                    hist.insert(tk.END, "\n", ("ai",))
+                    hist.window_create(tk.END, window=dd_frame)
+                    hist.insert(tk.END, "\n", ("ai",))
+
+                    think_tag = f"think_block_{int(time.time() * 1000)}"
+                    self.state["current_think_tag"] = think_tag
+                    def toggle_thoughts(tag=think_tag, b=None):
+                        is_elided = str(hist.tag_cget(tag, "elide")) in ["1", "True", "true"]
+                        if is_elided:
+                            hist.tag_config(tag, elide=False)
+                            if b: b.config(text="[-] Hide Thinking")
+                        else:
+                            hist.tag_config(tag, elide=True)
+                            if b: b.config(text="[+] View Thinking Process")
+
+                    btn_bg = THEME.get("button_bg_color", "#24201c")
+                    accent = THEME.get("electric_blue", "#00bfff")
+                    btn_active = THEME.get("button_active_color", "#382e24")
+                    accent_hl = THEME.get("accent_highlight", "#ff8800")
+
+                    btn = tk.Button(dd_frame, text="[+] View Thinking Process", bg=btn_bg, fg=accent, 
+                                    activebackground=btn_active, activeforeground=accent_hl, 
+                                    relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
+                    btn.config(command=lambda t=think_tag, b=btn: toggle_thoughts(t, b))
+                    if not hasattr(self, 'thought_dropdown_buttons'):
+                        self.thought_dropdown_buttons = []
+                    self.thought_dropdown_buttons.append(btn)
+                    self.state["current_think_btn"] = btn
+
+                    agentic_btn = self.state.get("current_agentic_btn")
+                    if agentic_btn and agentic_btn.winfo_exists():
+                        btn.pack(side=tk.LEFT, padx=(0, 4), before=agentic_btn)
+                    else:
+                        btn.pack(side=tk.LEFT, padx=(0, 4))
+
+                    thought_start = hist.index(tk.END + "-1c")
+                    hist.insert(tk.END, think_log.strip() + "\n\n", (think_tag, "md_thought"))
+                    thought_end = hist.index(tk.END + "-1c")
+
+                    if render_mode > 0:
+                        self._apply_markdown(thought_start, thought_end, (think_tag, "md_thought"), is_thought=True)
+
+                    hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
+
+                    # Append Final Answer strictly after thoughts
+                    render_start = hist.index(tk.END + "-1c")
+                    if final_answer:
+                        self._append_to_chat(final_answer, "ai")
+            else:
+                # No thoughts
+                if not self.state.get("response_started", False):
+                    self._display_ai_message(final_answer, is_streaming=False)
+                    render_start = start_idx if start_idx else "1.0"
+                else:
+                    curr_text = hist.get(start_idx, tk.END).strip()
+                    has_leak = any(t in curr_text for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
+                    if has_leak:
+                        try: hist.delete(start_idx, tk.END)
+                        except: pass
+                        hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
+                        render_start = hist.index(tk.END + "-1c")
+                        if final_answer:
+                            self._append_to_chat(final_answer, "ai")
+                    elif final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                        render_start = hist.index(tk.END + "-1c")
+                        self._append_to_chat(final_answer, "ai")
+                    else:
+                        render_start = start_idx
+            hist.config(state='disabled')
+        else:
+            # Deep Cook handling
+            if start_idx:
+                hist.config(state='normal')
+                hist.insert(tk.END, "\n", ("ai",))
+                hist.config(state='disabled')
+                render_start = start_idx
 
         # Finalize streamed agentic dropdown if present
         if self.state.get("agentic_streamed"):
@@ -7434,17 +8075,9 @@ class ChatbotApp:
                 if ranges and len(ranges) >= 2 and render_mode > 0:
                     self._apply_markdown(ranges[0], ranges[-1], (agentic_tag, "md_thought"), is_thought=True)
 
-        if not self.state.get("response_started", False):
-            self._display_ai_message(final_answer, is_streaming=False)
-            render_start = start_idx if start_idx else "1.0"
-        elif not (think_log and thinking_enabled):
-            # Ensure final answer is appended if not present
-            curr_text = hist.get(start_idx, tk.END).strip()
-            if final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
-                self._append_to_chat(final_answer, "ai")
-        
+        hist.config(state='normal')
         render_end = hist.index(tk.END + "-1c")
-        if render_mode > 0:
+        if render_mode > 0 and render_start:
             self._apply_markdown(render_start, render_end, ("ai",))
             self._post_process_media(start_idx=render_start)
         
@@ -7473,20 +8106,59 @@ class ChatbotApp:
             except Exception as fb_err:
                 print(f"[UI] RLHF widget embed error: {fb_err}")
 
+        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
+        user_scrolled = getattr(self, '_user_scrolled_up', False)
+        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
         hist.config(state='disabled')
-        hist.see(tk.END)
+        if not scroll_locked and was_at_bottom:
+            hist.see(tk.END)
 
         # PERSISTENCE (Hardened against memory corruption)
         try:
             if not error and user_msg and final_answer:
                 final_answer_history = final_answer.replace("<|file_separator|>", "").strip()
+                ai_entry = {
+                    "role": "assistant",
+                    "content": str(final_answer_history),
+                    "level": getattr(self, "active_persona_level", 3)
+                }
+                if think_log and isinstance(think_log, str) and think_log.strip():
+                    ai_entry["reasoning_content"] = str(think_log.strip())
                 self.messages.extend([
                     {"role": "user", "content": str(user_msg)}, 
-                    {"role": "assistant", "content": str(final_answer_history)}
+                    ai_entry
                 ])
                 if self.config.get("ghost_mode", False):
                     self.messages = self.messages[-4:]
-                self.save_history()
+                if self.config.get("history_autosave_mode", "End") == "End":
+                    self.save_history()
+
+                # Semantic Vault Ingestion & Affect Feedback Loop (Plan C)
+                if getattr(self, "active_persona_level", 3) == 7 and hasattr(self, "semantic_vault") and self.semantic_vault:
+                    affect_dict = None
+                    if hasattr(self, "affect_engine") and self.affect_engine:
+                        impulse = {"valence": 0.0, "arousal": 0.0}
+                        low_u = str(user_msg).lower()
+                        if any(w in low_u for w in ["good", "great", "excellent", "love", "thanks", "impressive", "brilliant"]):
+                            impulse["valence"] += 0.1
+                        elif any(w in low_u for w in ["bad", "awful", "stupid", "hate", "fail", "wrong"]):
+                            impulse["valence"] -= 0.15
+                            impulse["arousal"] += 0.1
+                        self.affect_engine.update_state(dt=1.0, interaction_impulse=impulse)
+                        self._save_cecilia_affect_state()
+                        affect_dict = {
+                            "valence": self.affect_engine.state.valence,
+                            "arousal": self.affect_engine.state.arousal,
+                            "dominance": self.affect_engine.state.dominance
+                        }
+
+                    self.semantic_vault.ingest_interaction(
+                        user_input=str(user_msg),
+                        thought_stream=str(think_log or ""),
+                        final_response=str(final_answer),
+                        affect_state=affect_dict
+                    )
+                    threading.Thread(target=self.semantic_vault.simmer, daemon=True).start()
         except Exception as e:
             print(f"[SYSTEM] Persistence recovery: {e}")
 
@@ -7495,6 +8167,7 @@ class ChatbotApp:
         except: pass
         
         self.state["response_started"] = False
+        self.state.pop("active_subagent", None)
         self.state["thought_streamed"] = False
         self.state["current_think_tag"] = None
         self.state["current_think_btn"] = None
@@ -7641,6 +8314,14 @@ class ChatbotApp:
                 new_sz = max(6, int(round(adj_base * user_factor * effective_win)))
                 self.fonts[k].configure(size=new_sz)
         
+        # Dynamically scale depth_slider trough and thumb size (Option A)
+        if hasattr(self, 'depth_slider') and self.depth_slider:
+            try:
+                scaled_w = max(15, int(15 * win_factor * user_factor))
+                scaled_th = max(28, int(30 * win_factor * user_factor))
+                self.depth_slider.config(width=scaled_w, sliderlength=scaled_th)
+            except Exception: pass
+
         if persist and hasattr(self, 'config') and self.config is not None:
             self.config["text_scale"] = scale_pct
             if hasattr(self, 'model_paths'):
@@ -7700,6 +8381,23 @@ class ChatbotApp:
             self.root.after_cancel(self._root_resize_job)
         self._root_resize_job = self.root.after(150, self._apply_responsive_scale)
 
+    def _on_left_resize(self, event):
+        """Dynamic wraplength and persona slider scaling (Option A)."""
+        if hasattr(self, 'persona_desc_label') and self.persona_desc_label:
+            new_width = event.width - 40
+            if new_width > 50:
+                self.persona_desc_label.config(wraplength=new_width)
+        if hasattr(self, 'depth_slider') and self.depth_slider:
+            scale_ratio = max(getattr(self, 'scale_factor', 1.0), getattr(self, '_window_scale_factor', 1.0))
+            if scale_ratio <= 0.1:
+                scale_ratio = 1.0
+            dynamic_len = max(90, min(360, int(event.width * 0.26 * scale_ratio)))
+            scaled_w = max(15, int(15 * scale_ratio))
+            scaled_th = max(28, int(30 * scale_ratio))
+            try:
+                self.depth_slider.config(length=dynamic_len, width=scaled_w, sliderlength=scaled_th)
+            except Exception: pass
+
     def _apply_responsive_scale(self):
         """Recompute window-responsive scale factor and re-apply text scale."""
         try:
@@ -7721,9 +8419,12 @@ class ChatbotApp:
         lvl = int(val) if val is not None else self.active_persona_level
         self.active_persona_level = lvl
         
-        # --- Level 7 Dynamic Hiding: auto-collapse slider to 6 when moving to standard levels 1-6 ---
-        if lvl <= 6 and self.depth_slider.cget('to') == 7 and not getattr(self, '_setting_slider', False):
+        # --- Level 7 Dynamic Hiding: auto-collapse slider to 6 when moving to standard levels 1-6 (unless show_cecilia_slider is active) ---
+        show_cecilia = bool(self.config.get("show_cecilia_slider", False)) if hasattr(self, 'config') and self.config else False
+        if lvl <= 6 and self.depth_slider.cget('to') == 7 and not getattr(self, '_setting_slider', False) and not show_cecilia:
             self.depth_slider.config(to=6)
+        elif show_cecilia and self.depth_slider.cget('to') != 7:
+            self.depth_slider.config(to=7)
 
         # --- Secret Lore Button Toggle & Auto-Hide ---
         if hasattr(self, 'lore_btn') and self.lore_btn is not None:
@@ -7767,6 +8468,10 @@ class ChatbotApp:
         if hasattr(self, 'persona_desc_label') and self.persona_desc_label is not None: 
             self.persona_desc_label.config(text=desc, fg=THEME["electric_blue"], bg=THEME["bg_color"])
 
+        # When offloaded, sync proposed selected model
+        if self.model is None and getattr(self, '_status_timer', None) is None:
+            self._revert_status_label()
+
     def _on_persona_label_click(self, e):
         self.state["persona_clicks"] += 1
         if self.state["persona_clicks"] >= 6: 
@@ -7793,9 +8498,10 @@ class ChatbotApp:
         self._log_and_display("System Ready. Select a persona to begin.")
         self.set_avatar_state("off")
         
-        # Restore persistent sticky persona level and range (max 6 unless level 7 active)
+        # Restore persistent sticky persona level and range (max 6 unless level 7 active or unlocked via show_cecilia_slider)
         if hasattr(self, 'depth_slider'):
-            max_lvl = 7 if self.active_persona_level == 7 else 6
+            show_cecilia = bool(self.config.get("show_cecilia_slider", False)) if hasattr(self, 'config') and self.config else False
+            max_lvl = 7 if (self.active_persona_level == 7 or show_cecilia) else 6
             self.depth_slider.config(to=max_lvl)
             self.depth_slider.set(self.active_persona_level)
         
@@ -7803,16 +8509,19 @@ class ChatbotApp:
 
     def offload_model(self):
         """Explicitly offloads all model resources and multimodal handlers."""
-        if self.model: self.save_history()
+        if self.model and self.config.get("history_autosave_mode", "End") in ("End", "Close"):
+            self.save_history()
         
         # Clear Model and Multimodal Resources
         self.model = None
+        self.model_path = ""
         self.messages = []
         self.current_model_tier = None
         
         # Explicitly clear Vision Chat Handler
         if hasattr(self, 'chat_handler'):
             self.chat_handler = None
+        self._cached_chat_handler = None
             
         # Trigger Hygiene Gate for VRAM Flush
         import gc
@@ -7822,8 +8531,9 @@ class ChatbotApp:
             except: pass
         VisionHandler.hygiene_gate()
         
-        # --- Level 7 Auto-Hide on Offload ---
-        if self.depth_slider.cget('to') == 7:
+        # --- Level 7 Auto-Hide on Offload (unless show_cecilia_slider is active) ---
+        show_cecilia = bool(self.config.get("show_cecilia_slider", False)) if hasattr(self, 'config') and self.config else False
+        if self.depth_slider.cget('to') == 7 and not show_cecilia:
             self.depth_slider.config(to=6)
             if self.active_persona_level == 7:
                 self.depth_slider.set(6)
@@ -7836,10 +8546,96 @@ class ChatbotApp:
         self.set_avatar_state("off") 
         self._log_and_display("All models offloaded. VRAM Cleared.")
 
+    def _get_conversation_level_pipeline(self):
+        """Extracts sequence of persona levels invoked for assistant responses in current conversation."""
+        pipeline = []
+        if hasattr(self, 'messages') and self.messages:
+            for m in self.messages:
+                if m.get("role") in ("assistant", "ai") and "level" in m:
+                    try:
+                        pipeline.append(int(m["level"]))
+                    except: pass
+        if not pipeline and hasattr(self, 'active_persona_level'):
+            pipeline = [self.active_persona_level]
+        return pipeline
+
+    def _format_level_pipeline(self, pipeline, mode="All"):
+        """
+        Formats level pipeline according to user setting:
+        - 'All': all unique levels used without repeats (e.g. [4, 6, 2, 3])
+        - 'full': full pipeline / stacktrace with repeats (e.g. [4, 6, 2, 3, 2, 4])
+        - 'ordered': unique levels in numerical order 1-7 (e.g. [2, 3, 4, 6])
+        - 'first': first model/level invoked (e.g. [4])
+        - 'last': last model/level invoked (e.g. [4])
+        """
+        if not pipeline:
+            return [getattr(self, 'active_persona_level', 3)]
+
+        mode = str(mode).strip()
+        if mode == "full":
+            return list(pipeline)
+        elif mode == "ordered":
+            return sorted(list(set(pipeline)))
+        elif mode == "first":
+            return [pipeline[0]]
+        elif mode == "last":
+            return [pipeline[-1]]
+        else: # "All" (default: unique in first-seen order)
+            seen = set()
+            unique = []
+            for x in pipeline:
+                if x not in seen:
+                    seen.add(x)
+                    unique.append(x)
+            return unique
+
+    @staticmethod
+    def _format_levels_condensed(levels):
+        """
+        Condenses a sequence of level integers:
+        - [7, 7, 7, 7, 7, 7, 7, 7] -> "7(8)"
+        - [7, 7, 7, 5, 5, 2] -> "7(3), 5(2), 2"
+        - [7] -> "7"
+        """
+        if not levels:
+            return ""
+        runs = []
+        current_lvl = levels[0]
+        count = 1
+        for lvl in levels[1:]:
+            if lvl == current_lvl:
+                count += 1
+            else:
+                runs.append((current_lvl, count))
+                current_lvl = lvl
+                count = 1
+        runs.append((current_lvl, count))
+
+        parts = []
+        for lvl, cnt in runs:
+            if cnt > 1:
+                parts.append(f"{lvl}({cnt})")
+            else:
+                parts.append(f"{lvl}")
+        return ", ".join(parts)
+
     def get_history_path(self): 
         if not self.model_path: return None
         hist_dir = self.get_user_history_dir()
-        base = f"{os.path.splitext(os.path.basename(self.model_path))[0]}_lvl{self.active_persona_level}.history"
+        model_name = os.path.splitext(os.path.basename(self.model_path))[0]
+
+        pipeline = self._get_conversation_level_pipeline()
+        mode = self.config.get("history_level_format", "All")
+        formatted = self._format_level_pipeline(pipeline, mode)
+
+        # Keep archive titles and filenames concise, no quantity repeats in filename
+        unique_lvls = list(dict.fromkeys(formatted))
+        if len(unique_lvls) <= 1:
+            lvl = unique_lvls[0] if unique_lvls else (formatted[0] if formatted else self.active_persona_level)
+            base = f"{model_name}_lvl{lvl}.history"
+        else:
+            base = f"{model_name}_lvls{'_'.join(str(x) for x in unique_lvls)}.history"
+
         p_enc = os.path.join(hist_dir, f"{base}.encz")
         p_jsonz = os.path.join(hist_dir, f"{base}.jsonz")
         if os.path.exists(p_enc): return p_enc
@@ -7852,11 +8648,18 @@ class ChatbotApp:
             return
         if not (path := self.get_history_path()) or not self.messages: return
         try:
+            old_path = getattr(self, "_active_session_history_path", None)
             if hasattr(self, 'vault_manager'):
                 self.vault_manager.write_history_messages(path, self.messages)
             else:
                 with open(path, 'wb') as f:
                     f.write(zlib.compress(json.dumps(self.messages).encode('utf-8')))
+
+            # If pipeline filename evolved during conversation, cleanly remove old partial file
+            if old_path and old_path != path and os.path.exists(old_path):
+                try: os.remove(old_path)
+                except: pass
+            self._active_session_history_path = path
         except Exception as e:
             print(f"History save error: {e}", file=sys.stderr)
 
@@ -7877,19 +8680,48 @@ class ChatbotApp:
             
             if role == 'user':
                 s_idx = hist.index(tk.END + "-1c")
-                hist.insert(tk.END, f"\nYou: {content_str}\n", ("user",))
+                hist.insert(tk.END, f"\nPrompt: {content_str}\n", ("user",))
                 e_idx = hist.index(tk.END + "-1c")
-                if self.config.get("media_rendering", 1) > 0 and self.config.get("inline_markdown", True) and self.config.get("format_prompt_markdown", False):
+                if self.config.get("media_rendering", 1) > 0 and self.config.get("format_prompts_markdown", False):
                     self._apply_markdown(s_idx, e_idx, ("user",))
             elif role == 'assistant':
                 s_idx = hist.index(tk.END + "-1c")
                 hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", ("ai_lead",))
+
+                think_content = m.get('reasoning_content') or m.get('think_log')
+                if think_content and isinstance(think_content, str) and think_content.strip():
+                    think_tag = f"hist_think_{int(time.time() * 1000)}_{random.randint(100, 999)}"
+                    dd_frame = tk.Frame(hist, bg=THEME.get("bg_color", "#181410"))
+                    btn = tk.Button(dd_frame, text="[+] View Thinking Process", 
+                                    bg=THEME.get("button_bg_color", "#24201c"), 
+                                    fg=THEME.get("electric_blue", "#00bfff"),
+                                    relief=tk.FLAT, font=self.fonts["stats"], cursor="hand2", padx=6, pady=2)
+                    def toggle_hist_thoughts(t=think_tag, b=btn):
+                        is_el = str(hist.tag_cget(t, "elide")) in ["1", "True", "true"]
+                        if is_el:
+                            hist.tag_config(t, elide=False)
+                            b.config(text="[-] Hide Thinking")
+                        else:
+                            hist.tag_config(t, elide=True)
+                            b.config(text="[+] View Thinking Process")
+                    btn.config(command=toggle_hist_thoughts)
+                    btn.pack(side=tk.LEFT, padx=(0, 4))
+                    hist.window_create(tk.END, window=dd_frame)
+                    hist.insert(tk.END, "\n", ("ai",))
+                    t_start = hist.index(tk.END + "-1c")
+                    hist.insert(tk.END, f"{think_content.strip()}\n\n", (think_tag, "md_thought"))
+                    t_end = hist.index(tk.END + "-1c")
+                    hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
+                    if self.config.get("media_rendering", 1) > 0:
+                        self._apply_markdown(t_start, t_end, (think_tag, "md_thought"), is_thought=True)
+
                 hist.insert(tk.END, f"{content_str}\n", ("ai",))
                 e_idx = hist.index(tk.END + "-1c")
-                if self.config.get("media_rendering", 1) > 0 and self.config.get("inline_markdown", True):
+                if self.config.get("media_rendering", 1) > 0:
                     self._apply_markdown(s_idx, e_idx, ("ai",))
         hist.config(state='disabled')
         hist.see(tk.END)
+        self._user_scrolled_up = False
 
     def load_history(self, render_active=True):
         # Default profile starts fresh on every app load
@@ -7966,7 +8798,8 @@ class ChatbotApp:
         except Exception:
             pass
         self.stop_process.set()
-        if self.model: self.save_history()
+        if self.model and self.config.get("history_autosave_mode", "End") in ("End", "Close"):
+            self.save_history()
         if self.live_agent_process: self.live_agent_process.terminate()
         if SYSTEM_MONITOR_LOADED: 
             try: nvidia_ml.nvmlShutdown()
@@ -8020,6 +8853,25 @@ class ChatbotApp:
                 self.params = default_params
                 print(f"[APEX] Warning: Could not write params.json: {e}")
 
+    def _get_avatar_target_size(self):
+        """Calculates dynamic target dimensions to scale avatar into available right panel canvas space."""
+        w, h = 350, 350
+        try:
+            if hasattr(self, 'right_panel') and self.right_panel and self.right_panel.winfo_exists():
+                rw = self.right_panel.winfo_width()
+                rh = self.right_panel.winfo_height()
+                if rw <= 1:
+                    try: rw = int(self.right_panel.cget("width"))
+                    except: pass
+                if rh <= 1:
+                    try: rh = int(self.right_panel.cget("height"))
+                    except: pass
+                if rw > 50 and rh > 50:
+                    w = max(300, rw - 24)
+                    h = max(300, int(rh * 0.48))
+        except Exception: pass
+        return w, h
+
     def _fit_image_aspect(self, img, target_w=350, target_h=350):
         orig_w, orig_h = img.size
         ratio = min(target_w / float(orig_w), target_h / float(orig_h))
@@ -8028,10 +8880,7 @@ class ChatbotApp:
         return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     def load_all_images(self):
-        w, h = 350, 350 
-        try:
-            if self.right_panel.winfo_width() > 1: w, h = self.right_panel.winfo_width(), self.right_panel.winfo_height() // 2
-        except: pass
+        w, h = self._get_avatar_target_size()
 
         if not os.path.isdir(self.dirs['Media']):
              messagebox.showwarning("Missing Assets", f"Media folder not found at:\n{self.dirs['Media']}\nAvatar will not display.")
@@ -8041,7 +8890,9 @@ class ChatbotApp:
             try:
                 p = os.path.join(self.dirs["Media"], fname)
                 if os.path.exists(p):
-                    img = self._fit_image_aspect(Image.open(p), w, h)
+                    raw = Image.open(p)
+                    self.avatar_pil_images[state] = raw
+                    img = self._fit_image_aspect(raw, w, h)
                     self.avatar_states[state] = ImageTk.PhotoImage(img)
                     #print(f"Loaded: {fname}")
             except Exception as e: print(f"Error loading {fname}: {e}")
@@ -8063,7 +8914,13 @@ class ChatbotApp:
 
     def set_avatar_state(self, state):
         if not self.right_panel: return
+        if getattr(self, 'ecstatic_timer_id', None) is not None:
+            try: self.root.after_cancel(self.ecstatic_timer_id)
+            except: pass
+            self.ecstatic_timer_id = None
         self.state["avatar_current"] = state 
+        target_w, target_h = self._get_avatar_target_size()
+        self._current_avatar_dim = (target_w // 20, target_h // 20)
         
         # --- MISSION: Force Cecilia for Level 7 ---
         if self.active_persona_level == 7:
@@ -8076,7 +8933,11 @@ class ChatbotApp:
                         self.root.after_cancel(self.idle_timer_id)
                         self.idle_timer_id = None
                     
-                    img = self._fit_image_aspect(Image.open(p), 350, 350)
+                    raw = self.avatar_pil_images.get("cecilia_alt")
+                    if raw is None:
+                        raw = Image.open(p)
+                        self.avatar_pil_images["cecilia_alt"] = raw
+                    img = self._fit_image_aspect(raw, target_w, target_h)
                     self.tmp_img = ImageTk.PhotoImage(img)
                     self.right_panel.itemconfig(self.avatar_image_item, state='normal', image=self.tmp_img)
                     self.right_panel.itemconfig(self.avatar_text_item, state='hidden')
@@ -8118,15 +8979,28 @@ class ChatbotApp:
         if not fname:
             fname = f"lvl{self.active_persona_level}_serenity_idle.png"
         
-        if state in self.avatar_states: 
+        raw_img = self.avatar_pil_images.get(state)
+        if raw_img is not None:
+            try:
+                img = self._fit_image_aspect(raw_img, target_w, target_h)
+                self.tmp_img = ImageTk.PhotoImage(img)
+                self.avatar_states[state] = self.tmp_img
+                self.right_panel.itemconfig(self.avatar_image_item, state='normal', image=self.tmp_img)
+                self.right_panel.itemconfig(self.avatar_text_item, state='hidden')
+            except Exception as e:
+                print(f"[UI] Avatar render error: {e}")
+        elif state in self.avatar_states: 
              self.right_panel.itemconfig(self.avatar_image_item, state='normal', image=self.avatar_states[state])
              self.right_panel.itemconfig(self.avatar_text_item, state='hidden')
         else:
             p = os.path.join(self.dirs["Media"], fname)
             if os.path.exists(p):
                 try:
-                    img = self._fit_image_aspect(Image.open(p), 350, 350)
+                    raw = Image.open(p)
+                    self.avatar_pil_images[state] = raw
+                    img = self._fit_image_aspect(raw, target_w, target_h)
                     self.tmp_img = ImageTk.PhotoImage(img)
+                    self.avatar_states[state] = self.tmp_img
                     self.right_panel.itemconfig(self.avatar_image_item, state='normal', image=self.tmp_img)
                     self.right_panel.itemconfig(self.avatar_text_item, state='hidden')
                 except Exception as e:
@@ -8141,7 +9015,9 @@ class ChatbotApp:
             self.state["dmn_active"] = False
             self.state["dmn_entry_time"] = None
 
-        if state == "listening": 
+        if state == "ecstatic":
+            self.ecstatic_timer_id = self.root.after(4500, self._revert_ecstatic_avatar)
+        elif state == "listening": 
             if getattr(self, "idle_timer_id", None) is not None:
                 self.root.after_cancel(self.idle_timer_id)
                 self.idle_timer_id = None
@@ -8153,6 +9029,12 @@ class ChatbotApp:
             timeout_sec = self._parse_dmn_timeout_sec()
             if timeout_sec > 0:
                 self.idle_timer_id = self.root.after(timeout_sec * 1000, lambda *args: self.set_avatar_state(f"dmn_lvl{self.active_persona_level}"))
+
+    def _revert_ecstatic_avatar(self):
+        """Auto-reverts ecstatic avatar state to listening/idle after 4.5s."""
+        self.ecstatic_timer_id = None
+        if self.state.get("avatar_current") == "ecstatic":
+            self.set_avatar_state("listening")
 
     def _parse_dmn_timeout_sec(self):
         if not self.config.get("dmn_enabled", True):
@@ -8197,24 +9079,18 @@ class ChatbotApp:
                 
                 if av_img is not None: canvas_r.lift(av_img)
                 if av_txt is not None: canvas_r.lift(av_txt)
+
+                # Dynamically resize avatar to fill available space upon panel/window resize
+                target_w, target_h = self._get_avatar_target_size()
+                dim_bucket = (target_w // 20, target_h // 20)
+                if dim_bucket != getattr(self, '_current_avatar_dim', None):
+                    cur_st = self.state.get("avatar_current", "off")
+                    self.set_avatar_state(cur_st)
         except Exception: pass
 
     def load_config(self):
         if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    self.config = ThreadSafeDict(loaded)
-            except Exception as e:
-                print(f"[CONFIG] Error parsing {self.config_file}: {e}. Falling back to default configuration.")
-                default_p = os.path.join(self.dirs.get("Users", os.path.join(self.script_dir, "Users")), "Default", "config.json")
-                if os.path.exists(default_p) and default_p != self.config_file:
-                    try:
-                        with open(default_p, 'r', encoding='utf-8') as f:
-                            self.config = ThreadSafeDict(json.load(f))
-                    except Exception:
-                        pass
+            with open(self.config_file, 'r') as f: self.config = ThreadSafeDict(json.load(f))
         
         # Track startup count to initialize blank logs upon 4th startup
         startup_count = self.config.get("startup_count", 0) + 1
@@ -8291,8 +9167,8 @@ class ChatbotApp:
             self.config["benchmark_enabled"] = False
         if "inline_markdown" not in self.config:
             self.config["inline_markdown"] = True
-        if "format_prompt_markdown" not in self.config:
-            self.config["format_prompt_markdown"] = False
+        if "format_prompts_markdown" not in self.config:
+            self.config["format_prompts_markdown"] = False
         if "overfill_behavior_mode" not in self.config:
             self.config["overfill_behavior_mode"] = self.config.get("budget_recovery_mode", "wrapup")
         if "budget_recovery_mode" not in self.config:
@@ -8414,14 +9290,25 @@ class ChatbotApp:
                     if f and f.winfo_exists():
                         f.config(bg=bg if "container" in frame_attr or "control" in frame_attr or "frame" in frame_attr else widget_bg)
 
-            # Prompt Box with Themed Borders
+            # Persona Color Resolution for Prompt & Response Window Borders
+            lvl = getattr(self, 'active_persona_level', 3)
+            from serenity_resources import THERMO_COLORS, PERSONA_SECONDARY_COLORS, desaturate_color
+            lvl_color = THEME.get("_persona_color", THERMO_COLORS.get(lvl, accent_hl))
+            sec_lvl_color = THEME.get("_persona_secondary_color", PERSONA_SECONDARY_COLORS.get(lvl, accent_sec))
+            
+            is_persona_active = (getattr(self, 'model', None) is not None) or (THEME.get("_theme_name") == "persona")
+            response_border = lvl_color if is_persona_active else trim
+            prompt_border = sec_lvl_color if is_persona_active else trim
+            thought_fg = desaturate_color(chat_fg)
+
+            # Prompt Box with Themed Persona Borders (2nd persona color when loaded)
             if hasattr(self, 'input_control_frame') and self.input_control_frame and self.input_control_frame.winfo_exists():
-                self.input_control_frame.config(bg=trim, highlightbackground=trim, highlightcolor=accent)
+                self.input_control_frame.config(bg=prompt_border, highlightbackground=prompt_border, highlightcolor=accent)
             if hasattr(self, 'attachment_frame') and self.attachment_frame and self.attachment_frame.winfo_exists():
-                self.attachment_frame.config(bg=trim)
+                self.attachment_frame.config(bg=prompt_border)
             if hasattr(self, 'user_input') and self.user_input and self.user_input.winfo_exists():
-                self.user_input.config(bg=widget_bg, fg=fg, insertbackground=accent, 
-                                       highlightthickness=1, highlightbackground=trim, highlightcolor=accent)
+                self.user_input.config(bg=widget_bg, fg=accent_sec, insertbackground=accent, 
+                                       highlightthickness=1, highlightbackground=prompt_border, highlightcolor=prompt_border)
 
             # Loading Bar & ThinkingDisplay Theming
             if hasattr(self, 'status_frame') and self.status_frame and self.status_frame.winfo_exists():
@@ -8445,11 +9332,12 @@ class ChatbotApp:
                 if hasattr(self.thinking_display, 'prayer_label') and self.thinking_display.prayer_label and self.thinking_display.prayer_label.winfo_exists():
                     self.thinking_display.prayer_label.config(bg=bg, fg=accent)
 
-            # Chat History & Tags (Pure neon styling, distinct user vs AI separation)
+            # Chat History & Tags with Themed Persona Borders (Main persona color for response window)
             if hasattr(self, 'chat_history') and self.chat_history and self.chat_history.winfo_exists():
-                self.chat_history.config(bg=chat_bg, fg=chat_fg)
+                self.chat_history.config(bg=chat_bg, fg=chat_fg, highlightthickness=1,
+                                         highlightbackground=response_border, highlightcolor=response_border)
                 self.chat_history.tag_config("user_lead", foreground=accent_sec)
-                self.chat_history.tag_config("user", foreground=accent if accent != chat_fg else "#00aaff")
+                self.chat_history.tag_config("user", foreground=accent_sec)
                 self.chat_history.tag_config("ai_lead", foreground=accent_hl)
                 self.chat_history.tag_config("ai", foreground=chat_fg)
                 self.chat_history.tag_config("md_header", foreground=accent_hl)
@@ -8459,7 +9347,7 @@ class ChatbotApp:
                 self.chat_history.tag_config("md_bold", foreground=accent)
                 self.chat_history.tag_config("md_italic", foreground=accent_sec)
                 self.chat_history.tag_config("md_bold_italic", foreground=accent_hl)
-                self.chat_history.tag_config("md_thought", foreground="#888888" if not dark_mode else "#555555")
+                self.chat_history.tag_config("md_thought", foreground=thought_fg)
                 self.chat_history.tag_config("md_code", foreground=accent_hl, background="#050505" if dark_mode else "#111111")
                 self.chat_history.tag_config("md_list", foreground=chat_fg)
                 self.chat_history.tag_config("md_math_inline", foreground=accent_sec)
@@ -8470,9 +9358,10 @@ class ChatbotApp:
                 self.chat_history.tag_config("stats", foreground=accent_hl)
                 
             if hasattr(self, 'past_history_view') and self.past_history_view and self.past_history_view.winfo_exists():
-                self.past_history_view.config(bg=chat_bg, fg=chat_fg)
+                self.past_history_view.config(bg=chat_bg, fg=chat_fg, highlightthickness=1,
+                                              highlightbackground=response_border, highlightcolor=response_border)
                 self.past_history_view.tag_config("user_lead", foreground=accent_sec)
-                self.past_history_view.tag_config("user", foreground=accent if accent != chat_fg else "#00aaff")
+                self.past_history_view.tag_config("user", foreground=accent_sec)
                 self.past_history_view.tag_config("ai_lead", foreground=accent_hl)
                 self.past_history_view.tag_config("ai", foreground=chat_fg)
                 self.past_history_view.tag_config("md_header", foreground=accent_hl)
@@ -8481,11 +9370,11 @@ class ChatbotApp:
                 self.past_history_view.tag_config("md_header_3", foreground=accent)
                 self.past_history_view.tag_config("md_bold", foreground=accent)
                 self.past_history_view.tag_config("md_italic", foreground=accent_sec)
-                self.past_history_view.tag_config("md_thought", foreground="#888888" if not dark_mode else "#555555")
+                self.past_history_view.tag_config("md_thought", foreground=thought_fg)
                 self.past_history_view.tag_config("md_code", foreground=accent_hl, background="#050505" if dark_mode else "#111111")
                 
             if hasattr(self, 'user_input') and self.user_input and self.user_input.winfo_exists():
-                self.user_input.config(bg=widget_bg, fg=fg, insertbackground=accent)
+                self.user_input.config(bg=widget_bg, fg=accent_sec, insertbackground=accent)
                 
             if hasattr(self, 'prompt_display') and self.prompt_display and self.prompt_display.winfo_exists():
                 self.prompt_display.config(bg=trim, fg=accent)
@@ -8496,13 +9385,27 @@ class ChatbotApp:
             if hasattr(self, 'desc_container') and self.desc_container and self.desc_container.winfo_exists():
                 self.desc_container.config(bg=bg)
                 
-            # Top Action Buttons
-            for btn_attr in ('load_model_button', 'action_button', 'btn_video', 'btn_watch', 'btn_sizes',
-                             'btn_clear_queue', 'lock_button', 'rgb_button', 'lore_btn', 'mic_button'):
+            # Top Action Buttons & All Controls Overhaul
+            all_action_buttons = (
+                'load_model_button', 'action_button', 'btn_video', 'btn_watch', 'btn_sizes',
+                'btn_clear_queue', 'lock_button', 'rgb_button', 'lore_btn', 'mic_button',
+                'send_button', 'deep_thought_button', 'hurry_button', 'ghost_button',
+                'history_usage_button', 'history_autosave_button', 'btn_add'
+            )
+            for btn_attr in all_action_buttons:
                 if hasattr(self, btn_attr):
                     b = getattr(self, btn_attr)
                     if b and b.winfo_exists():
-                        b.config(bg=btn_bg, fg=fg)
+                        if btn_attr == 'ghost_button':
+                            b.config(bg=btn_bg, fg=self._get_ghost_mode_color())
+                        elif btn_attr == 'history_usage_button':
+                            b.config(bg=btn_bg, fg=self._get_history_usage_color())
+                        elif btn_attr == 'history_autosave_button':
+                            b.config(bg=btn_bg, fg=self._get_history_autosave_color())
+                        elif btn_attr == 'lore_btn':
+                            b.config(bg=btn_bg, fg=accent)
+                        else:
+                            b.config(bg=btn_bg, fg=fg)
 
             # Thought & Agentic Dropdown Buttons Dynamic Theming
             if hasattr(self, 'thought_dropdown_buttons') and self.thought_dropdown_buttons:
@@ -8581,8 +9484,8 @@ class ChatbotApp:
 
             # ScrolledText Logs & Tags
             if hasattr(self, 'thought_log') and self.thought_log and self.thought_log.winfo_exists():
-                self.thought_log.config(bg=widget_bg, fg=fg, insertbackground=accent)
-                self.thought_log.tag_config("stdout", foreground=fg)
+                self.thought_log.config(bg=widget_bg, fg=thought_fg, insertbackground=accent)
+                self.thought_log.tag_config("stdout", foreground=thought_fg)
                 self.thought_log.tag_config("system", foreground=accent)
             if hasattr(self, 'error_log') and self.error_log and self.error_log.winfo_exists():
                 self.error_log.config(bg=widget_bg, fg="#ff8a8a" if not dark_mode else "#ff6666", insertbackground=accent)
@@ -8685,6 +9588,7 @@ class ChatbotApp:
             'status_bar_fallback_info': self.config.get("status_bar_fallback_info", True),
             'status_bar_linger_sec': float(self.config.get("status_bar_linger_sec", 5.0)),
             'settings_window_geometry': self.config.get("settings_window_geometry", "860x950"),
+            'vault_modal_geometry': self.config.get("vault_modal_geometry", ""),
             'scroll_lock_enabled': bool(self.config.get("scroll_lock_enabled", False)),
             'user_preferred_name': str(self.config.get("user_preferred_name", "")),
             'user_address_style': str(self.config.get("user_address_style", "Direct / Plain")),
@@ -8792,7 +9696,8 @@ class ChatbotApp:
             "presence_penalty", "top_k", "max_tokens", "stop", "stream", 
             "grammar", "logit_bias", "logprobs", "typical_p", "tfs_z", 
             "mirostat_mode", "mirostat_tau", "mirostat_eta", "model", "messages",
-            "seed", "echo", "repeat_last_n"
+            "seed", "echo", "repeat_last_n", "chat_template_kwargs",
+            "diffusion_eb_max_steps", "diffusion_eb_entropy_bound", "diffusion_steps"
         }
         
         filtered_params = {k: v for k, v in inf_params.items() if k in supported_keys}
@@ -8800,6 +9705,9 @@ class ChatbotApp:
         dropped = set(inf_params.keys()) - set(filtered_params.keys())
         if dropped:
             print(f"[APEX] Sampler Hygiene: Dropping unsupported parameters: {dropped}")
+
+        if "diffusion" in (self.model_path or "").lower():
+            filtered_params["max_tokens"] = min(int(filtered_params.get("max_tokens", 256)), 256)
 
         # Dynamic Parameter Auto-Adjustment (Non-destructive in-memory tuning)
         if self.config.get("dynamic_params_enabled", True) and temp_messages:
@@ -8823,7 +9731,7 @@ class ChatbotApp:
     def _run_blocking_inference(self, prompt_or_msgs, params):
         """GIL-Safe background inference. Forces internal streaming to keep UI responsive."""
         full_text = ""
-        is_gemma = "gemma" in self.model_path.lower()
+        is_gemma = "gemma" in (self.model_path or "").lower()
         
         # 1. THE BREATHER: Let UI process status updates before heavy prefill
         print(f"[INFERENCE] Starting blocking inference ({'Gemma' if is_gemma else 'Standard'}).")
@@ -8845,6 +9753,7 @@ class ChatbotApp:
                     time.sleep(0.005) 
             else:
                 # Chat Completion Path
+                self._ensure_model_chat_format(self.model)
                 gen = self.model.create_chat_completion(messages=prompt_or_msgs, **safe_params)
                 for chunk in gen:
                     if self.stop_process.is_set(): break
@@ -8908,13 +9817,24 @@ class ChatbotApp:
                     fg=self._get_history_usage_color(),
                     state='disabled' if is_gen else 'normal'
                 )
+            if hasattr(self, 'history_autosave_button') and self.history_autosave_button is not None:
+                self.history_autosave_button.config(
+                    text=self._get_history_autosave_label(),
+                    fg=self._get_history_autosave_color(),
+                    state='disabled' if is_gen else 'normal'
+                )
             if hasattr(self, 'mic_button') and self.mic_button is not None:
                 if not (hasattr(self, 'stt_manager') and self.stt_manager.is_recording):
                     self.mic_button.config(state='disabled' if (is_gen or is_loading) else 'normal')
         except: pass
 
     def _handle_input_key(self, event):
-        if event.keysym == 'Return' and not (event.state & 0x0001): self.send_message(); return 'break'
+        if event.keysym in ('Return', 'KP_Enter'):
+            is_shift = bool(event.state & 0x0001)
+            if not is_shift:
+                self.send_message()
+                return 'break'
+            return None
 
     def clear_current_history(self):
         self.messages = []
@@ -9013,7 +9933,12 @@ class ChatbotApp:
         p = filedialog.askopenfilename(parent=window, filetypes=ft + [("All Files", "*.*")], initialdir=self.dirs["Models"])
         if p: 
             self.model_paths[tier] = p
-            labels[tier].config(text=os.path.basename(p))
+            lbl = labels.get(tier)
+            if lbl is not None:
+                if hasattr(lbl, "set_marquee_text"):
+                    lbl.set_marquee_text(os.path.basename(p), new_path=p)
+                else:
+                    lbl.config(text=os.path.basename(p))
             self.save_config()
         if window: window.lift()
 
@@ -9026,7 +9951,7 @@ class ChatbotApp:
 
     def _get_ghost_mode_label(self):
         active = self.config.get("ghost_mode", False)
-        return "👻 Ghost: ON" if active else "👻 Ghost: OFF"
+        return "👻 Ghost:\nON" if active else "👻 Ghost:\nOFF"
 
     def _get_ghost_mode_color(self):
         active = self.config.get("ghost_mode", False)
@@ -9041,23 +9966,25 @@ class ChatbotApp:
 
     def _get_history_usage_label(self):
         val = self.config.get("history_usage", "all")
-        if val == "current_window":
-            return "📚 Hist: Window"
+        if val in ["window", "current_window"]:
+            return "📚 Hist:\nWindow"
         elif val == "off":
-            return "📚 Hist: Off"
-        return "📚 Hist: All"
+            return "📚 Hist:\nOff"
+        return "📚 Hist:\nAll"
 
     def _get_history_usage_color(self):
         val = self.config.get("history_usage", "all")
-        if val == "current_window":
+        if val in ["window", "current_window"]:
             return "#FFD700"
         elif val == "off":
             return "#FF8A8A"
         return THEME["fg_color"]
 
     def toggle_history_usage(self):
-        modes = ["all", "current_window", "off"]
+        modes = ["all", "window", "off"]
         current = self.config.get("history_usage", "all")
+        if current == "current_window":
+            current = "window"
         if current not in modes:
             current = "all"
         next_idx = (modes.index(current) + 1) % len(modes)
@@ -9065,8 +9992,39 @@ class ChatbotApp:
         self.config["history_usage"] = next_mode
         self.save_config()
         self.history_usage_button.config(text=self._get_history_usage_label(), fg=self._get_history_usage_color())
-        label_disp = "CURRENT WINDOW" if next_mode == "current_window" else next_mode.upper()
+        label_disp = "WINDOW" if next_mode == "window" else next_mode.upper()
         self._log_and_display(f"History usage set to: {label_disp}")
+
+    def _get_history_autosave_label(self):
+        val = self.config.get("history_autosave_mode", "End")
+        if val == "Close":
+            return "💾 Auto:\nClose"
+        elif val == "Manual":
+            return "💾 Save:\nManual"
+        return "💾 Auto:\nEnd"
+
+    def _get_history_autosave_color(self):
+        val = self.config.get("history_autosave_mode", "End")
+        if val == "Close":
+            return "#FFD700"
+        elif val == "Manual":
+            return "#FF8A8A"
+        return THEME.get("electric_blue", "#00d4ff")
+
+    def toggle_history_autosave(self):
+        modes = ["End", "Close", "Manual"]
+        current = self.config.get("history_autosave_mode", "End")
+        if current not in modes:
+            current = "End"
+        next_mode = modes[(modes.index(current) + 1) % len(modes)]
+        self.config["history_autosave_mode"] = next_mode
+        self.save_config()
+        if hasattr(self, 'history_autosave_button') and self.history_autosave_button:
+            self.history_autosave_button.config(
+                text=self._get_history_autosave_label(),
+                fg=self._get_history_autosave_color()
+            )
+        self._log_and_display(f"History AutoSave set to: {next_mode.upper()}")
 
     def toggle_voice_recording(self):
         """Toggles push-to-record voice input using sounddevice and local STTManager."""
@@ -9164,8 +10122,6 @@ class ChatbotApp:
 sys.excepthook = log_uncaught_exception
 
 if __name__ == "__main__":
-    import multiprocessing
-    multiprocessing.freeze_support()
     try:
         enable_high_dpi_awareness()
         print("Starting SerenityPC...")

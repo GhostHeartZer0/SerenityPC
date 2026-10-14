@@ -14,7 +14,7 @@ class MarkdownEngine:
         '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
         '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
         '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
-        'n': 'ⁿ', 'i': 'ⁱ', 'x': 'ˣ', 'y': 'ʸ'
+        'n': 'ⁿ', 'i': 'ⁱ', 'x': 'ˣ', 'y': 'ʸ', 'a': 'ᵃ', 'b': 'ᵇ', 'c': 'ᶜ', 'k': 'ᵏ', 'm': 'ᵐ'
     }
 
     SUBSCRIPT_MAP = {
@@ -39,7 +39,8 @@ class MarkdownEngine:
         r'\in': '∈', r'\notin': '∉', r'\subset': '⊂', r'\subseteq': '⊆', r'\supset': '⊃', r'\supseteq': '⊇',
         r'\cap': '∩', r'\cup': '∪', r'\setminus': '∖',
         r'\forall': '∀', r'\exists': '∃', r'\nexists': '∄',
-        r'\infty': '∞', r'\degree': '°', r'^\circ': '°',
+        r'\infty': '∞', r'\degree': '°', r'^\degree': '°', r'^\circ': '°', r'\circ': '°',
+        r'^/circ': '°', r'^/degree': '°', r'/circ': '°', r'/degree': '°',
         r'\alpha': 'α', r'\beta': 'β', r'\gamma': 'γ', r'\delta': 'δ', r'\epsilon': 'ε', r'\varepsilon': 'ε',
         r'\zeta': 'ζ', r'\eta': 'η', r'\theta': 'θ', r'\vartheta': 'ϑ', r'\iota': 'ι', r'\kappa': 'κ',
         r'\lambda': 'λ', r'\mu': 'μ', r'\nu': 'ν', r'\xi': 'ξ', r'\pi': 'π', r'\varpi': 'ϖ',
@@ -52,6 +53,41 @@ class MarkdownEngine:
         r'\emptyset': '∅', r'\angle': '∠', r'\triangle': '△', r'\perp': '⊥', r'\parallel': '∥'
     }
 
+    _MACROS_SET = {
+        'frac', 'dfrac', 'tfrac', 'sqrt', 'text', 'textbf', 'textit',
+        'mathbf', 'mathrm', 'mathit', 'underline', 'mathbb', 'mathcal', 'boldsymbol',
+        'left', 'right', 'quad', 'qquad', 'circ', 'degree'
+    }
+
+    _ALL_CMDS = sorted(
+        {k.lstrip('^\\/') for k in LATEX_SYMBOLS.keys() if k.lstrip('^\\/').isalpha()} | _MACROS_SET,
+        key=len, reverse=True
+    )
+    _ALL_CMDS_PATTERN = '|'.join(_ALL_CMDS)
+
+    SLASH_SYMBOL_MAP = {
+        k.lstrip('^\\/'): v for k, v in LATEX_SYMBOLS.items()
+        if k.lstrip('^\\/').isalpha() and not k.startswith('^')
+    }
+
+    STANDALONE_SLASH_REGEX = re.compile(r'(?<![a-zA-Z0-9_/])/(' + _ALL_CMDS_PATTERN + r')(?![a-zA-Z])')
+
+    @staticmethod
+    def _extract_balanced_braces(text: str, start_delim: str = '{', end_delim: str = '}') -> Tuple[Optional[str], int, int]:
+        """Extracts content inside the first balanced { ... } pair. Returns (inner, start_pos, end_pos)."""
+        start = text.find(start_delim)
+        if start == -1:
+            return None, -1, -1
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == start_delim:
+                depth += 1
+            elif text[i] == end_delim:
+                depth -= 1
+                if depth == 0:
+                    return text[start + 1:i], start, i + 1
+        return None, -1, -1
+
     @classmethod
     def convert_latex_to_unicode(cls, text: str) -> str:
         """Converts LaTeX math expressions to highly readable Unicode representations."""
@@ -59,58 +95,115 @@ class MarkdownEngine:
             return ""
         s = text
 
-        # 1. Structural fractions \frac{a}{b} or \dfrac{a}{b} -> (a)/(b)
-        def replace_frac(m):
-            num, den = m.group(1).strip(), m.group(2).strip()
-            if len(num) <= 3 and len(den) <= 3 and '/' not in num and '/' not in den:
-                return f"{num}/{den}"
-            return f"({num})/({den})"
-        s = re.sub(r'\\(?:d|t)?frac\{([^{}]*)\}\{([^{}]*)\}', replace_frac, s)
+        # 0. Catch-all forward-slash normalization and typos (e.g. /Delta, 4.18/text, ^/circ)
+        s = re.sub(r'(?<![a-zA-Z])/(right|left)(and\b)', r'\\\1 \2', s)
+        s = re.sub(r'/([a-zA-Z]+)\s*\{', r'\\\1{', s)
+        s = re.sub(r'(?<![a-zA-Z])/(' + cls._ALL_CMDS_PATTERN + r')(?![a-zA-Z])', r'\\\1', s)
 
-        # 2. Roots \sqrt[n]{x} -> ⁿ√(x), \sqrt{x} -> √(x)
-        def replace_root(m):
-            deg = m.group(1).strip()
-            val = m.group(2).strip()
+        # 1. Structural fractions with nested balanced braces: \frac{...}{...}
+        while True:
+            m = re.search(r'\\(?:d|t)?frac\s*\{', s)
+            if not m:
+                break
+            f_start = m.start()
+            num, _, num_e = cls._extract_balanced_braces(s[f_start:])
+            if num is None:
+                break
+            num_abs_e = f_start + num_e
+            den_sub = s[num_abs_e:].lstrip()
+            diff = len(s[num_abs_e:]) - len(den_sub)
+            den, _, den_e = cls._extract_balanced_braces(den_sub)
+            if den is None:
+                break
+            full_e = num_abs_e + diff + den_e
+
+            c_num = cls.convert_latex_to_unicode(num)
+            c_den = cls.convert_latex_to_unicode(den)
+            if len(c_num) <= 3 and len(c_den) <= 3 and '/' not in c_num and '/' not in c_den:
+                replacement = f"{c_num}/{c_den}"
+            else:
+                replacement = f"({c_num})/({c_den})"
+            s = s[:f_start] + replacement + s[full_e:]
+
+        # 2. Formatting macros \mathbf, \text, \mathrm, etc. with balanced braces & whitespace preservation
+        macro_pattern = r'\\(?:mathbf|mathrm|mathit|text|textbf|textit|underline|mathbb|mathcal|boldsymbol)\s*\{'
+        while True:
+            m = re.search(macro_pattern, s)
+            if not m:
+                break
+            m_start = m.start()
+            inner, _, in_e = cls._extract_balanced_braces(s[m_start:])
+            if inner is None:
+                break
+            lead_ws = re.match(r'^\s*', inner).group(0)
+            trail_ws = re.search(r'\s*$', inner).group(0)
+            stripped = inner.strip()
+            c_inner = lead_ws + (cls.convert_latex_to_unicode(stripped) if stripped else "") + trail_ws
+            s = s[:m_start] + c_inner + s[m_start + in_e:]
+
+        # 3. Roots \sqrt[n]{x} -> ⁿ√(x), \sqrt{x} -> √(x) with balanced braces
+        while True:
+            m = re.search(r'\\sqrt\s*(\[[^\]]+\])?\s*\{', s)
+            if not m:
+                break
+            r_start = m.start()
+            deg = m.group(1)[1:-1].strip() if m.group(1) else ""
+            inner, _, in_e = cls._extract_balanced_braces(s[r_start:])
+            if inner is None:
+                break
+            c_inner = cls.convert_latex_to_unicode(inner)
             sup_deg = "".join(cls.SUPERSCRIPT_MAP.get(c, c) for c in deg)
-            return f"{sup_deg}√({val})"
-        s = re.sub(r'\\sqrt\[([^\]]+)\]\{([^{}]*)\}', replace_root, s)
-        s = re.sub(r'\\sqrt\{([^{}]*)\}', r'√(\1)', s)
-
-        # 3. Formatting macros \mathbf, \text, \mathrm, etc.
-        tags = ["mathbf", "mathrm", "mathit", "text", "textbf", "textit", "underline", "mathbb", "mathcal", "boldsymbol"]
-        pattern = r'\\(?:' + '|'.join(tags) + r')\{([^}]*)\}'
-        s = re.sub(pattern, r'\1', s)
+            replacement = f"{sup_deg}√({c_inner})"
+            s = s[:r_start] + replacement + s[r_start + in_e:]
 
         # 4. Bracket modifiers \left, \right
+        s = s.replace(r'\left.', '').replace(r'\right.', '')
         s = s.replace(r'\left(', '(').replace(r'\right)', ')')
         s = s.replace(r'\left[', '[').replace(r'\right]', ']')
         s = s.replace(r'\left\{', '{').replace(r'\right\}', '}')
         s = s.replace(r'\left|', '|').replace(r'\right|', '|')
+        s = re.sub(r'\\(?:left|right)([\(\)\[\]\{\}\|/\\])', r'\1', s)
+        s = re.sub(r'\\(?:left|right)\b', '', s)
 
         # 5. Spacing commands
         s = re.sub(r'\\(?:quad|qquad|,|;|!|\s)', ' ', s)
 
-        # 6. Replace symbols (sorted by length descending so longer macros like \infty are not broken by \in)
+        # 6. Replace symbols (sorted by length descending to prevent prefix collisions like \in before \infty)
         for lat in sorted(cls.LATEX_SYMBOLS.keys(), key=len, reverse=True):
             s = s.replace(lat, cls.LATEX_SYMBOLS[lat])
 
-        # 7. Convert simple superscripts: x^2 -> x², x^{10} -> x¹⁰
+        # 7. Convert operator limits: \sum_{i=0}^{n} -> ∑₍ᵢ₌₀₎ⁿ
+        def replace_sub_limit(m):
+            base, sub = m.group(1), m.group(2)
+            sub_clean = "".join(cls.SUBSCRIPT_MAP.get(c, c) for c in sub)
+            return f"{base}₍{sub_clean}₎"
+        s = re.sub(r'([∑∏∫∬∭∮∂∇])_\{([^{}]+)\}', replace_sub_limit, s)
+        s = re.sub(r'([∑∏∫∬∭∮∂∇])_([0-9a-zA-Z])', replace_sub_limit, s)
+
+        def replace_sup_limit(m):
+            base, sup = m.group(1), m.group(2)
+            sup_clean = "".join(cls.SUPERSCRIPT_MAP.get(c, c) for c in sup)
+            return f"{base}{sup_clean}"
+        s = re.sub(r'([∑∏∫∬∭∮∂∇]₍[^₎]+₎)\^\{([^{}]+)\}', replace_sup_limit, s)
+        s = re.sub(r'([∑∏∫∬∭∮∂∇]₍[^₎]+₎)\^([0-9a-zA-Z\+\-])', replace_sup_limit, s)
+
+        # 8. Convert simple superscripts: x^2 -> x², x^{10} -> x¹⁰
         def replace_sup(m):
             base, sup = m.group(1), m.group(2)
             sup_clean = "".join(cls.SUPERSCRIPT_MAP.get(c, c) for c in sup)
             return f"{base}{sup_clean}"
-        s = re.sub(r'([a-zA-Z0-9\)])\^\{([a-zA-Z0-9\+\-]+)\}', replace_sup, s)
+        s = re.sub(r'([a-zA-Z0-9\)])\^\{([^{}]+)\}', replace_sup, s)
         s = re.sub(r'([a-zA-Z0-9\)])\^([0-9nixy\+\-])', replace_sup, s)
 
-        # 8. Convert simple subscripts: x_1 -> x₁, x_{10} -> x₁₀
+        # 9. Convert simple subscripts: x_1 -> x₁, x_{10} -> x₁₀, S_n -> Sₙ
         def replace_sub(m):
             base, sub = m.group(1), m.group(2)
             sub_clean = "".join(cls.SUBSCRIPT_MAP.get(c, c) for c in sub)
             return f"{base}{sub_clean}"
-        s = re.sub(r'([a-zA-Z0-9\)])_\{([0-9aeijkmnoprstuvx\+\-]+)\}', replace_sub, s)
+        s = re.sub(r'([a-zA-Z0-9\)])_\{([^{}]+)\}', replace_sub, s)
         s = re.sub(r'([a-zA-Z0-9\)])_([0-9aeijkmnoprstuvx])', replace_sub, s)
 
-        # 9. Clean up residual backslashes on basic math
+        # 10. Clean up residual backslashes on basic math
         s = re.sub(r'\\([a-zA-Z]+)', r'\1', s)
         return s.strip()
 
@@ -212,41 +305,49 @@ class MarkdownEngine:
         intervals = []
 
         # 1. Inline code (Highest priority)
-        for m in re.finditer(r'(?<!\`)\`([^\`\n]+?)\`(?!\`)', text):
+        for m in re.finditer(r'`([^`\n]+?)`', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_code",), 1))
 
-        # 2. Math display inside text: $$...$$, \[...\]
-        for m in re.finditer(r'(?s)\$\$(.+?)\$\$|\\\[(.+?)\\\]', text):
+        # 2. Math display inside text: $$$$...$$$$, $$...$$, \[...\]
+        for m in re.finditer(r'(?s)\${2,4}(.+?)\${2,4}|\\\[(.+?)\\\]', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
             converted = cls.convert_latex_to_unicode(inner)
             intervals.append((m.start(), m.end(), f" {converted} ", base_tags + ("md_math_block",), 2))
 
         # 3. Inline math: $...$, \(...\)
+        currency_pat = re.compile(r'^\s*\$?[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?\s*$')
         for m in re.finditer(r'(?<!\\)\$([^\$\n\s](?:[^\$\n]*?[^\$\n\s])?)\$|\\\((.+?)\\\)', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
-            if inner and not re.match(r'^\d+(?:\.\d+)?(?:\s*,\s*\d+)?$', inner.strip()):
+            if inner and not currency_pat.match(inner):
                 converted = cls.convert_latex_to_unicode(inner)
                 intervals.append((m.start(), m.end(), converted, base_tags + ("md_math_inline",), 3))
 
-        # 4. Bold-italic
-        for m in re.finditer(r'(?<![\w\d\*])\*\*\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*\*\*(?![\w\d\*])|(?<![\w\d_])___([^_ \n](?:[^_\n]*?[^_ \n])?)___(?![\w\d_])', text):
+        # 3.5 Standalone forward-slash LaTeX commands in plain text (e.g. /Delta -> Δ)
+        for m in re.finditer(cls.STANDALONE_SLASH_REGEX, text):
+            sym = m.group(1)
+            char = cls.SLASH_SYMBOL_MAP.get(sym)
+            if char:
+                intervals.append((m.start(), m.end(), char, base_tags + ("md_math_inline",), 3.5))
+
+        # 4. Bold-italic (requires delimiter boundary protection against arithmetic like 3***2)
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*\*\*(.+?)\*\*\*(?![a-zA-Z0-9_*])|(?<![a-zA-Z0-9_])___(.+?)___(?![a-zA-Z0-9_])', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
             intervals.append((m.start(), m.end(), inner, base_tags + ("md_bold_italic",), 4))
 
-        # 5. Bold
-        for m in re.finditer(r'(?<![\w\d\*])\*\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*\*(?![\w\d\*])|(?<![\w\d_])__([^_ \n](?:[^_\n]*?[^_ \n])?)__(?![\w\d_])', text):
+        # 5. Bold (requires delimiter boundary protection against math powers like 3**2)
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*\*(.+?)\*\*(?![a-zA-Z0-9_*])|(?<![a-zA-Z0-9_])__(.+?)__(?![a-zA-Z0-9_])', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
             intervals.append((m.start(), m.end(), inner, base_tags + ("md_bold",), 5))
 
         # 6. Strike
-        for m in re.finditer(r'(?<![\w\d~])~~([^\n\s](?:[^\n]*?[^\n\s])?)~~(?![\w\d~])', text):
+        for m in re.finditer(r'~~(.+?)~~', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_strike",), 6))
 
-        # 7. Italic
-        for m in re.finditer(r'(?<![\w\d\*])\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*(?![\w\d\*])', text):
+        # 7. Italic (boundary protection strictly ensures 3*3*5*5 arithmetic multiplication is never mangled)
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*(?![a-zA-Z0-9_*])', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_italic",), 7))
 
-        for m in re.finditer(r'(?<![\w\d_])_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?![\w\d_])', text):
+        for m in re.finditer(r'(?<=\s)_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?=\s|[.,;:!?\)]|$)', text):
             intervals.append((m.start(), m.end(), m.group(1), base_tags + ("md_italic",), 7))
 
         # Resolve overlapping intervals by priority (lowest priority number wins)
@@ -312,8 +413,8 @@ class MarkdownEngine:
             formatted_code = f"\n{header_str}{code_content.rstrip()}\n\n"
             blocks.append((m.start(), m.end(), "code", formatted_code))
 
-        # 2. Display Math Blocks: $$...$$ or \[...\]
-        for m in re.finditer(r'\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]', text):
+        # 2. Display Math Blocks: $$$$...$$$$, $$...$$ or \[...\]
+        for m in re.finditer(r'\${2,4}([\s\S]+?)\${2,4}|\\\[([\s\S]+?)\\\]', text):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
             converted = cls.convert_latex_to_unicode(inner.strip())
             formatted_math = f"\n  {converted}\n\n"
@@ -455,123 +556,113 @@ class MarkdownEngine:
         out_spans.extend(spans)
 
     @classmethod
-    def parse_overlay_intervals(cls, text: str, is_thought: bool = False) -> List[Tuple[int, int, str]]:
+    def get_overlay_intervals(cls, text: str, base_tags: tuple = ("ai",), is_thought: bool = False) -> Tuple[List[Tuple[int, int, str]], List[Tuple[int, int, str, str]]]:
         """
-        Parses raw text and returns non-destructive formatting intervals as (start_char_idx, end_char_idx, tag_name).
-        Guarantees source text is never mutated or deleted.
-        Delimiters are tagged with 'md_syntax' (which Tkinter elides visually), while content spans receive semantic tags.
+        Parses text for a non-destructive visual tag overlay.
+        Returns:
+            tag_ranges: List of (char_start, char_end, tag_name) for direct styling without mutating source characters.
+            replacements: List of (char_start, char_end, replacement_text, tag_name) strictly for complex visual blocks (GFM tables).
         """
         if not text:
-            return []
+            return [], []
 
-        intervals: List[Tuple[int, int, str]] = []
+        tag_ranges: List[Tuple[int, int, str]] = []
+        replacements: List[Tuple[int, int, str, str]] = []
 
         if is_thought:
-            code_candidates = []
-            for m in re.finditer(r'```(\w*)\r?\n([\s\S]*?)```', text):
-                code_candidates.append((m.start(), m.end(), m))
-            for m in re.finditer(r'(?<!\`)\`([^\`\n]+?)\`(?!\`)', text):
-                code_candidates.append((m.start(), m.end(), m))
-            
-            code_candidates.sort(key=lambda x: (x[0], -x[1]))
-            non_overlap_code = []
-            last_end = 0
-            for s, e, m in code_candidates:
-                if s >= last_end:
-                    non_overlap_code.append((s, e, m))
-                    last_end = e
+            thought_tag = "md_thought"
+            tag_ranges.append((0, len(text), thought_tag))
+            # Scan inline code inside thoughts
+            for m in re.finditer(r'`([^`\n]+?)`', text):
+                tag_ranges.append((m.start(), m.start() + 1, "md_hidden"))
+                tag_ranges.append((m.start() + 1, m.end() - 1, "md_code"))
+                tag_ranges.append((m.end() - 1, m.end(), "md_hidden"))
+            return tag_ranges, []
 
-            curr = 0
-            for s, e, m in non_overlap_code:
-                if s > curr:
-                    intervals.extend(cls._parse_inline_overlay_intervals(text[curr:s], base_offset=curr))
-                raw_match = m.group(0)
-                if raw_match.startswith('```') and raw_match.endswith('```'):
-                    lead_end = text.find('\n', s)
-                    if lead_end != -1 and lead_end < e:
-                        intervals.append((s, lead_end + 1, "md_syntax"))
-                        intervals.append((lead_end + 1, e - 3, "md_code"))
-                        intervals.append((e - 3, e, "md_syntax"))
-                    else:
-                        intervals.append((s, e, "md_code"))
-                else:
-                    intervals.append((s, s + 1, "md_syntax"))
-                    intervals.append((s + 1, e - 1, "md_code"))
-                    intervals.append((e - 1, e, "md_syntax"))
-                curr = e
-            if curr < len(text):
-                intervals.extend(cls._parse_inline_overlay_intervals(text[curr:], base_offset=curr))
-            return intervals
-
-        # 1. Identify Top-Level Block Intervals (Fenced Code, Math Display)
+        # Phase 1: Identify top-level code blocks and display math blocks
         blocks = []
         for m in re.finditer(r'```(\w*)\r?\n([\s\S]*?)```', text):
-            blocks.append((m.start(), m.end(), "code", m))
-
-        for m in re.finditer(r'\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]', text):
-            blocks.append((m.start(), m.end(), "math_block", m))
+            blocks.append((m.start(), m.end(), "code", None))
+        for m in re.finditer(r'\${2,4}([\s\S]+?)\${2,4}|\\\[([\s\S]+?)\\\]', text):
+            inner = m.group(1) if m.group(1) is not None else m.group(2)
+            converted = cls.convert_latex_to_unicode(inner.strip())
+            blocks.append((m.start(), m.end(), "math_block", f"\n  {converted}\n\n"))
 
         blocks.sort(key=lambda x: x[0])
         resolved_blocks = []
-        last_block_end = 0
-        for b_start, b_end, b_type, b_m in blocks:
-            if b_start >= last_block_end:
-                resolved_blocks.append((b_start, b_end, b_type, b_m))
-                last_block_end = b_end
+        last_end = 0
+        for b_start, b_end, b_type, b_data in blocks:
+            if b_start >= last_end:
+                resolved_blocks.append((b_start, b_end, b_type, b_data))
+                last_end = b_end
 
-        # 2. Inter-block text lines
         pos = 0
-        for b_start, b_end, b_type, b_m in resolved_blocks:
+        for b_start, b_end, b_type, b_data in resolved_blocks:
             if b_start > pos:
-                cls._parse_text_lines_overlay(text[pos:b_start], base_offset=pos, out_intervals=intervals)
+                cls._scan_overlay_chunk(text, pos, b_start, tag_ranges, replacements)
 
             if b_type == "code":
-                lead_end = text.find('\n', b_start)
-                if lead_end != -1 and lead_end < b_end:
-                    intervals.append((b_start, lead_end + 1, "md_syntax"))
-                    intervals.append((lead_end + 1, b_end - 3, "md_code"))
-                    intervals.append((b_end - 3, b_end, "md_syntax"))
-                else:
-                    intervals.append((b_start, b_end, "md_code"))
+                tag_ranges.append((b_start, b_end, "md_code"))
             elif b_type == "math_block":
-                d_len = 2
-                intervals.append((b_start, b_start + d_len, "md_syntax"))
-                intervals.append((b_start + d_len, b_end - d_len, "md_math_block"))
-                intervals.append((b_end - d_len, b_end, "md_syntax"))
+                replacements.append((b_start, b_end, b_data, "md_math_block"))
 
             pos = b_end
 
         if pos < len(text):
-            cls._parse_text_lines_overlay(text[pos:], base_offset=pos, out_intervals=intervals)
+            cls._scan_overlay_chunk(text, pos, len(text), tag_ranges, replacements)
 
-        return intervals
+        return tag_ranges, replacements
 
     @classmethod
-    def _parse_text_lines_overlay(cls, text_chunk: str, base_offset: int, out_intervals: List[Tuple[int, int, str]]) -> None:
-        """Parses a text chunk line by line for overlay intervals without modifying the text."""
-        if not text_chunk:
+    def _scan_overlay_chunk(cls, full_text: str, chunk_start: int, chunk_end: int, tag_ranges: list, replacements: list) -> None:
+        """Scans a non-code text chunk and appends overlay tag ranges and table replacements."""
+        chunk = full_text[chunk_start:chunk_end]
+        if not chunk:
             return
 
-        lines = text_chunk.split('\n')
-        line_offset = base_offset
+        lines = chunk.split('\n')
+        line_offset = chunk_start
+        table_lines = []
+        table_start_offset = None
+
+        def flush_overlay_table():
+            nonlocal table_lines, table_start_offset
+            if not table_lines:
+                return
+            if len(table_lines) >= 2 and any(re.search(r'\|\s*:?-+-*:?\s*\|', l) or re.search(r'^:?-+-*:?$', l.replace('|', '').strip()) for l in table_lines):
+                tbl_raw = '\n'.join(table_lines)
+                formatted = cls.format_gfm_table(tbl_raw)
+                tbl_end_offset = table_start_offset + len(tbl_raw)
+                replacements.append((table_start_offset, tbl_end_offset, f"\n{formatted}\n\n", "md_table"))
+            else:
+                curr_off = table_start_offset
+                for l in table_lines:
+                    cls._scan_overlay_line(l, curr_off, tag_ranges, replacements=replacements)
+                    curr_off += len(l) + 1
+            table_lines = []
+            table_start_offset = None
 
         for line in lines:
             line_len = len(line)
-            stripped = line.strip()
 
-            if not stripped:
+            if '|' in line:
+                if table_start_offset is None:
+                    table_start_offset = line_offset
+                table_lines.append(line)
                 line_offset += line_len + 1
                 continue
+            else:
+                if table_lines:
+                    flush_overlay_table()
 
             # Headers: #, ##, ###
             header_match = re.match(r'^(#{1,6})\s+(.*)$', line)
             if header_match:
-                prefix_len = len(header_match.group(1)) + 1
                 level = len(header_match.group(1))
                 h_tag = "md_header_1" if level == 1 else "md_header_2" if level == 2 else "md_header_3"
-                out_intervals.append((line_offset, line_offset + prefix_len, "md_syntax"))
-                out_intervals.append((line_offset + prefix_len, line_offset + line_len, h_tag))
-                out_intervals.extend(cls._parse_inline_overlay_intervals(header_match.group(2), base_offset=line_offset + prefix_len))
+                prefix_len = level + 1
+                tag_ranges.append((line_offset, line_offset + prefix_len, "md_hidden"))
+                tag_ranges.append((line_offset + prefix_len, line_offset + line_len, h_tag))
                 line_offset += line_len + 1
                 continue
 
@@ -579,119 +670,102 @@ class MarkdownEngine:
             quote_match = re.match(r'^(\s*>\s*)(.*)$', line)
             if quote_match:
                 prefix_len = len(quote_match.group(1))
-                out_intervals.append((line_offset, line_offset + prefix_len, "md_syntax"))
-                out_intervals.append((line_offset + prefix_len, line_offset + line_len, "md_quote"))
-                out_intervals.extend(cls._parse_inline_overlay_intervals(quote_match.group(2), base_offset=line_offset + prefix_len))
+                tag_ranges.append((line_offset, line_offset + prefix_len, "md_hidden"))
+                tag_ranges.append((line_offset + prefix_len, line_offset + line_len, "md_quote"))
+                cls._scan_overlay_line(quote_match.group(2), line_offset + prefix_len, tag_ranges, replacements=replacements)
                 line_offset += line_len + 1
                 continue
 
-            # Horizontal rules
-            if re.match(r'^(?:---|\*\*\*|___)\s*$', stripped):
-                out_intervals.append((line_offset, line_offset + line_len, "md_table"))
-                line_offset += line_len + 1
-                continue
-
-            # Tables: lines with |
-            if '|' in line and re.match(r'^\s*\|.*\|\s*$', line):
-                out_intervals.append((line_offset, line_offset + line_len, "md_table"))
-                line_offset += line_len + 1
-                continue
-
-            # Lists: unordered or ordered
-            list_match = re.match(r'^(\s*[\*\-\+]|\s*\d+\.)\s+(.*)$', line)
+            # Unordered & Ordered lists
+            list_match = re.match(r'^(\s*[\*\-\+]\s+|\s*\d+\.\s+)(.*)$', line)
             if list_match:
-                out_intervals.append((line_offset, line_offset + line_len, "md_list"))
-                out_intervals.extend(cls._parse_inline_overlay_intervals(line, base_offset=line_offset))
+                prefix_len = len(list_match.group(1))
+                tag_ranges.append((line_offset, line_offset + prefix_len, "md_list"))
+                cls._scan_overlay_line(list_match.group(2), line_offset + prefix_len, tag_ranges, replacements=replacements)
                 line_offset += line_len + 1
                 continue
 
-            # Standard paragraph line
-            out_intervals.extend(cls._parse_inline_overlay_intervals(line, base_offset=line_offset))
+            # Standard line
+            cls._scan_overlay_line(line, line_offset, tag_ranges, replacements=replacements)
             line_offset += line_len + 1
 
+        if table_lines:
+            flush_overlay_table()
+
     @classmethod
-    def _parse_inline_overlay_intervals(cls, text: str, base_offset: int = 0) -> List[Tuple[int, int, str]]:
-        """Scans inline text for syntax and styled spans without altering text content."""
-        if not text:
-            return []
+    def _scan_overlay_line(cls, line: str, line_offset: int, tag_ranges: list, replacements: list = None) -> None:
+        """Scans inline formatting in a single line and appends non-destructive tag intervals or replacements."""
+        if not line:
+            return
 
-        candidates = []
+        intervals = []
 
-        # 1. Inline code (highest priority)
-        for m in re.finditer(r'(?<!\`)\`([^\`\n]+?)\`(?!\`)', text):
-            candidates.append((
-                m.start(), m.end(),
-                [(m.start(), m.start() + 1, "md_syntax"), (m.start() + 1, m.end() - 1, "md_code"), (m.end() - 1, m.end(), "md_syntax")],
-                1
-            ))
+        # 1. Inline code: `...`
+        for m in re.finditer(r'`([^`\n]+?)`', line):
+            intervals.append((m.start(), m.end(), "code", 1, 1, None))
 
-        # 2. Math display: $$...$$ or \[...\]
-        for m in re.finditer(r'(?s)\$\$(.+?)\$\$|\\\[(.+?)\\\]', text):
-            d_len = 2
-            candidates.append((
-                m.start(), m.end(),
-                [(m.start(), m.start() + d_len, "md_syntax"), (m.start() + d_len, m.end() - d_len, "md_math_block"), (m.end() - d_len, m.end(), "md_syntax")],
-                2
-            ))
-
-        # 3. Inline math: $...$, \(...\)
-        for m in re.finditer(r'(?<!\\)\$([^\$\n\s](?:[^\$\n]*?[^\$\n\s])?)\$|\\\((.+?)\\\)', text):
+        # 1.5 Inline math: $...$ or \(...\) (avoid matching pure currency like $100 or $596,046,447,753,906)
+        currency_pat = re.compile(r'^\s*\$?[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?\s*$')
+        for m in re.finditer(r'(?<!\\)\$([^\$\n\s](?:[^\$\n]*?[^\$\n\s])?)\$|\\\((.+?)\\\)', line):
             inner = m.group(1) if m.group(1) is not None else m.group(2)
-            if inner and not re.match(r'^\d+(?:\.\d+)?(?:\s*,\s*\d+)?$', inner.strip()):
-                d_len = 1 if m.group(1) is not None else 2
-                candidates.append((
-                    m.start(), m.end(),
-                    [(m.start(), m.start() + d_len, "md_syntax"), (m.start() + d_len, m.end() - d_len, "md_math_inline"), (m.end() - d_len, m.end(), "md_syntax")],
-                    3
-                ))
+            if inner and not currency_pat.match(inner):
+                delim_len = 2 if m.group(0).startswith(r'\(') else 1
+                intervals.append((m.start(), m.end(), "math_inline", delim_len, 1.5, inner))
 
-        # 4. Bold-italic
-        for m in re.finditer(r'(?<![\w\d\*])\*\*\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*\*\*(?![\w\d\*])|(?<![\w\d_])___([^_ \n](?:[^_\n]*?[^_ \n])?)___(?![\w\d_])', text):
-            candidates.append((
-                m.start(), m.end(),
-                [(m.start(), m.start() + 3, "md_syntax"), (m.start() + 3, m.end() - 3, "md_bold_italic"), (m.end() - 3, m.end(), "md_syntax")],
-                4
-            ))
+        # 1.6 Standalone forward-slash LaTeX symbols in text (e.g. /Delta -> Δ)
+        for m in re.finditer(cls.STANDALONE_SLASH_REGEX, line):
+            sym = m.group(1)
+            char = cls.SLASH_SYMBOL_MAP.get(sym)
+            if char:
+                intervals.append((m.start(), m.end(), "slash_symbol", 0, 1.6, char))
 
-        # 5. Bold
-        for m in re.finditer(r'(?<![\w\d\*])\*\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*\*(?![\w\d\*])|(?<![\w\d_])__([^_ \n](?:[^_\n]*?[^_ \n])?)__(?![\w\d_])', text):
-            candidates.append((
-                m.start(), m.end(),
-                [(m.start(), m.start() + 2, "md_syntax"), (m.start() + 2, m.end() - 2, "md_bold"), (m.end() - 2, m.end(), "md_syntax")],
-                5
-            ))
+        # 2. Bold-italic: ***...*** or ___...___
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*\*\*(.+?)\*\*\*(?![a-zA-Z0-9_*])|(?<![a-zA-Z0-9_])___(.+?)___(?![a-zA-Z0-9_])', line):
+            intervals.append((m.start(), m.end(), "bold_italic", 3, 2, None))
 
-        # 6. Strike
-        for m in re.finditer(r'(?<![\w\d~])~~([^\n\s](?:[^\n]*?[^\n\s])?)~~(?![\w\d~])', text):
-            candidates.append((
-                m.start(), m.end(),
-                [(m.start(), m.start() + 2, "md_syntax"), (m.start() + 2, m.end() - 2, "md_strike"), (m.end() - 2, m.end(), "md_syntax")],
-                6
-            ))
+        # 3. Bold: **...** or __...__
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*\*(.+?)\*\*(?![a-zA-Z0-9_*])|(?<![a-zA-Z0-9_])__(.+?)__(?![a-zA-Z0-9_])', line):
+            intervals.append((m.start(), m.end(), "bold", 2, 3, None))
 
-        # 7. Italic
-        for m in re.finditer(r'(?<![\w\d\*])\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*(?![\w\d\*])', text):
-            candidates.append((
-                m.start(), m.end(),
-                [(m.start(), m.start() + 1, "md_syntax"), (m.start() + 1, m.end() - 1, "md_italic"), (m.end() - 1, m.end(), "md_syntax")],
-                7
-            ))
+        # 4. Strike: ~~...~~
+        for m in re.finditer(r'~~(.+?)~~', line):
+            intervals.append((m.start(), m.end(), "strike", 2, 4, None))
 
-        for m in re.finditer(r'(?<![\w\d_])_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?![\w\d_])', text):
-            candidates.append((
-                m.start(), m.end(),
-                [(m.start(), m.start() + 1, "md_syntax"), (m.start() + 1, m.end() - 1, "md_italic"), (m.end() - 1, m.end(), "md_syntax")],
-                7
-            ))
+        # 5. Italic: *...* or _..._ (strictly boundary protected against 3*3*5*5)
+        for m in re.finditer(r'(?<![a-zA-Z0-9_*])\*([^\*\n\s](?:[^\*\n]*?[^\*\n\s])?)\*(?![a-zA-Z0-9_*])', line):
+            intervals.append((m.start(), m.end(), "italic", 1, 5, None))
 
-        candidates.sort(key=lambda x: (x[0], x[3], -(x[1] - x[0])))
-        resolved = []
+        for m in re.finditer(r'(?<=\s)_([^_ \n](?:[^_\n]*?[^_ \n])?)_(?=\s|[.,;:!?\)]|$)', line):
+            intervals.append((m.start(), m.end(), "italic", 1, 5, None))
+
+        # Resolve overlaps by priority
+        intervals.sort(key=lambda x: (x[0], x[4], -(x[1] - x[0])))
         last_end = 0
-
-        for start, end, spans, prio in candidates:
+        for item in intervals:
+            start, end, el_type, delim_len, prio = item[0], item[1], item[2], item[3], item[4]
+            extra_data = item[5] if len(item) > 5 else None
             if start >= last_end:
-                for s, e, tag in spans:
-                    resolved.append((base_offset + s, base_offset + e, tag))
+                abs_s = line_offset + start
+                abs_e = line_offset + end
+                if el_type == "math_inline" and replacements is not None:
+                    converted = cls.convert_latex_to_unicode(extra_data)
+                    replacements.append((abs_s, abs_e, converted, "md_math_inline"))
+                elif el_type == "slash_symbol" and replacements is not None:
+                    replacements.append((abs_s, abs_e, extra_data, "md_math_inline"))
+                else:
+                    tag_name = (
+                        "md_code" if el_type == "code" else
+                        "md_math_inline" if el_type == "math_inline" else
+                        "md_bold_italic" if el_type == "bold_italic" else
+                        "md_bold" if el_type == "bold" else
+                        "md_strike" if el_type == "strike" else
+                        "md_italic"
+                    )
+                    if el_type == "slash_symbol":
+                        tag_ranges.append((abs_s, abs_e, "md_math_inline"))
+                    else:
+                        tag_ranges.append((abs_s, abs_s + delim_len, "md_hidden"))
+                        tag_ranges.append((abs_s + delim_len, abs_e - delim_len, tag_name))
+                        tag_ranges.append((abs_e - delim_len, abs_e, "md_hidden"))
                 last_end = end
 
-        return resolved

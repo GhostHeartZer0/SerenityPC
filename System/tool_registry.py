@@ -331,13 +331,8 @@ class GemmaToolRegistry:
             def spawn_viewer():
                 try:
                     base_dir = getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd()
-                    scratch_dir = os.path.join(base_dir, "scratch")
-                    os.makedirs(scratch_dir, exist_ok=True)
                     viewer_script = os.path.join(base_dir, "System", "hud_viewer.py")
-                    hud_data_path = os.path.join(scratch_dir, "hud_data.json")
-                    with open(hud_data_path, "w", encoding="utf-8") as f:
-                        json.dump({"req_type": req_type, "content": clean_prompt}, f)
-                    subprocess.Popen([sys.executable, viewer_script, hud_data_path])
+                    subprocess.Popen([sys.executable, viewer_script, req_type, clean_prompt])
                 except Exception as e:
                     print(f"[TOOL] Image viewer error: {e}")
             

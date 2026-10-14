@@ -92,6 +92,82 @@ except ImportError:
     )
 
 
+def apply_theme_to_settings_window(win, app=None):
+    """
+    Recursively reapplies active THEME across the entire Settings window hierarchy
+    to ensure no text or button is stuck on Yellow Blacket or Apex.
+    """
+    from serenity_resources import THEME
+    bg = THEME.get("bg_color", "#121214")
+    fg = THEME.get("fg_color", "#ffaa44")
+    widget_bg = THEME.get("widget_bg_color", "#18181c")
+    btn_bg = THEME.get("button_bg_color", "#24201c")
+    btn_active = THEME.get("button_active_color", "#382e24")
+    accent = THEME.get("electric_blue", "#ff7700")
+    accent_hl = THEME.get("accent_highlight", "#ff8800")
+    chat_bg = THEME.get("chat_bg_color", widget_bg)
+    chat_fg = THEME.get("chat_fg_color", fg)
+
+    if not win or not win.winfo_exists():
+        return
+
+    def _style_widget(w):
+        try:
+            w_class = w.winfo_class()
+            if w_class in ("Frame", "TLabelframe"):
+                try: w.config(bg=bg)
+                except Exception: pass
+            elif w_class == "LabelFrame":
+                try: w.config(bg=bg, fg=accent)
+                except Exception: pass
+            elif w_class == "Label":
+                try:
+                    cur_fg = str(w.cget("fg")).lower()
+                    cur_bg = str(w.cget("bg")).lower()
+                    if cur_fg in ("#ffcc00", "white", "#ff8a8a", "#ff4444") and cur_bg in ("#330000", "#660000"):
+                        pass
+                    elif cur_fg in ("#888888", "#aaaaaa", "#777777"):
+                        w.config(bg=bg, fg="#888888")
+                    elif "header" in str(getattr(w, "_name", "")).lower() or cur_fg in ("#00ffcc", "#00e5ff", "#ff8800", "#ffff00"):
+                        w.config(bg=bg, fg=accent)
+                    else:
+                        w.config(bg=bg, fg=fg)
+                except Exception: pass
+            elif w_class == "Button":
+                try:
+                    txt = str(w.cget("text"))
+                    cur_bg = str(w.cget("bg")).lower()
+                    if "delete" in txt.lower() or "destroy" in txt.lower() or cur_bg in ("#660000", "#4a0000"):
+                        pass
+                    else:
+                        w.config(bg=btn_bg, fg=fg, activebackground=btn_active, activeforeground=accent_hl)
+                except Exception: pass
+            elif w_class == "Entry":
+                try:
+                    w.config(bg=widget_bg, fg=fg, insertbackground=accent)
+                except Exception: pass
+            elif w_class in ("Radiobutton", "Checkbutton"):
+                try:
+                    w.config(bg=bg, fg=fg, selectcolor=widget_bg, activebackground=bg, activeforeground=accent_hl)
+                except Exception: pass
+            elif w_class == "Canvas":
+                try:
+                    w.config(bg=bg)
+                except Exception: pass
+            elif w_class == "Text":
+                try:
+                    w.config(bg=chat_bg, fg=chat_fg)
+                except Exception: pass
+        except Exception:
+            pass
+
+        for child in w.winfo_children():
+            _style_widget(child)
+
+    win.config(bg=bg)
+    _style_widget(win)
+
+
 def open_settings_window(app, is_generating=None):
     """
     Opens the reorganized SerenityPC settings window (V1.7.0).
@@ -173,10 +249,22 @@ def open_settings_window(app, is_generating=None):
         v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         def _on_mousewheel(event):
-            if canvas.winfo_exists():
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                    return "break"
+            except Exception: pass
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _bind_settings_mousewheel(event):
+            try: win.bind_all("<MouseWheel>", _on_mousewheel)
+            except Exception: pass
+
+        def _unbind_settings_mousewheel(event):
+            try: win.unbind_all("<MouseWheel>")
+            except Exception: pass
+
+        win.bind("<Enter>", _bind_settings_mousewheel, add="+")
+        win.bind("<Leave>", _unbind_settings_mousewheel, add="+")
 
         def on_closing():
             try:
@@ -187,9 +275,9 @@ def open_settings_window(app, is_generating=None):
                         app.save_config()
             except Exception: pass
             try:
-                canvas.unbind_all("<MouseWheel>")
+                win.unbind_all("<MouseWheel>")
                 print("[UI] Settings listener detached.")
-            except: pass
+            except Exception: pass
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", on_closing)
 
@@ -216,14 +304,25 @@ def open_settings_window(app, is_generating=None):
         # Theme and Texture Mapping
         THEME_MAP = {
             "Apex (Default)": "apex",
+            "Goth": "goth",
             "Goth / Obsidian Dark": "goth",
+            "Obsidian Dark": "obsidian_dark",
             "Crystal Cavern": "crystal_cavern",
             "Yellow Blacket": "yellow_blacket",
             "Natural (Earth / Moss)": "natural",
             "Matrix (Cyber Green)": "matrix",
             "Persona (Level Dynamic)": "persona"
         }
-        THEME_REV_MAP = {v: k for k, v in THEME_MAP.items()}
+        THEME_REV_MAP = {
+            "apex": "Apex (Default)",
+            "goth": "Goth",
+            "obsidian_dark": "Obsidian Dark",
+            "crystal_cavern": "Crystal Cavern",
+            "yellow_blacket": "Yellow Blacket",
+            "natural": "Natural (Earth / Moss)",
+            "matrix": "Matrix (Cyber Green)",
+            "persona": "Persona (Level Dynamic)"
+        }
         curr_theme_key = app.config.get("theme", "apex")
         if curr_theme_key == "default": curr_theme_key = "apex"
 
@@ -288,15 +387,22 @@ def open_settings_window(app, is_generating=None):
             "k_cache_var": tk.StringVar(value=app.config.get("k_cache_type", "q8_0").lower()),
             "v_cache_var": tk.StringVar(value=app.config.get("v_cache_type", "q8_0").lower()),
             "history_mode_var": tk.StringVar(value=app.config.get("history_mode", "TurboVec" if app.config.get("turbovec_mode") == "on" else ("Off" if app.config.get("turbovec_mode") == "off" else "Keyword"))),
-            "history_usage_var": tk.StringVar(value=app.config.get("history_usage", "all")),
+            "history_usage_var": tk.StringVar(value="window" if app.config.get("history_usage") == "current_window" else app.config.get("history_usage", "all")),
             "history_lookup_var": tk.StringVar(value=app.config.get("history_lookup_mode", "targeted")),
+            "history_autosave_var": tk.StringVar(value=app.config.get("history_autosave_mode", "End")),
+            "history_level_format_var": tk.StringVar(value=app.config.get("history_level_format", "All")),
             "reasoning_var": tk.StringVar(value=init_reasoning),
             "delegation_enabled_var": tk.BooleanVar(value=app.config.get("delegation_enabled", False)),
             "delegation_model_mode_var": tk.StringVar(value=app.config.get("delegation_model_mode", "lvl6_7_model")),
             "subagent_density_var": tk.StringVar(value=app.config.get("subagent_selection_mode", "minimal")),
             "cecilia_mode_var": tk.StringVar(value=app.config.get("cecilia_delegation_mode", "shadow_wizard")),
+            "show_cecilia_slider_var": tk.BooleanVar(value=app.config.get("show_cecilia_slider", False)),
             "chain_preset_var": tk.StringVar(value=app.config.get("delegation_chain_preset", "standard")),
             "handoff_target_var": tk.StringVar(value=app.config.get("delegation_handoff_target", "lvl3_compiler")),
+            "deep_cook_cycles_var": tk.StringVar(value=str(app.config.get("deep_cook_cycles", "3")).lower()),
+            "deep_cook_coop_var": tk.StringVar(value=str(app.config.get("deep_cook_agent_coop", "otl_per_step"))),
+            "deep_cook_format_var": tk.StringVar(value=str(app.config.get("deep_cook_formatting", "per_step"))),
+            "normal_format_var": tk.StringVar(value=str(app.config.get("normal_generation_formatting", "inline"))),
             "offline_mode_var": tk.BooleanVar(value=app.config.get("offline_mode", False)),
             "auto_vram_var": tk.BooleanVar(value=app.config.get("auto_vram_offload", False)),
             "spec_draft_var": tk.BooleanVar(value=app.config.get("speculative_drafting", False)),
@@ -304,7 +410,7 @@ def open_settings_window(app, is_generating=None):
             "thinking_var": tk.BooleanVar(value=app.config.get("thinking_checkbox", True)),
             "benchmark_var": tk.BooleanVar(value=app.config.get("benchmark_enabled", False)),
             "inline_md_var": tk.BooleanVar(value=app.config.get("inline_markdown", True)),
-            "format_prompt_md_var": tk.BooleanVar(value=app.config.get("format_prompt_markdown", False)),
+            "format_prompts_var": tk.BooleanVar(value=app.config.get("format_prompts_markdown", False)),
             "monitor_graph_var": tk.BooleanVar(value=app.config.get("monitor_graph_mode", False)),
             "show_tooltips_var": tk.BooleanVar(value=app.config.get("show_tooltips", True)),
             "resp_len_var": tk.StringVar(value=app.config.get("response_length", "natural")),
@@ -341,6 +447,7 @@ def open_settings_window(app, is_generating=None):
             "MONO_FONT_OPTIONS": MONO_FONT_OPTIONS,
             "ui_font_var": tk.StringVar(value=app.config.get("ui_font", "Segoe UI")),
             "mono_font_var": tk.StringVar(value=app.config.get("mono_font", "Consolas")),
+            "marquee_text_var": tk.BooleanVar(value=app.config.get("marquee_text_enabled", False)),
             "open_scaling_center_fn": lambda: open_text_scaling_center(app, win)
         }
         vars_dict["budget_recovery_var"] = vars_dict["overfill_behavior_var"]
@@ -454,7 +561,63 @@ def open_settings_window(app, is_generating=None):
             tk.Button(dis_win, text="Decrypt & Disable", command=_do_disable,
                       bg="#660000", fg="white", font=app.fonts["ui_button"]).pack(pady=12)
 
+        def _open_encrypt_vault_modal():
+            if not hasattr(app, 'vault_manager'):
+                messagebox.showerror("Error", "Vault Manager is unavailable.", parent=win)
+                return
+
+            if not app.vault_manager.is_lock_enabled():
+                _open_set_password_modal()
+                return
+
+            enc_win = tk.Toplevel(win)
+            enc_win.title("Encrypt Profile Vault")
+            enc_win.geometry("540x380")
+            enc_win.config(bg=THEME["bg_color"])
+            enc_win.transient(win)
+            enc_win.grab_set()
+
+            disc_frame = tk.Frame(enc_win, bg="#330000", bd=2, relief=tk.RIDGE)
+            disc_frame.pack(fill=tk.X, padx=12, pady=10)
+            tk.Label(disc_frame, text="⚠️ DATA ENCRYPTION & LOSS WARNING ⚠️\n\nEncrypting history files (.jsonz to .encz) using AES-256-GCM.\nIf you lose your password, all encrypted data is PERMANENTLY lost.\nDefault and Public profiles are preserved in plaintext.",
+                     bg="#330000", fg="#ffcc00", font=app.fonts["log_bold"], justify=tk.LEFT).pack(padx=8, pady=8)
+
+            fields_frame = tk.Frame(enc_win, bg=THEME["bg_color"])
+            fields_frame.pack(fill=tk.X, padx=16, pady=4)
+
+            tk.Label(fields_frame, text="Enter Master Password:", bg=THEME["bg_color"], fg=THEME["fg_color"]).grid(row=0, column=0, sticky="w", pady=4)
+            pwd_var = tk.StringVar()
+            pwd_entry = tk.Entry(fields_frame, textvariable=pwd_var, show="*", width=24,
+                                 bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                 insertbackground=THEME.get("electric_blue", THEME["fg_color"]))
+            bind_entry_limit(pwd_entry, max_len=64)
+            pwd_entry.grid(row=0, column=1, padx=6, pady=4)
+            pwd_entry.focus_set()
+
+            def _do_encrypt():
+                pwd = pwd_var.get().strip()
+                if not pwd:
+                    messagebox.showerror("Error", "Password cannot be empty.", parent=enc_win)
+                    return
+                if not messagebox.askyesno("CONFIRM ENCRYPTION", "ARE YOU ABSOLUTELY SURE?\n\nProceed with AES-256-GCM history migration to .encz?", parent=enc_win):
+                    return
+                success, msg = app.vault_manager.encrypt_vault(pwd)
+                if success:
+                    messagebox.showinfo("Vault Encrypted", msg, parent=enc_win)
+                    if "refresh_vault_status" in vars_dict: vars_dict["refresh_vault_status"]()
+                    enc_win.destroy()
+                else:
+                    messagebox.showerror("Encryption Failed", msg, parent=enc_win)
+
+            btn_box = tk.Frame(enc_win, bg=THEME["bg_color"])
+            btn_box.pack(fill=tk.X, padx=16, pady=12)
+            tk.Button(btn_box, text="Encrypt Vault", command=_do_encrypt,
+                      bg=THEME["button_active_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"]).pack(side=tk.LEFT, padx=4)
+            tk.Button(btn_box, text="Cancel", command=enc_win.destroy,
+                      bg=THEME["button_bg_color"], fg=THEME["fg_color"]).pack(side=tk.RIGHT, padx=4)
+
         vars_dict["_open_set_password_modal"] = _open_set_password_modal
+        vars_dict["_open_encrypt_vault_modal"] = _open_encrypt_vault_modal
         vars_dict["_open_disable_vault_modal"] = _open_disable_vault_modal
 
         # --- 5. Construct All 6 Tabs ---
@@ -492,17 +655,18 @@ def open_settings_window(app, is_generating=None):
 
         # Build Navigation Buttons
         tab_defs = [
-            ("models", "Models & Params"),
-            ("inference", "Inference"),
-            ("agents", "Agents"),
-            ("additional", "Additional Settings"),
-            ("users", "Users & Security"),
-            ("personalize", "Personalize")
+            ("models", "Models &\nParams"),
+            ("inference", "Inference &\nExecution"),
+            ("agents", "Agents &\nDeep Cook"),
+            ("additional", "Additional\nSettings"),
+            ("users", "Users &\nSecurity"),
+            ("personalize", "Personalize\n& Theme")
         ]
         for t_key, t_title in tab_defs:
             btn = tk.Button(tab_nav_frame, text=t_title, command=lambda k=t_key: _switch_tab(k),
                             bg=THEME["button_bg_color"], fg=THEME["fg_color"],
-                            font=app.fonts["ui_button"], relief=tk.FLAT, padx=8, pady=2)
+                            font=app.fonts["ui_button"], relief=tk.FLAT, padx=8, pady=2,
+                            justify=tk.CENTER)
             btn.pack(side=tk.LEFT, padx=2)
             tab_buttons[t_key] = btn
 
@@ -525,6 +689,8 @@ def open_settings_window(app, is_generating=None):
             app.config["k_cache_type"] = vars_dict["k_cache_var"].get()
             app.config["v_cache_type"] = vars_dict["v_cache_var"].get()
             app.config["history_lookup_mode"] = vars_dict["history_lookup_var"].get()
+            app.config["history_autosave_mode"] = vars_dict["history_autosave_var"].get()
+            app.config["history_level_format"] = vars_dict["history_level_format_var"].get()
             app.config["history_usage"] = vars_dict["history_usage_var"].get()
             app.config["history_mode"] = vars_dict["history_mode_var"].get()
             hm = vars_dict["history_mode_var"].get().lower()
@@ -536,6 +702,8 @@ def open_settings_window(app, is_generating=None):
                 app.ghost_button.config(text=app._get_ghost_mode_label(), fg=app._get_ghost_mode_color())
             if hasattr(app, 'history_usage_button') and app.history_usage_button:
                 app.history_usage_button.config(text=app._get_history_usage_label(), fg=app._get_history_usage_color())
+            if hasattr(app, 'history_autosave_button') and app.history_autosave_button:
+                app.history_autosave_button.config(text=app._get_history_autosave_label(), fg=app._get_history_autosave_color())
 
             try:
                 for pth in [os.path.join(app.script_dir, "Live", "System", "params.json"),
@@ -559,8 +727,7 @@ def open_settings_window(app, is_generating=None):
             app.config["thinking_checkbox"] = vars_dict["thinking_var"].get()
             app.config["benchmark_enabled"] = vars_dict["benchmark_var"].get()
             app.config["inline_markdown"] = vars_dict["inline_md_var"].get()
-            if "format_prompt_md_var" in vars_dict:
-                app.config["format_prompt_markdown"] = vars_dict["format_prompt_md_var"].get()
+            app.config["format_prompts_markdown"] = vars_dict["format_prompts_var"].get()
             app.config["overfill_behavior_mode"] = vars_dict["overfill_behavior_var"].get()
             app.config["budget_recovery_mode"] = vars_dict["overfill_behavior_var"].get()
             app.config["halt_behavior_mode"] = vars_dict["halt_behavior_var"].get()
@@ -580,6 +747,16 @@ def open_settings_window(app, is_generating=None):
 
             app.config["stt_device_index"] = dev_id_map.get(vars_dict["stt_dev_var"].get(), None)
             app.config["stt_language"] = vars_dict["stt_lang_var"].get()
+
+            if "deep_cook_cycles_var" in vars_dict:
+                c_raw = str(vars_dict["deep_cook_cycles_var"].get()).strip().lower()
+                app.config["deep_cook_cycles"] = "auto" if c_raw == "auto" else (int(c_raw) if c_raw.isdigit() else 3)
+            if "deep_cook_coop_var" in vars_dict:
+                app.config["deep_cook_agent_coop"] = vars_dict["deep_cook_coop_var"].get()
+            if "deep_cook_format_var" in vars_dict:
+                app.config["deep_cook_formatting"] = vars_dict["deep_cook_format_var"].get()
+            if "normal_format_var" in vars_dict:
+                app.config["normal_generation_formatting"] = vars_dict["normal_format_var"].get()
 
             if hasattr(app, 'vault_manager'):
                 try: app.vault_manager.set_auto_lock_seconds(int(vars_dict["auto_lock_var"].get()))
@@ -646,6 +823,12 @@ def open_settings_window(app, is_generating=None):
 
             app.config["delegation_enabled"] = vars_dict["delegation_enabled_var"].get()
             app.config["cecilia_delegation_mode"] = vars_dict["cecilia_mode_var"].get()
+            app.config["show_cecilia_slider"] = vars_dict["show_cecilia_slider_var"].get()
+            if hasattr(app, "depth_slider") and app.depth_slider:
+                if app.config["show_cecilia_slider"]:
+                    app.depth_slider.config(to=7)
+                elif app.active_persona_level <= 6:
+                    app.depth_slider.config(to=6)
             app.config["subagent_selection_mode"] = vars_dict["subagent_density_var"].get()
             app.config["delegation_model_mode"] = vars_dict["delegation_model_mode_var"].get()
             app.config["delegation_chain_preset"] = vars_dict["chain_preset_var"].get()
@@ -657,6 +840,11 @@ def open_settings_window(app, is_generating=None):
             app.config["status_bar_fallback_info"] = vars_dict["sb_fallback_var"].get()
             app.config["status_bar_linger_sec"] = float(vars_dict["sb_linger_var"].get())
             app.config["scroll_lock_enabled"] = vars_dict["scroll_lock_var"].get()
+            app.config["marquee_text_enabled"] = vars_dict["marquee_text_var"].get()
+            if hasattr(app, '_update_status_label_text') and hasattr(app, 'system_status_label'):
+                cur_txt = getattr(app, '_last_status_text', None) or (app.system_status_label.cget("text") if app.system_status_label else "")
+                if cur_txt:
+                    app._update_status_label_text(cur_txt)
             app.config["user_preferred_name"] = vars_dict["user_pref_name_var"].get().strip()
             app.config["user_address_style"] = vars_dict["user_addr_style_var"].get().strip()
             try:
@@ -694,6 +882,7 @@ def open_settings_window(app, is_generating=None):
                     scrollable_frame.config(bg=THEME["bg_color"])
                     btn_frame.config(bg=THEME["bg_color"])
                     tab_nav_frame.config(bg=THEME["bg_color"])
+                    apply_theme_to_settings_window(win, app)
                     _switch_tab(list(tab_frames.keys())[0])
             except Exception as te:
                 print(f"[SETTINGS] Failed to apply theme: {te}")
@@ -747,6 +936,8 @@ def open_settings_window(app, is_generating=None):
                                bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"], relief=tk.FLAT)
         btn_cancel.pack(side=tk.RIGHT, padx=3)
         ToolTip(btn_cancel, "Discard unapplied changes and close settings window.", app=app)
+
+        apply_theme_to_settings_window(win, app)
 
     except Exception as e:
         import traceback
@@ -829,10 +1020,15 @@ def open_text_scaling_center(app, parent_win=None):
                 app.apply_text_scale(pct, persist=False)
             _update_preview_tags()
 
+        scale_ratio = getattr(app, "scale_factor", 1.0)
+        if scale_ratio <= 0.1:
+            scale_ratio = 1.0
         scale_slider = tk.Scale(ctrl_lf, from_=70, to=250, orient=tk.HORIZONTAL, variable=scale_var,
                                 command=_on_scale_slider_move, showvalue=False, bg=THEME["widget_bg_color"],
                                 fg=THEME["fg_color"], activebackground=THEME["electric_blue"],
-                                highlightthickness=0, bd=0)
+                                highlightthickness=0, bd=0,
+                                width=max(12, int(15 * scale_ratio)),
+                                sliderlength=max(18, int(24 * scale_ratio)))
         scale_slider.pack(fill=tk.X, pady=(0, 4))
 
         # Preset Quick Buttons
@@ -971,7 +1167,9 @@ def open_text_scaling_center(app, parent_win=None):
             s = tk.Scale(f, from_=-4, to=8, orient=tk.HORIZONTAL, variable=cat_vars[cat_key],
                          command=_make_cat_cmd(cat_key, v_lbl), showvalue=False, bg=THEME["widget_bg_color"],
                          fg=THEME["fg_color"], activebackground=THEME["electric_blue"],
-                         highlightthickness=0, bd=0)
+                         highlightthickness=0, bd=0,
+                         width=max(12, int(15 * scale_ratio)),
+                         sliderlength=max(18, int(24 * scale_ratio)))
             s.pack(fill=tk.X)
 
         # Live Preview Box
@@ -997,7 +1195,7 @@ def open_text_scaling_center(app, parent_win=None):
         def _fill_preview_content():
             prev_text.config(state='normal')
             prev_text.delete('1.0', tk.END)
-            prev_text.insert(tk.END, "You: ", ("user_lead",))
+            prev_text.insert(tk.END, "Prompt: ", ("user_lead",))
             prev_text.insert(tk.END, "Can you show me a sample code and status readout?\n\n", ("user",))
             prev_text.insert(tk.END, "Serenity: ", ("ai_lead",))
             prev_text.insert(tk.END, "# SerenityPC System Ready\n", ("md_header_1",))

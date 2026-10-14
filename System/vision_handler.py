@@ -8,7 +8,6 @@ import glob
 import math
 import tempfile
 import numpy as np
-import torch
 import psutil
 from llama_cpp import Llama
 
@@ -41,11 +40,8 @@ class VisionHandler:
             
         # 2. Force hardware flush before loading
         import gc
-        import torch
         import time
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
             
         print("[APEX] VRAM Flush Complete. Initiating 3.0s 'Breath'...")
         time.sleep(3.0) # THE BREATH: Give 3050 time to forget
@@ -88,7 +84,6 @@ class VisionHandler:
         # 2. Force System & GPU to breathe
         import gc
         import time
-        import torch
         try:
             import pynvml as nvidia_ml
             nvidia_ml.nvmlInit()
@@ -99,8 +94,6 @@ class VisionHandler:
         start_wait = time.time()
         while True:
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
             
             # 3. VERIFICATION GATE: Confirm 2.2GB floor (Allow OS/Display overhead)
             # A 6GB card usually idles at 1.5GB - 1.8GB on Windows with dual displays.
@@ -299,14 +292,6 @@ class VisionHandler:
                 print("[HYGIENE] LLM Context Reset.")
             
             gc.collect()
-            
-            # If using torch/cuda
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    # print("[HYGIENE] VRAM Flush Complete.")
-            except ImportError: pass
             
         except Exception as e:
             print(f"[HYGIENE] Cleanup encountered a non-fatal issue: {e}")
@@ -676,7 +661,8 @@ class VisionHandler:
 
         closers = [
             r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
-            r'<\|channel>text', r'<\|channel>assistant', r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
+            r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final', r'<\|channel\|>text', r'<\|channel\|>assistant',
+            r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
             r'\[\/thinking\]', r'\[\/thought\]', r'\[\/reasoning\]',
             r'[\u27e7⟧]\s*<\/think>', r'[\u27e7⟧]',
             r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
@@ -691,6 +677,7 @@ class VisionHandler:
         t_raw_lower = raw_output.lower().lstrip()
         openers_exact = (
             "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
+            "<|channel|>analysis", "<|channel|>thought", "<|channel|>reasoning",
             "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]",
             "to=self<|message|>", "<|start|>assistant to=self", "to=self",
             "here's a thinking process:", "here is a thinking process:", "\u27e6", "⟦"
@@ -705,7 +692,7 @@ class VisionHandler:
         if all_splits:
             for split in all_splits:
                 remaining = raw_output[split:].strip()
-                if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
+                if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
                     continue
                 best_split = split
                 break
@@ -716,7 +703,7 @@ class VisionHandler:
             think_log = raw_output[:best_split].strip()
             final_answer = raw_output[best_split:].strip()
         else:
-            has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', raw_output, re.IGNORECASE))
+            has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', raw_output, re.IGNORECASE))
             if has_thought_openers or is_opener:
                 think_log = raw_output
                 final_answer = ""
@@ -724,7 +711,7 @@ class VisionHandler:
                 think_log = ""
                 final_answer = raw_output.strip()
 
-        tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
+        tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|channel\|?>final|<\|channel\|?>text|<\|channel\|?>assistant|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|message\|>|<\|start\|>|<\|end\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
         think_log = re.sub(tag_clean_pattern, '', think_log).strip()
         think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
         final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()

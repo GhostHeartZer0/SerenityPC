@@ -1,26 +1,116 @@
-# Environments & Caches
-.venv/
+# ==============================================================================
+# Byte-compiled / Optimized / Caches / Environments
+# ==============================================================================
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 .cache/
 .tmp/
-Logs/
-History/
+tmp/
+.venv/
+env/
+venv/
+ENV/
+
+# ==============================================================================
+# PyInstaller & Build Outputs
+# ==============================================================================
 build/
 dist/
+*.manifest
+*.spec.bak
+/build_log.txt
+/build_log_utf8.txt
+/stderr
 
-# Large binaries & model weights
-Models/*.gguf
-Models/*.bin
-Models/*.safetensors
-Misc/CUDA/
-Misc/*.zip
-wheels/
-System/tests/tests - backup/
+# ==============================================================================
+# IDEs & Editor Files
+# ==============================================================================
+.vscode/
+.idea/
+.vs/
+*.code-workspace
 
-# Environment configs & secrets
-.env
+# ==============================================================================
+# OS Generated Files
+# ==============================================================================
+[Dd]esktop.ini
+Thumbs.db
+ehthumbs.db
+.DS_Store
+
+# ==============================================================================
+# App Runtime Logs, History, & User Artifacts
+# ==============================================================================
+Logs/
+System/Logs/
+Live/Logs/
+History/
+Users/
+crash_*.txt
+*.log
+
+# ==============================================================================
+# Local Configs, Secrets & State
+# ==============================================================================
+*.env
+*.env.example
+*.db
+*.sqlite
+*.sqlite3
+System/config.json
+System/rgb_state.json
+System/vault/
+
+# ==============================================================================
+# Heavy Model Weights & External Binaries
+# ==============================================================================
+Models/
+*.gguf
+*.safetensors
+*.bin
+*.model
+*.onnx
+*.exe
+*.dll
+*.so
+*.dylib
+*.whl
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+
+# Source / External Repos
+/llama.cpp
+/llama-diffusion-src
+/llama-b9592
+/llama-cpp-python-src
+/Mystic_light_SDK_1.0.0.08
+/Live/t5gemma-2-4b-4b
+/Live/t5gemma-2-1b-1b
+/Live/t5gemma-2-270m-270m
+
+# ==============================================================================
+# Benchmarks, Scratch & Test Artifacts
+# ==============================================================================
+benchmark_reports/
+debate_reports/
+benchmarks/wringer/old/
+wringer_highscores.json
+*.gguf_report.md
+gemma4_param_notes.md
+test01rough.md
+modeltest*.txt
+scratch/
+/Deep Cook Latest.txt
+/Notepad.txt
+/removedcode.txt
+/TODO.txt
+/.agents
+Misc/
+test files/
+/temp_zip
 Tools/purge_desktop_ini.py
 Tools/pre_commit_secret_check.py
+!TODO.txt

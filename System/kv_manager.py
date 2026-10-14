@@ -181,27 +181,29 @@ class TurboVecIndex:
             if active_model_path:
                 active_model_name = os.path.splitext(os.path.basename(active_model_path))[0].lower()
 
-            files = glob.glob(os.path.join(self.history_dir, "*.history.jsonz"))
+            files = [os.path.join(self.history_dir, fname) for fname in os.listdir(self.history_dir) if fname.endswith(".history.jsonz") or fname.endswith(".history.encz")] if os.path.exists(self.history_dir) else []
             files_to_load = []
 
             for f in files:
                 basename = os.path.basename(f)
-                match = re.search(r"^(.*)_lvl(\d+)\.history\.jsonz$", basename)
+                match = re.search(r"^(.*)_lvls?([0-9_]+)\.history\.(?:jsonz|encz)$", basename)
                 if not match:
                     continue
                 
                 f_model = match.group(1).lower()
-                f_level = int(match.group(2))
+                raw_lvls = match.group(2).split("_")
+                f_levels = [int(x) for x in raw_lvls if x.isdigit()]
+                f_level = f_levels[-1] if f_levels else None
 
                 should_load = False
                 if lookup_mode == "targeted":
-                    if active_model_name and f_model == active_model_name and active_level is not None and f_level == active_level:
+                    if active_model_name and f_model == active_model_name and active_level is not None and active_level in f_levels:
                         should_load = True
                 elif lookup_mode == "model":
                     if active_model_name and f_model == active_model_name:
                         should_load = True
                 elif lookup_mode == "level":
-                    if active_level is not None and f_level == active_level:
+                    if active_level is not None and active_level in f_levels:
                         should_load = True
                 elif lookup_mode == "all":
                     should_load = True

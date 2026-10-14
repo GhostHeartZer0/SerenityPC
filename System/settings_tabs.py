@@ -12,22 +12,27 @@ Provides modular, clean builders for all 6 settings tabs:
 
 import os
 import json
+import shutil
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from serenity_resources import THEME, THEMES
 try:
-    from System.serenity_utils import ToolTip, bind_entry_limit
+    from System.serenity_utils import ToolTip, bind_entry_limit, setup_marquee_label
 except ImportError:
-    from serenity_utils import ToolTip, bind_entry_limit
+    from serenity_utils import ToolTip, bind_entry_limit, setup_marquee_label
 
 
 def bind_radio_contrast(var, rb_list):
     """Syncs high-contrast text color on active push-radio selection."""
     def _sync(*args):
-        val = var.get()
+        try:
+            val = str(var.get()).lower()
+        except Exception:
+            val = ""
         for rb, item_val in rb_list:
             if rb.winfo_exists():
-                rb.config(fg="#000000" if val == item_val else THEME.get("fg_color", "#ffaa44"))
+                is_active = (val == str(item_val).lower())
+                rb.config(fg="#000000" if is_active else THEME.get("fg_color", "#ffaa44"))
     var.trace_add("write", _sync)
     _sync()
 
@@ -83,7 +88,7 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
         key = f"vision_{tier_name}" if is_vision else tier_name
         lvl_map = {"fast": "1", "search": "2", "low": "3", "med": "4", "high": "5", "transcendent": "6", "secret": "7"}
         title_suffix = f" (Lvl {lvl_map[tier_name]})" if tier_name in lvl_map else ""
-        lf = tk.LabelFrame(p, text=f"Engine: {tier_name.upper()}{title_suffix}", bg=THEME["bg_color"],
+        lf = tk.LabelFrame(p, text=f"Core: {tier_name.upper()}{title_suffix}", bg=THEME["bg_color"],
                            fg=THEME["electric_blue"], font=app.fonts["bold"], pady=4)
         lf.grid(row=row, column=col, sticky="nsew", padx=6, pady=4)
 
@@ -96,12 +101,11 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
         generation_sensitive_widgets.append(btn_p)
 
         full_p = app.model_paths.get(key, "") or "Not Set"
-        b_name = os.path.basename(full_p)
-        disp_txt = b_name if len(b_name) <= 22 else b_name[:11] + "..." + b_name[-8:]
-        lbl = tk.Label(r1, text=disp_txt, bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"], anchor="w")
+        b_name = os.path.basename(full_p) if full_p != "Not Set" else "Not Set"
+        lbl = tk.Label(r1, text="", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"], anchor="w")
         lbl.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
         labels[key] = lbl
-        ToolTip(lbl, f"Full Path: {full_p}", app=app)
+        setup_marquee_label(lbl, b_name, app=app, limit=22, full_path=full_p)
 
         # Copy Template Button for Write mode
         btn_copy = tk.Button(r1, text="📋 Copy", command=lambda t=key: _apply_template_to_tier(t),
@@ -170,14 +174,25 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
                                  bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"])
             btn_proj.pack(side=tk.LEFT)
             generation_sensitive_widgets.append(btn_proj)
-            p_name = os.path.basename(app.model_paths.get(pk, "") or "Not Set")
-            p_disp = p_name if len(p_name) <= 22 else p_name[:11] + "..." + p_name[-8:]
-            labels[pk] = tk.Label(r4, text=p_disp, bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"], anchor="w")
-            labels[pk].pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
+            p_full = app.model_paths.get(pk, "") or "Not Set"
+            p_name = os.path.basename(p_full) if p_full != "Not Set" else "Not Set"
+            lbl_proj = tk.Label(r4, text="", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"], anchor="w")
+            lbl_proj.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
+            labels[pk] = lbl_proj
+            setup_marquee_label(lbl_proj, p_name, app=app, limit=22, full_path=p_full)
 
-    # 1. Text & Inline Engines
-    tk.Label(frame, text="Text & Inline Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"],
-             font=app.fonts["bold"]).pack(anchor="w", padx=6, pady=(6, 2))
+    # 1. Cores (Models)
+    cores_hdr_frame = tk.Frame(frame, bg=THEME["bg_color"])
+    cores_hdr_frame.pack(anchor="w", padx=6, pady=(6, 2))
+    tk.Label(cores_hdr_frame, text="Cores (", bg=THEME["bg_color"], fg=THEME["electric_blue"],
+             font=app.fonts["bold"]).pack(side=tk.LEFT)
+    lbl_models = tk.Label(cores_hdr_frame, text="Models", bg=THEME["bg_color"], fg=THEME["electric_blue"],
+                          font=app.fonts["bold"], cursor="question_arrow")
+    lbl_models.pack(side=tk.LEFT)
+    tk.Label(cores_hdr_frame, text="):", bg=THEME["bg_color"], fg=THEME["electric_blue"],
+             font=app.fonts["bold"]).pack(side=tk.LEFT)
+    ToolTip(lbl_models, "Large Language Models. Neural weights powering reasoning and conversation.", app=app)
+
     tier_grid = tk.Frame(frame, bg=THEME["bg_color"])
     tier_grid.pack(fill=tk.X, padx=4, pady=2)
     tier_grid.grid_columnconfigure(0, weight=1, uniform="model_col")
@@ -188,8 +203,8 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
         r, c = divmod(i, 2)
         _create_tier_block(tier_grid, tier, r, c)
 
-    # 2. Vision Engines
-    tk.Label(frame, text="Vision Engines:", bg=THEME["bg_color"], fg=THEME["electric_blue"],
+    # 2. Vision Cores
+    tk.Label(frame, text="Vision Cores:", bg=THEME["bg_color"], fg=THEME["electric_blue"],
              font=app.fonts["bold"]).pack(anchor="w", padx=6, pady=(10, 2))
     v_grid = tk.Frame(frame, bg=THEME["bg_color"])
     v_grid.pack(fill=tk.X, padx=4, pady=2)
@@ -260,7 +275,7 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
         t_id = active_template.get()
         if not t_id: return
         cur_name = app.config.get("custom_templates", {}).get(t_id, {}).get("name", t_id)
-        lbl_slot_info.config(text=f"Selected: {t_id} ({cur_name}) | Mode: {mode.upper()} — Press '📋 Copy' on any engine above to apply.")
+        lbl_slot_info.config(text=f"Selected: {t_id} ({cur_name}) | Mode: {mode.upper()} — Press '📋 Copy' on any core above to apply.")
         if mode == "modify":
             _open_template_modify_dialog(win, app, t_id, template_buttons, template_mode)
     active_template.trace_add("write", _on_template_click)
@@ -331,9 +346,9 @@ def build_inference_tab(parent, app, win, vars_dict):
     Builds Tab 2: Inference.
     - Two balanced columns.
     - Standardized HAO push-radio button style across entire tab.
-    - Column 1: HAO, Repeat Loop Detection, Response Headroom, Overfill Behavior,
+    - Column 1: HAO, Repeat Loop Detection, Reasoning Strength, Response Headroom, Overfill Behavior,
       separate Halt Options, Streaming Behavior, Deep Cook Toggle.
-    - Column 2: SWA, K Cache, V Cache, History Mode, History Usage, History Lookup, Muse Reasoning.
+    - Column 2: SWA, K Cache, V Cache, History Mode, History Usage, History Lookup, History AutoSave, History Level Naming.
     """
     frame = tk.Frame(parent, bg=THEME["bg_color"])
 
@@ -376,27 +391,30 @@ def build_inference_tab(parent, app, win, vars_dict):
     # 2. Repeat Loop Detection
     _make_push_radios(col1, "Repeat Loop Detection:", "Prevent repetitive token generation loops.", vars_dict["repeat_mode_var"], [("hyper", "Hyper"), ("lazy", "Lazy"), ("off", "Off")], width=8)
 
-    # 3. Response Headroom (ctx/N)
+    # 3. Reasoning Strength
+    _make_push_radios(col1, "Reasoning Strength:", "Reasoning effort level for Gemma-4, Muse-Glimmer, and thinking models.", vars_dict["reasoning_var"], ["off", "low", "medium", "high", "xhigh"], width=7)
+
+    # 4. Response Headroom (ctx/N)
     _make_push_radios(col1, "Response Headroom (ctx/N):", "Maximum token generation headroom relative to context.", vars_dict["ratio_var"], [(16, "U-Fast (16)"), (8, "Fast (8)"), (4, "Balanced (4)"), (2, "Deep (2)")], width=11)
 
-    # 4. Overfill Behavior (Natural context budget limit reached)
+    # 5. Overfill Behavior (Natural context budget limit reached)
     overfill_var = vars_dict.get("overfill_behavior_var", vars_dict.get("budget_recovery_var"))
     if overfill_var is None:
         overfill_var = tk.StringVar(value=getattr(app, "config", {}).get("overfill_behavior_mode", "wrapup"))
         vars_dict["overfill_behavior_var"] = overfill_var
     _make_push_radios(col1, "Overfill Behavior (Token Limit):", "Action taken when token context budget limit is reached naturally.", overfill_var, ["off", "respond", "wrapup", "autocont"], width=9)
 
-    # 5. Halt Options (Clicking Halt button behavior)
+    # 6. Halt Options (Clicking Halt button behavior)
     halt_var = vars_dict.get("halt_behavior_var")
     if halt_var is None:
         halt_var = tk.StringVar(value=getattr(app, "config", {}).get("halt_behavior_mode", "off"))
         vars_dict["halt_behavior_var"] = halt_var
     _make_push_radios(col1, "Halt Options (Button Action):", "Behavior when clicking the Halt button ('off' triggers immediate EOS cutoff).", halt_var, ["off", "wrapup", "autocont", "respond"], width=9)
 
-    # 6. Streaming Behavior
-    _make_push_radios(col1, "Streaming Behavior:", "Token delivery pacing and chunking mode.", vars_dict["stream_var"], ["Real-time", "Buffered", "Experimental Chunking", "Mass Dump"], width=13)
+    # 7. Streaming Behavior
+    _make_push_radios(col1, "Streaming Behavior:", "Token delivery pacing and chunking mode.", vars_dict["stream_var"], ["Real-time", "Buffered", ("Experimental Chunking", "Experimental\nChunking"), "Mass Dump"], width=13)
 
-    # 7. Deep Cook Toggle
+    # 8. Deep Cook Toggle
     lbl_dc = tk.Label(col1, text="Deep Cook Mode:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
     lbl_dc.pack(anchor="w", pady=(6, 1))
     ToolTip(lbl_dc, "Select Deep Cook recursive cycle behavior: One-Shot trigger or persistent toggle.", app=app)
@@ -407,8 +425,8 @@ def build_inference_tab(parent, app, win, vars_dict):
         rb = tk.Radiobutton(dc_f, text=txt, variable=vars_dict["v_behavior"], value=val, indicatoron=False,
                             bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["electric_blue"],
                             activebackground=THEME["electric_blue"], activeforeground="#000000",
-                            font=app.fonts["ui_small"], width=12)
-        rb.pack(side=tk.LEFT, padx=2)
+                            font=app.fonts["ui_small"], width=10)
+        rb.pack(side=tk.LEFT, padx=2, pady=1)
         ToolTip(rb, f"Set Deep Cook behavior to {txt}.", app=app)
         dc_rbs.append((rb, val))
     bind_radio_contrast(vars_dict["v_behavior"], dc_rbs)
@@ -432,13 +450,23 @@ def build_inference_tab(parent, app, win, vars_dict):
     _make_push_radios(col2, "History Mode:", "Conversation history indexing and search engine.", hist_var, ["TurboVec", "Keyword", "Off"], width=9)
 
     # 5. History Usage
-    _make_push_radios(col2, "History Usage Mode:", "Whether past histories are injected into active context.", vars_dict["history_usage_var"], ["all", "current_window", "off"], width=11)
+    curr_usage = vars_dict["history_usage_var"].get()
+    if curr_usage == "current_window":
+        vars_dict["history_usage_var"].set("window")
+    _make_push_radios(col2, "History Usage Mode:", "Whether past histories are injected into active context.", vars_dict["history_usage_var"], [("all", "All"), ("window", "Window"), ("off", "Off")], width=11)
 
     # 6. History Lookup
     _make_push_radios(col2, "History Lookup Scope:", "Scope of conversation search retrieval.", vars_dict["history_lookup_var"], ["targeted", "model", "level", "all"], width=9)
 
-    # 7. Muse Reasoning
-    _make_push_radios(col2, "Muse Reasoning Strength:", "Reasoning effort level for Gemma-4, Muse-Glimmer, and thinking models.", vars_dict["reasoning_var"], ["off", "low", "medium", "high", "xhigh"], width=7)
+    # 7. History AutoSave
+    if "history_autosave_var" not in vars_dict:
+        vars_dict["history_autosave_var"] = tk.StringVar(value=getattr(app, "config", {}).get("history_autosave_mode", "End"))
+    _make_push_radios(col2, "History AutoSave Mode:", "When conversation history is saved to disk.", vars_dict["history_autosave_var"], ["End", "Close", "Manual"], width=8)
+
+    # 8. History Level Naming
+    if "history_level_format_var" not in vars_dict:
+        vars_dict["history_level_format_var"] = tk.StringVar(value=getattr(app, "config", {}).get("history_level_format", "All"))
+    _make_push_radios(col2, "History Level Naming:", "Pipeline level display in archive filenames and badges.", vars_dict["history_level_format_var"], ["All", "full", "ordered", "first", "last"], width=7)
 
     vars_dict["inference_radio_groups"] = radio_groups
     return frame
@@ -463,7 +491,7 @@ def build_agents_tab(parent, app, win, vars_dict):
                                fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"],
                                font=app.fonts["bold"])
     cb_enable.pack(anchor="w", pady=(4, 8))
-    ToolTip(cb_enable, "Allows Transcendent (Lvl 6) and Cecilia (Lvl 7) to task subagents and orchestrate handoffs.", app=app)
+    ToolTip(cb_enable, "Allows Serenity Prime (Lvl 6) and Cecilia (Lvl 7) to task subagents and orchestrate handoffs.", app=app)
 
     # 2. Subagent Model
     lbl_m = tk.Label(frame, text="Subagent Model Selection:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
@@ -501,6 +529,13 @@ def build_agents_tab(parent, app, win, vars_dict):
         rb.pack(anchor="w", pady=1)
         ToolTip(rb, f"Set Cecilia operating mode to: {txt}.", app=app)
 
+    cb_show_cecilia = tk.Checkbutton(frame, text="Always Show Cecilia on Persona Slider (Lvl 7)",
+                                     variable=vars_dict["show_cecilia_slider_var"], bg=THEME["bg_color"],
+                                     fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"],
+                                     font=app.fonts["ui_label"])
+    cb_show_cecilia.pack(anchor="w", pady=(4, 6))
+    ToolTip(cb_show_cecilia, "Keep Cecilia (Level 7) visible and selectable on the main window persona slider without needing secret clicks.", app=app)
+
     # 5. Delegation Chain
     lbl_chain = tk.Label(frame, text="Delegation Chain Preset:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
     lbl_chain.pack(anchor="w", pady=(4, 2))
@@ -521,6 +556,121 @@ def build_agents_tab(parent, app, win, vars_dict):
                               state="readonly", width=48)
     hand_combo.pack(anchor="w", pady=(0, 8))
     ToolTip(hand_combo, "Select intermediate results staging destination.", app=app)
+
+    # --- Section: Deep Cook & Formatting Pipeline ---
+    lbl_dc_head = tk.Label(frame, text="Deep Cook & Formatting Pipeline:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"])
+    lbl_dc_head.pack(anchor="w", pady=(12, 4))
+
+    # 7. Deep Cook Execution Cycles (2, 3, 4, 8, 12, 16, 20, auto)
+    cyc_var = vars_dict.get("deep_cook_cycles_var")
+    if cyc_var is None:
+        cyc_var = tk.StringVar(value=str(getattr(app, "config", {}).get("deep_cook_cycles", "3")).lower())
+        vars_dict["deep_cook_cycles_var"] = cyc_var
+
+    lbl_cyc = tk.Label(frame, text="Deep Cook Execution Cycles:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+    lbl_cyc.pack(anchor="w", pady=(4, 2))
+    ToolTip(lbl_cyc, "Maximum recursive reasoning cycles allowed before mandatory synthesis (2, 3, 4, 8, 12, 16, 20, or Auto).", app=app)
+    cyc_f = tk.Frame(frame, bg=THEME["bg_color"])
+    cyc_f.pack(anchor="w", pady=(0, 6))
+    cyc_rbs = []
+    cycle_opts = [
+        ("2", "2 Cycles"),
+        ("3", "3 Cycles"),
+        ("4", "4 Cycles"),
+        ("8", "8 Cycles"),
+        ("12", "12 Cycles"),
+        ("16", "16 Cycles"),
+        ("20", "20 Cycles"),
+        ("auto", "Auto")
+    ]
+    for c_val, c_txt in cycle_opts:
+        rb = tk.Radiobutton(cyc_f, text=c_txt, variable=cyc_var, value=c_val, indicatoron=False,
+                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["electric_blue"],
+                            activebackground=THEME["electric_blue"], activeforeground="#000000",
+                            font=app.fonts["ui_small"], width=8 if c_val != "auto" else 6)
+        rb.pack(side=tk.LEFT, padx=1, pady=1)
+        ToolTip(rb, f"Limit Deep Cook reasoning to {c_txt}." if c_val != "auto" else "Auto mode: runs recursively until model reaches total resolution.", app=app)
+        cyc_rbs.append((rb, c_val))
+    bind_radio_contrast(cyc_var, cyc_rbs)
+
+    # 8. Agent & Deep Cook Cooperation
+    coop_var = vars_dict.get("deep_cook_coop_var")
+    if coop_var is None:
+        coop_var = tk.StringVar(value=str(getattr(app, "config", {}).get("deep_cook_agent_coop", "otl_per_step")))
+        vars_dict["deep_cook_coop_var"] = coop_var
+
+    lbl_coop = tk.Label(frame, text="Agent & Deep Cook Cooperation:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+    lbl_coop.pack(anchor="w", pady=(4, 2))
+    ToolTip(lbl_coop, "Specifies how autonomous agents coordinate during Deep Cook cycles.", app=app)
+    coop_f = tk.Frame(frame, bg=THEME["bg_color"])
+    coop_f.pack(anchor="w", pady=(0, 6))
+    coop_rbs = []
+    for val, txt, tip in [
+        ("otl_per_step", "OTL Per-Step", "Offload orchestrator and run specialized subagent on each individual step."),
+        ("otl_per_cycle", "OTL Per-Cycle", "Run subagent on whole cycle, offload to review upon cycle completion."),
+        ("independent", "Independent / Off", "Run Deep Cook solely on the active engine without subagent swaps.")
+    ]:
+        rb = tk.Radiobutton(coop_f, text=txt, variable=coop_var, value=val, indicatoron=False,
+                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["electric_blue"],
+                            activebackground=THEME["electric_blue"], activeforeground="#000000",
+                            font=app.fonts["ui_small"], padx=6)
+        rb.pack(side=tk.LEFT, padx=2, pady=1)
+        ToolTip(rb, tip, app=app)
+        coop_rbs.append((rb, val))
+    bind_radio_contrast(coop_var, coop_rbs)
+
+    # 9. Deep Cook Formatting
+    dc_fmt_var = vars_dict.get("deep_cook_format_var")
+    if dc_fmt_var is None:
+        dc_fmt_var = tk.StringVar(value=str(getattr(app, "config", {}).get("deep_cook_formatting", "per_step")))
+        vars_dict["deep_cook_format_var"] = dc_fmt_var
+
+    lbl_dc_fmt = tk.Label(frame, text="Deep Cook Formatting / Stream Pacing:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+    lbl_dc_fmt.pack(anchor="w", pady=(4, 2))
+    ToolTip(lbl_dc_fmt, "Controls dropdown accordion rendering and token flush frequency for Deep Cook.", app=app)
+    dc_fmt_f = tk.Frame(frame, bg=THEME["bg_color"])
+    dc_fmt_f.pack(anchor="w", pady=(0, 6))
+    dc_fmt_rbs = []
+    for val, txt, tip in [
+        ("inline", "Inline", "Stream tokens in real-time directly into active dropdown block."),
+        ("per_step", "Per-Step", "Render and update dropdown content at the conclusion of each step."),
+        ("per_cycle", "Per-Cycle", "Populate and render cycles only when each cycle assessment finishes."),
+        ("upon_completion", "Upon Completion", "Buffer all dropdowns and render upon total synthesis completion.")
+    ]:
+        rb = tk.Radiobutton(dc_fmt_f, text=txt, variable=dc_fmt_var, value=val, indicatoron=False,
+                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["electric_blue"],
+                            activebackground=THEME["electric_blue"], activeforeground="#000000",
+                            font=app.fonts["ui_small"], padx=6)
+        rb.pack(side=tk.LEFT, padx=2, pady=1)
+        ToolTip(rb, tip, app=app)
+        dc_fmt_rbs.append((rb, val))
+    bind_radio_contrast(dc_fmt_var, dc_fmt_rbs)
+
+    # 10. Normal Generation Formatting
+    norm_fmt_var = vars_dict.get("normal_format_var")
+    if norm_fmt_var is None:
+        norm_fmt_var = tk.StringVar(value=str(getattr(app, "config", {}).get("normal_generation_formatting", "inline")))
+        vars_dict["normal_format_var"] = norm_fmt_var
+
+    lbl_norm_fmt = tk.Label(frame, text="Normal Generation Formatting:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
+    lbl_norm_fmt.pack(anchor="w", pady=(4, 2))
+    ToolTip(lbl_norm_fmt, "Controls token stream chunking and thought dropdown presentation for standard generation.", app=app)
+    norm_fmt_f = tk.Frame(frame, bg=THEME["bg_color"])
+    norm_fmt_f.pack(anchor="w", pady=(0, 6))
+    norm_fmt_rbs = []
+    for val, txt, tip in [
+        ("inline", "Inline", "Stream response tokens smoothly in real time."),
+        ("chunked", "Chunked (After Thought)", "Buffer thought and render thought block upon completion, then stream response."),
+        ("upon_end", "Upon End", "Buffer entire thought and response, rendering only when completely finished.")
+    ]:
+        rb = tk.Radiobutton(norm_fmt_f, text=txt, variable=norm_fmt_var, value=val, indicatoron=False,
+                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["electric_blue"],
+                            activebackground=THEME["electric_blue"], activeforeground="#000000",
+                            font=app.fonts["ui_small"], padx=6)
+        rb.pack(side=tk.LEFT, padx=2, pady=1)
+        ToolTip(rb, tip, app=app)
+        norm_fmt_rbs.append((rb, val))
+    bind_radio_contrast(norm_fmt_var, norm_fmt_rbs)
 
     return frame
 
@@ -545,20 +695,35 @@ def build_additional_tab(parent, app, win, vars_dict):
     tog_grid.grid_columnconfigure(0, weight=1)
     tog_grid.grid_columnconfigure(1, weight=1)
 
-    scroll_lock_var = vars_dict.get("scroll_lock_var")
-    if scroll_lock_var is None:
-        scroll_lock_var = tk.BooleanVar(value=app.config.get("scroll_lock_enabled", False))
-        vars_dict["scroll_lock_var"] = scroll_lock_var
-
-    sb_linger_var = vars_dict.get("sb_linger_var")
-    if sb_linger_var is None:
-        sb_linger_var = tk.DoubleVar(value=float(app.config.get("status_bar_linger_sec", 5.0)))
-        vars_dict["sb_linger_var"] = sb_linger_var
-
-    format_prompt_md_var = vars_dict.get("format_prompt_md_var")
-    if format_prompt_md_var is None:
-        format_prompt_md_var = tk.BooleanVar(value=app.config.get("format_prompt_markdown", False))
-        vars_dict["format_prompt_md_var"] = format_prompt_md_var
+    defaults = {
+        "offline_mode_var": tk.BooleanVar(value=app.config.get("offline_mode", False)),
+        "auto_vram_var": tk.BooleanVar(value=app.config.get("auto_vram_offload", False)),
+        "spec_draft_var": tk.BooleanVar(value=app.config.get("speculative_drafting", False)),
+        "ghost_var": tk.BooleanVar(value=app.config.get("ghost_mode", False)),
+        "thinking_var": tk.BooleanVar(value=app.config.get("thinking_checkbox", True)),
+        "benchmark_var": tk.BooleanVar(value=app.config.get("benchmark_enabled", False)),
+        "inline_md_var": tk.BooleanVar(value=app.config.get("inline_markdown", True)),
+        "format_prompts_var": tk.BooleanVar(value=app.config.get("format_prompts_markdown", False)),
+        "monitor_graph_var": tk.BooleanVar(value=app.config.get("monitor_graph_mode", False)),
+        "scroll_lock_var": tk.BooleanVar(value=app.config.get("scroll_lock_enabled", False)),
+        "show_tooltips_var": tk.BooleanVar(value=app.config.get("show_tooltips", True)),
+        "resp_len_var": tk.StringVar(value=app.config.get("response_length", "natural")),
+        "media_var": tk.IntVar(value=app.config.get("media_rendering", 1)),
+        "dev_names": ["Default Input Device"],
+        "stt_dev_var": tk.StringVar(value="Default Input Device"),
+        "stt_lang_var": tk.StringVar(value=app.config.get("stt_language", "en-US")),
+        "multimedia_handling_var": tk.StringVar(value="auto"),
+        "dmn_enabled_var": tk.BooleanVar(value=app.config.get("dmn_enabled", True)),
+        "sc_val": tk.IntVar(value=8),
+        "status_mode_var": tk.StringVar(value=app.config.get("status_bar_mode", "hybrid")),
+        "anim_style_var": tk.StringVar(value=app.config.get("status_bar_anim_style", "spinner")),
+        "sb_dmn_var": tk.BooleanVar(value=app.config.get("status_bar_dmn_idle", True)),
+        "sb_fallback_var": tk.BooleanVar(value=app.config.get("status_bar_fallback_info", True)),
+        "sb_linger_var": tk.DoubleVar(value=float(app.config.get("status_bar_linger_sec", 5.0))),
+    }
+    for k, v in defaults.items():
+        if k not in vars_dict or vars_dict[k] is None:
+            vars_dict[k] = v
 
     toggles_list = [
         ("Offline Mode (Block Net)", vars_dict["offline_mode_var"], "Blocks all outbound internet traffic while allowing local loopback."),
@@ -568,9 +733,9 @@ def build_additional_tab(parent, app, win, vars_dict):
         ("Thinking Process", vars_dict["thinking_var"], "Controls whether internal model thought logs and reasoning blocks are captured."),
         ("Loading Benchmark", vars_dict["benchmark_var"], "Runs a quick memory throughput benchmark upon model initialization."),
         ("Inline Markdown", vars_dict["inline_md_var"], "Enables real-time formatting for bold, italics, tables, and math equations."),
-        ("Format Prompts Markdown", vars_dict["format_prompt_md_var"], "Enables markdown formatting for user prompts. Disabled by default to preserve math notation (e.g. 3*3*5*5)."),
+        ("Format Prompts Markdown", vars_dict["format_prompts_var"], "Applies markdown formatting to user prompt messages (disabled by default to preserve raw math like 3*3*5*5)."),
         ("Monitor Graph vs Line", vars_dict["monitor_graph_var"], "Switches hardware telemetry display between graphs and text lines."),
-        ("Scroll Lock to Lines of Text", vars_dict["scroll_lock_var"], "Locks chat viewport strictly to latest lines of text during generation."),
+        ("Scroll Lock to Lines of Text", vars_dict["scroll_lock_var"], "Locks chat viewport in place during generation to prevent forced autoscrolling when reviewing backlog."),
         ("Enable Hover Tooltips / Help", vars_dict["show_tooltips_var"], "Displays helpful linger-hover information boxes across UI controls.")
     ]
 
@@ -581,6 +746,20 @@ def build_additional_tab(parent, app, win, vars_dict):
                             selectcolor=THEME["widget_bg_color"], font=app.fonts["ui_small"])
         cb.grid(row=r, column=c, sticky="w", padx=6, pady=2)
         ToolTip(cb, tip, app=app)
+
+    # MTP & Speculative Drafter Combos Scanner
+    def _open_mtp_scanner():
+        try:
+            from System.mtp_combo_scanner import open_mtp_combos_dialog
+            open_mtp_combos_dialog(win, app)
+        except Exception as err:
+            messagebox.showerror("MTP Scanner", f"Failed to open MTP scanner: {err}", parent=win)
+
+    btn_mtp = tk.Button(frame, text="⚡ MTP & Speculative Drafter Combos Scanner",
+                        command=_open_mtp_scanner,
+                        bg=THEME["widget_bg_color"], fg="#00ffcc", font=app.fonts["ui_button"], padx=8, pady=2)
+    btn_mtp.pack(anchor="w", pady=(6, 4))
+    ToolTip(btn_mtp, "Scan library for compatible companion drafters, pair models, and apply GPU layer recommendations.", app=app)
 
     # Target Response Length
     lbl_resp = tk.Label(frame, text="Configurable Target Response Length:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_label"])
@@ -664,8 +843,14 @@ def build_additional_tab(parent, app, win, vars_dict):
     r_chunk = tk.Frame(hw_f, bg=THEME["bg_color"])
     r_chunk.pack(fill=tk.X, pady=2)
     tk.Label(r_chunk, text="Video Sub-Chunk Size:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 6))
+    scale_ratio = getattr(app, "scale_factor", 1.0)
+    if scale_ratio <= 0.1:
+        scale_ratio = 1.0
     sc_scale = tk.Scale(r_chunk, from_=1, to=128, orient=tk.HORIZONTAL, variable=vars_dict["sc_val"],
-                        bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0, resolution=1, length=180)
+                        bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0, resolution=1,
+                        length=max(180, int(220 * scale_ratio)),
+                        width=max(12, int(15 * scale_ratio)),
+                        sliderlength=max(18, int(24 * scale_ratio)))
     sc_scale.pack(side=tk.LEFT, padx=4)
     ToolTip(sc_scale, "Adjust frame batch size for multimodal video analysis.", app=app)
     tk.Button(r_chunk, text="Reset", command=lambda: vars_dict["sc_val"].set(8),
@@ -712,7 +897,10 @@ def build_additional_tab(parent, app, win, vars_dict):
     r_linger.pack(fill=tk.X, pady=(4, 2))
     tk.Label(r_linger, text="Status Linger Time (sec):", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 6))
     linger_scale = tk.Scale(r_linger, from_=1.0, to=15.0, resolution=0.5, orient=tk.HORIZONTAL, variable=vars_dict["sb_linger_var"],
-                            bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0, length=160)
+                            bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0,
+                            length=max(160, int(200 * scale_ratio)),
+                            width=max(12, int(15 * scale_ratio)),
+                            sliderlength=max(18, int(24 * scale_ratio)))
     linger_scale.pack(side=tk.LEFT, padx=4)
     ToolTip(linger_scale, "Duration (seconds) completion stats linger on the status bar before transitioning to idle.", app=app)
 
@@ -759,6 +947,301 @@ def build_users_tab(parent, app, win, vars_dict):
                 vars_dict["dark_mode_var"].set(app.config.get("dark_mode", False))
             messagebox.showinfo("User Profile", f"Active user profile set to '{target}'.", parent=win)
 
+    def _open_create_profile_wizard():
+        scale_ratio = getattr(app, "scale_factor", 1.0)
+        if scale_ratio <= 0.1:
+            scale_ratio = 1.0
+        wiz = tk.Toplevel(win)
+        wiz.title("Create Profile Wizard")
+        wiz.geometry(f"{max(440, int(460 * scale_ratio))}x{max(260, int(300 * scale_ratio))}")
+        wiz.config(bg=THEME["bg_color"])
+        wiz.transient(win)
+        wiz.grab_set()
+
+        if hasattr(app, "icon_path") and app.icon_path:
+            try: wiz.iconbitmap(app.icon_path)
+            except Exception: pass
+
+        is_lock_enabled = hasattr(app, 'vault_manager') and app.vault_manager and app.vault_manager.is_lock_enabled()
+        is_locked = is_lock_enabled and app.vault_manager.is_locked()
+
+        # Header
+        h_frame = tk.Frame(wiz, bg=THEME["bg_color"])
+        h_frame.pack(fill=tk.X, padx=16, pady=(12, 6))
+        tk.Label(h_frame, text="👤 Create Protected Profile", bg=THEME["bg_color"],
+                 fg=THEME.get("electric_blue", "#00ffcc"), font=app.fonts["bold"]).pack(anchor="w")
+        tk.Label(h_frame, text="Enter username and master password to create and protect this profile.",
+                 bg=THEME["bg_color"], fg=THEME.get("text_dim", "#888888"), font=app.fonts["ui_small"]).pack(anchor="w")
+
+        body = tk.Frame(wiz, bg=THEME["bg_color"])
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=6)
+
+        # 1. Profile Username
+        row1 = tk.Frame(body, bg=THEME["bg_color"])
+        row1.pack(fill=tk.X, pady=4)
+        tk.Label(row1, text="Profile Username:", bg=THEME["bg_color"], fg=THEME["fg_color"],
+                 font=app.fonts["ui_label"], width=18, anchor="w").pack(side=tk.LEFT)
+        init_un = vars_dict.get("username_var", tk.StringVar()).get().strip()
+        if init_un in ("Default", "Public"):
+            init_un = ""
+        wiz_un_var = tk.StringVar(value=init_un)
+        wiz_un_ent = tk.Entry(row1, textvariable=wiz_un_var, bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                              insertbackground=THEME.get("electric_blue", THEME["fg_color"]), width=22)
+        bind_entry_limit(wiz_un_ent, max_len=32)
+        wiz_un_ent.pack(side=tk.LEFT, padx=4)
+        wiz_un_ent.focus_set()
+
+        # 2. Master Password
+        row2 = tk.Frame(body, bg=THEME["bg_color"])
+        row2.pack(fill=tk.X, pady=4)
+        tk.Label(row2, text="Master Password:", bg=THEME["bg_color"], fg=THEME["fg_color"],
+                 font=app.fonts["ui_label"], width=18, anchor="w").pack(side=tk.LEFT)
+        wiz_pwd_var = tk.StringVar()
+        wiz_pwd_ent = tk.Entry(row2, textvariable=wiz_pwd_var, show="*", bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                               insertbackground=THEME.get("electric_blue", THEME["fg_color"]), width=22)
+        bind_entry_limit(wiz_pwd_ent, max_len=64)
+        wiz_pwd_ent.pack(side=tk.LEFT, padx=4)
+
+        # 3. Confirm Password
+        row3 = tk.Frame(body, bg=THEME["bg_color"])
+        row3.pack(fill=tk.X, pady=4)
+        tk.Label(row3, text="Confirm Password:", bg=THEME["bg_color"], fg=THEME["fg_color"],
+                 font=app.fonts["ui_label"], width=18, anchor="w").pack(side=tk.LEFT)
+        wiz_conf_var = tk.StringVar()
+        wiz_conf_ent = tk.Entry(row3, textvariable=wiz_conf_var, show="*", bg=THEME["widget_bg_color"], fg=THEME["fg_color"],
+                                insertbackground=THEME.get("electric_blue", THEME["fg_color"]), width=22)
+        bind_entry_limit(wiz_conf_ent, max_len=64)
+        wiz_conf_ent.pack(side=tk.LEFT, padx=4)
+
+        # Buttons (Create & Switch vs Cancel)
+        btn_bar = tk.Frame(wiz, bg=THEME["bg_color"])
+        btn_bar.pack(fill=tk.X, padx=16, pady=(8, 14))
+
+        def _do_create():
+            raw_un = wiz_un_var.get().strip()
+            clean_un = "".join(c for c in raw_un if c.isalnum() or c in ("-", "_", " ")).strip()
+            if not clean_un:
+                messagebox.showerror("Error", "Please enter a valid profile username (letters, numbers, underscores, hyphens).", parent=wiz)
+                return
+
+            if clean_un in ("Default", "Public"):
+                messagebox.showerror("Reserved Name", f"'{clean_un}' is a reserved system profile name.", parent=wiz)
+                return
+
+            existing = app.list_user_profiles() if hasattr(app, "list_user_profiles") else ["Default"]
+            is_update = clean_un in existing
+            if is_update:
+                if not messagebox.askyesno("Profile Exists", f"Profile '{clean_un}' already exists.\nDo you want to switch to it?", parent=wiz):
+                    return
+
+            # Password creation / verification (if vault manager is active or password was provided)
+            pwd = wiz_pwd_var.get().strip()
+            conf = wiz_conf_var.get().strip()
+            if (hasattr(app, "vault_manager") and app.vault_manager) or pwd or conf:
+                if len(pwd) < 4:
+                    messagebox.showerror("Error", "Master password must be at least 4 characters long.", parent=wiz)
+                    return
+                if pwd != conf:
+                    messagebox.showerror("Error", "New password and confirmation do not match.", parent=wiz)
+                    return
+
+            # Target user directory & history directory
+            if hasattr(app, "dirs") and isinstance(app.dirs, dict) and "Users" in app.dirs:
+                u_dir = os.path.join(app.dirs["Users"], clean_un)
+            elif hasattr(app, "get_user_dir"):
+                u_dir = os.path.join(os.path.dirname(app.get_user_dir()), clean_un)
+            else:
+                u_dir = None
+
+            if hasattr(app, "dirs") and isinstance(app.dirs, dict) and "History" in app.dirs:
+                h_dir = os.path.join(app.dirs["History"], clean_un)
+            elif hasattr(app, "get_user_history_dir"):
+                h_dir = os.path.join(os.path.dirname(app.get_user_history_dir()), clean_un)
+            else:
+                h_dir = None
+
+            # Initialize profile vault with this password
+            if u_dir and h_dir and hasattr(app, "vault_manager") and app.vault_manager:
+                if hasattr(app.vault_manager, "create_profile_vault"):
+                    success, msg = app.vault_manager.create_profile_vault(u_dir, h_dir, pwd)
+                    if not success:
+                        messagebox.showerror("Vault Error", f"Failed to initialize profile vault: {msg}", parent=wiz)
+                        return
+                elif hasattr(app.vault_manager, "set_password"):
+                    success, msg = app.vault_manager.set_password(pwd)
+                    if not success:
+                        messagebox.showerror("Vault Error", f"Failed to set master password: {msg}", parent=wiz)
+                        return
+                if "refresh_vault_status" in vars_dict and callable(vars_dict["refresh_vault_status"]):
+                    vars_dict["refresh_vault_status"]()
+
+            # Target user directory (resolve path without prematurely creating directory)
+            if hasattr(app, "dirs") and isinstance(app.dirs, dict) and "Users" in app.dirs:
+                u_dir = os.path.join(app.dirs["Users"], clean_un)
+            elif hasattr(app, "get_user_dir"):
+                u_dir = os.path.join(os.path.dirname(app.get_user_dir()), clean_un)
+            else:
+                u_dir = None
+
+            dir_existed_before = os.path.exists(u_dir) if u_dir else False
+
+            # Switch user using skip_lock_prompt=True (already authenticated via password creation/entry above)
+            if hasattr(app, "switch_user"):
+                try:
+                    res = app.switch_user(clean_un, skip_lock_prompt=True)
+                except TypeError:
+                    res = app.switch_user(clean_un)
+                if res is False:
+                    if not dir_existed_before:
+                        if u_dir and os.path.exists(u_dir):
+                            try: shutil.rmtree(u_dir, ignore_errors=True)
+                            except Exception: pass
+                        if hasattr(app, "dirs") and isinstance(app.dirs, dict) and "History" in app.dirs:
+                            h_dir = os.path.join(app.dirs["History"], clean_un)
+                            if os.path.exists(h_dir):
+                                try: shutil.rmtree(h_dir, ignore_errors=True)
+                                except Exception: pass
+                    vars_dict["username_var"].set(app.get_active_username() if hasattr(app, 'get_active_username') else "Default")
+                    wiz.destroy()
+                    return
+
+            # Atomically write profile configuration
+            if u_dir:
+                try:
+                    os.makedirs(u_dir, exist_ok=True)
+                    u_cfg_p = os.path.join(u_dir, "config.json")
+                    u_cfg_data = {}
+                    if os.path.exists(u_cfg_p):
+                        try:
+                            with open(u_cfg_p, "r", encoding="utf-8") as f:
+                                u_cfg_data = json.load(f)
+                        except Exception: pass
+                    curr_th = app.config.get("theme", "apex") if hasattr(app, "config") and app.config else "apex"
+                    curr_dark = bool(app.config.get("dark_mode", False)) if hasattr(app, "config") and app.config else False
+
+                    pref_name = wiz._pref_var.get().strip() if hasattr(wiz, "_pref_var") and wiz._pref_var.get().strip() else u_cfg_data.get("user_preferred_name", "")
+                    addr_style = wiz._addr_var.get().strip() if hasattr(wiz, "_addr_var") and wiz._addr_var.get().strip() else u_cfg_data.get("user_address_style", "Direct / Plain")
+                    
+                    if hasattr(wiz, "_th_var") and wiz._th_var.get():
+                        raw_th = wiz._th_var.get()
+                        th_val = vars_dict.get("THEME_MAP", {}).get(raw_th, raw_th)
+                    else:
+                        th_val = curr_th
+
+                    dark_mode_val = bool(wiz._dark_var.get()) if hasattr(wiz, "_dark_var") else curr_dark
+
+                    u_cfg_data["username"] = clean_un
+                    u_cfg_data["user_preferred_name"] = pref_name
+                    u_cfg_data["user_address_style"] = addr_style
+                    u_cfg_data["theme"] = th_val
+                    u_cfg_data["dark_mode"] = dark_mode_val
+
+                    with open(u_cfg_p, "w", encoding="utf-8") as f:
+                        json.dump(u_cfg_data, f, indent=4)
+                    if hasattr(app, "config") and isinstance(app.config, dict):
+                        app.config.update(u_cfg_data)
+                except Exception as ex:
+                    print(f"[USER] Failed to write profile config: {ex}")
+
+            # Update settings controls in main window
+            vars_dict["username_var"].set(clean_un)
+            if hasattr(app, "list_user_profiles"):
+                user_combo['values'] = app.list_user_profiles()
+            if "user_pref_name_var" in vars_dict and hasattr(app, "config"):
+                vars_dict["user_pref_name_var"].set(app.config.get("user_preferred_name", ""))
+            if "user_addr_style_var" in vars_dict and hasattr(app, "config"):
+                vars_dict["user_addr_style_var"].set(app.config.get("user_address_style", "Direct / Plain"))
+            if "theme_display_var" in vars_dict and hasattr(wiz, "_th_var") and wiz._th_var.get():
+                vars_dict["theme_display_var"].set(wiz._th_var.get())
+            if "dark_mode_var" in vars_dict and hasattr(wiz, "_dark_var"):
+                vars_dict["dark_mode_var"].set(bool(wiz._dark_var.get()))
+
+            title_msg = "Profile Updated" if is_update else "Profile Created"
+            body_msg = f"Profile '{clean_un}' updated and activated!" if is_update else f"Profile '{clean_un}' created and activated!"
+            messagebox.showinfo(title_msg, body_msg, parent=win)
+            wiz.destroy()
+
+        btn_finish = tk.Button(btn_bar, text="Create & Switch", command=_do_create,
+                               bg=THEME["button_active_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"], relief=tk.FLAT)
+        btn_finish.pack(side=tk.LEFT, padx=4)
+
+        btn_cancel = tk.Button(btn_bar, text="Cancel", command=wiz.destroy,
+                               bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"], relief=tk.FLAT)
+        btn_cancel.pack(side=tk.RIGHT, padx=4)
+
+        wiz._do_create = _do_create
+        wiz._un_var = wiz_un_var
+        wiz._pwd_var = wiz_pwd_var
+        wiz._conf_var = wiz_conf_var
+        wiz._conf_pwd_var = wiz_conf_var
+        # Backwards compatibility handles for test assertions
+        wiz._pref_var = tk.StringVar(value="")
+        wiz._addr_var = tk.StringVar(value="Direct / Plain")
+        wiz._th_var = tk.StringVar(value="Apex (Default)")
+        wiz._dark_var = tk.BooleanVar(value=False)
+        return wiz
+
+    vars_dict["_open_create_profile_wizard"] = _open_create_profile_wizard
+
+    def _apply_delete():
+        target = vars_dict["username_var"].get().strip()
+        if not target:
+            return
+        if target in ("Default", "Public"):
+            messagebox.showwarning("Protected Profile", f"Profile '{target}' is a system profile and cannot be deleted.", parent=win)
+            return
+
+        # Verification for locked/admin profiles
+        if hasattr(app, 'vault_manager') and app.vault_manager and app.vault_manager.is_lock_enabled() and app.vault_manager.is_locked():
+            pwd = simpledialog.askstring("Admin Verification", f"Admin verification required to delete profile '{target}'.\nEnter master password:", show="*", parent=win)
+            if not pwd:
+                return
+            if not app.vault_manager.unlock(pwd):
+                messagebox.showerror("Authentication Failed", "Incorrect master password. Deletion cancelled.", parent=win)
+                return
+
+        if not messagebox.askyesno("Confirm Deletion", f"Are you sure you want to permanently delete profile '{target}'?\n\nThis will remove all associated settings and chat histories. This action cannot be undone.", parent=win):
+            return
+
+        if hasattr(app, "delete_user_profile"):
+            success, msg = app.delete_user_profile(target)
+        else:
+            success = False
+            deleted_any = False
+            if hasattr(app, "dirs") and "Users" in app.dirs:
+                u_p = os.path.join(app.dirs["Users"], target)
+                if os.path.exists(u_p):
+                    shutil.rmtree(u_p, ignore_errors=True)
+                    deleted_any = True
+            if hasattr(app, "dirs") and "History" in app.dirs:
+                h_p = os.path.join(app.dirs["History"], target)
+                if os.path.exists(h_p):
+                    shutil.rmtree(h_p, ignore_errors=True)
+                    deleted_any = True
+            if deleted_any:
+                success = True
+                msg = f"Profile '{target}' deleted successfully."
+            else:
+                msg = f"Profile '{target}' does not exist on disk."
+
+        if success:
+            active_un = app.get_active_username() if hasattr(app, "get_active_username") else "Default"
+            vars_dict["username_var"].set(active_un)
+            if hasattr(app, "list_user_profiles"):
+                user_combo['values'] = app.list_user_profiles()
+            if "user_pref_name_var" in vars_dict and hasattr(app, "config"):
+                vars_dict["user_pref_name_var"].set(app.config.get("user_preferred_name", ""))
+            if "user_addr_style_var" in vars_dict and hasattr(app, "config"):
+                vars_dict["user_addr_style_var"].set(app.config.get("user_address_style", "Direct / Plain"))
+            if "theme_display_var" in vars_dict and hasattr(app, "config"):
+                curr_th = app.config.get("theme", "apex")
+                vars_dict["theme_display_var"].set(vars_dict.get("THEME_REV_MAP", {}).get(curr_th, curr_th))
+            if "dark_mode_var" in vars_dict and hasattr(app, "config"):
+                vars_dict["dark_mode_var"].set(app.config.get("dark_mode", False))
+            messagebox.showinfo("Profile Deleted", msg, parent=win)
+        else:
+            messagebox.showerror("Deletion Failed", msg, parent=win)
+
     def _apply_logout():
         if hasattr(app, 'vault_manager') and app.vault_manager and app.vault_manager.is_lock_enabled():
             app.vault_manager.lock()
@@ -770,14 +1253,29 @@ def build_users_tab(parent, app, win, vars_dict):
             vars_dict["refresh_vault_status"]()
         messagebox.showinfo("Logged Out", "Logged out. Switched to 'Default' profile.", parent=win)
 
-    btn_switch = tk.Button(u_row, text="Switch / Create Profile", command=_apply_switch,
+    btn_switch = tk.Button(u_row, text="Switch Profile", command=_apply_switch,
                            bg=THEME["button_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_button"], relief=tk.FLAT)
     btn_switch.pack(side=tk.LEFT, padx=4)
+    ToolTip(btn_switch, "Switch to selected user profile.", app=app)
+    vars_dict["btn_switch_profile"] = btn_switch
+
+    btn_create = tk.Button(u_row, text="Create Profile", command=_open_create_profile_wizard,
+                           bg=THEME["widget_bg_color"], fg=THEME.get("accent_highlight", "#00ffcc"), font=app.fonts["ui_button"], relief=tk.FLAT)
+    btn_create.pack(side=tk.LEFT, padx=4)
+    ToolTip(btn_create, "Launch setup wizard to create and configure a new user profile.", app=app)
+    vars_dict["btn_create_profile"] = btn_create
+
+    btn_delete = tk.Button(u_row, text="Delete Profile", command=_apply_delete,
+                           bg=THEME["button_bg_color"], fg="#ff6666", font=app.fonts["ui_button"], relief=tk.FLAT)
+    btn_delete.pack(side=tk.LEFT, padx=4)
+    ToolTip(btn_delete, "Permanently delete selected user profile (Admin / Locked profiles).", app=app)
+    vars_dict["btn_delete_profile"] = btn_delete
 
     btn_logout = tk.Button(u_row, text="Logout", command=_apply_logout,
                            bg=THEME["button_bg_color"], fg="#ff4444", font=app.fonts["ui_button"], relief=tk.FLAT)
     btn_logout.pack(side=tk.LEFT, padx=6)
     ToolTip(btn_logout, "Log out of current profile and safely return to Default.", app=app)
+    vars_dict["btn_logout"] = btn_logout
 
     # 3. Default / Public Toggles
     vis_row = tk.Frame(frame, bg=THEME["bg_color"])
@@ -845,12 +1343,18 @@ def build_users_tab(parent, app, win, vars_dict):
         if hasattr(vars_dict.get("_open_set_password_modal"), "__call__"):
             vars_dict["_open_set_password_modal"]()
 
+    def _encrypt_vault():
+        if hasattr(vars_dict.get("_open_encrypt_vault_modal"), "__call__"):
+            vars_dict["_open_encrypt_vault_modal"]()
+
     def _disable_pwd():
         if hasattr(vars_dict.get("_open_disable_vault_modal"), "__call__"):
             vars_dict["_open_disable_vault_modal"]()
 
     tk.Button(v_btn_row, text="Set / Change Master Password", command=_set_pwd,
               bg=THEME["widget_bg_color"], fg=THEME.get("accent_highlight", "#00ffcc"), font=app.fonts["ui_button"]).pack(side=tk.LEFT, padx=4)
+    tk.Button(v_btn_row, text="Encrypt Vault", command=_encrypt_vault,
+              bg=THEME["widget_bg_color"], fg=THEME.get("electric_blue", "#00bfff"), font=app.fonts["ui_button"]).pack(side=tk.LEFT, padx=4)
     tk.Button(v_btn_row, text="Disable Encryption / Decrypt", command=_disable_pwd,
               bg=THEME["widget_bg_color"], fg="#ff8888", font=app.fonts["ui_button"]).pack(side=tk.LEFT, padx=4)
 
@@ -888,7 +1392,8 @@ def build_personalize_tab(parent, app, win, vars_dict):
 
     themes_to_show = [
         ("Apex (Default)", "apex"),
-        ("Goth / Obsidian Dark", "goth"),
+        ("Goth", "goth"),
+        ("Obsidian Dark", "obsidian_dark"),
         ("Crystal Cavern", "crystal_cavern"),
         ("Yellow Blacket", "yellow_blacket"),
         ("Natural (Earth / Moss)", "natural"),
@@ -971,16 +1476,31 @@ def build_personalize_tab(parent, app, win, vars_dict):
     t_right = tk.Frame(tex_row, bg=THEME["bg_color"])
     t_right.grid(row=0, column=1, sticky="w")
     tk.Label(t_right, text="Intensity:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 4))
+    p_scale_ratio = getattr(app, "scale_factor", 1.0)
+    if p_scale_ratio <= 0.1:
+        p_scale_ratio = 1.0
     tex_scale = tk.Scale(t_right, from_=0, to=100, orient=tk.HORIZONTAL, variable=vars_dict["tex_int_var"],
-                         bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0, resolution=5, length=120)
+                         bg=THEME["bg_color"], fg=THEME["fg_color"], highlightthickness=0, resolution=5,
+                         length=max(120, int(160 * p_scale_ratio)),
+                         width=max(12, int(15 * p_scale_ratio)),
+                         sliderlength=max(18, int(24 * p_scale_ratio)))
     tex_scale.pack(side=tk.LEFT)
 
     # 4. Dark Mode Toggle (Renamed simply 'Dark Mode')
     cb_dark = tk.Checkbutton(frame, text="Dark Mode", variable=vars_dict["dark_mode_var"],
                              bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"],
                              font=app.fonts["ui_label"])
-    cb_dark.pack(anchor="w", pady=(4, 6))
+    cb_dark.pack(anchor="w", pady=(4, 2))
     ToolTip(cb_dark, "Pure OLED blackout (#000000) for maximum neon text contrast and power efficiency.", app=app)
+
+    # Universal Marquee Text Toggle
+    if "marquee_text_var" in vars_dict:
+        cb_marquee = tk.Checkbutton(frame, text="Universal Marquee Scrolling (Status & Buttons)",
+                                    variable=vars_dict["marquee_text_var"],
+                                    bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"],
+                                    font=app.fonts["ui_label"])
+        cb_marquee.pack(anchor="w", pady=(2, 6))
+        ToolTip(cb_marquee, "Smoothly scroll lengthy status messages, model paths, and UI buttons when text exceeds display area.", app=app)
 
     # 5. Text Size & Global Scale with Scaling Center
     lbl_scale = tk.Label(frame, text="Text Size & Global Scale:", bg=THEME["bg_color"], fg=THEME["electric_blue"], font=app.fonts["bold"])

@@ -1,107 +1,135 @@
 # SerenityPC TODO List
-# Reference: See VERSIONING.md for versioning scheme details (even = minor features, odd = bug patches, -alpha = internal mid-releases).
 
-Needs fixing:
-- Security hardening:
-  - Add OS permission checks/hardening for lore_book.py invocation in launch_lore_book
-  - ReDoS protection: Limit input string length & regex complexity in _parse_and_stage_filename_imports
-  - DoS mitigation: Add worker/semaphore cap for _async_deep_history_search thread spawning
-  - Tool execution sandboxing: Restrict _run_tool_loop file operations outside Users/ & Logs/
+- [Human Decision Needed]: Decide whether lvl6/lvl7 test_bank items swap or stay as-is (current lvl6 Qs read Prime-like, lvl7 Qs read Cecilia-like) before expanding questions to ~10 each.
+- Persona prompts (Plan 4 confirmed): Lvl 7 prompt untouched; Divine Judgement stays a normal mode, nothing new.
 
-Completed Log: (Verification Needed)
-- Verify non-destructive Markdown overlay in live chat UI (confirm 3*3*5*5 in prompts and responses renders without mangling into 3355, and clipboard copy preserves raw formatting)
-- Push requirements.txt to GitHub to verify Dependabot Alert #1 closure (accelerate CVE-2026-69112 removal)
-- Dynamic Agent Orchestration & Subagent Delegation Engine (`orchestration_manager.py`, toggleable in Settings)
-- Shadow Wizard & Divine Judgement Modes for Cecilia (Level 7)
-- Search bloat filter (`clean_search_bloat`) in `tool_registry.py`
-- KV Cache Footprint & Context Scaling Calibration (removed 35% cap in dynamic GPU layer calculation, 64k-256k headroom)
-- Dark Mode vs off outline synchronization: black bg + colored borders on Dark Mode, midnight persona bg on Dark Mode off
-- Texture intensity slider (0-100%) and texture styles
-- Custom user profile preferred name and addressing styles
-- Tutorial unleash instructions alignment for Level 7 dual triggers
-- Level 6 Electric Blue palette update (`#00D4FF` accents, `#001a2e` bg, `#00FFFF` cyan text)
-- Chat tab header & system status label theme background alignment
-- Console log & UI typography overhaul (Doto, Inconsolata, Noto Sans Mono, Modern Antiqua, etc.)
-- UI entry limits & safeguards (`bind_entry_limit`)
-- Theme-aware typing cursor colorization (`insertbackground`)
-- Multimodal projector (`.mmproj`) lookup hierarchy and fallback selection
-- Require password entry to swap to a locked profile in settings
-- Cecilia persona theme to a dark emerald / neon green, Lvl 7 color to dark emerald
-- Fix mid split sash position and font scalings persistence across startups and profile switches
-- Move the Dynamic status bar (Hybrid/smart with finish t/s, custom animations, fallback telemetry)
-- Separate thoughts/reasoning into collapsible dropdowns in response window
-- Automate stop tag handling and remove manual stop tokens from Settings UI
-- Verify Thought Channel splitting and demuxing across Gemma 4, ATEM, and DeepSeek
-- Dynamic theming across all Backend Logs and Telemetry UI components
-- Settings window modular reorganization into 6 dedicated tabs (`settings_tabs.py` & `settings_ui.py`)
-- Response length and reasoning strength controls with popup dialog
-- History mode controls with History-Off isolation
-- Overfill and Halt behavior controls (off, wrapup, autocont, respond)
-- Scroll lock setting in Additional Settings tab
+Needs Fixing:
+Ensure past prompts aren't being repeated in history... I have like 3 files that start the same but have wildly different prompts beyond that.
+Wringer.py - add a max guard, that prompts the model to continue if a max tokens limit was reached or close to it.
+- Clarify templating engine
+- Keyword / History lookups in thought log backend logs. (not entire history files!)
+- Dark Mode, individual selected items in Inference & Execution tab not distinguishable, need to see which one is selected.
+put affect engine stats in Backend Logs, under Thought log.
+	- Implemented 3D Continuous Affect Engine (PAD: V, A, D) with Ornstein-Uhlenbeck baseline reversion, time grounding, dynamic sampling parameters (min-p & temp), and anti-docility dominance recoil ($D \mathrel{+}= 0.2$, $V \mathrel{-}= 0.15$) against adversarial domestication.
+	- highscore leaderboards (top 5 each Lvl) for score percentage & speed
+	- Deep Cook: dropdowns not showing anything: Step (1, 2, or 3), Memory Assesment   
+  --- Cycle 3 | Drafting 1 --- is only visible in steps dropdown when nothing appears to be happening.
+
+Completed Log: (Verify)
+ `System/semantic_vault.py`, `System/thought_isolation.py`, `main.py`, `System/tests/test_hybrid_cognitive_vessel.py`):
+   - Implemented SQLite Semantic Vault with persistent DMN background distillation (`distilled_insights`, `interaction_history`) and keyword/recency grounding, guaranteeing Cecilia's semantic essence survives KV-cache flushes and context window recycling.
+   - Enforced zero-leakage Thought Channel Isolation ensuring internal reasoning scratchpads never bleed into speech buffers.
+- Speculative MTP & Drafter Alignment Engine with Catch-all Fallback (`System/mtp_combo_scanner.py`, `System/settings_tabs.py`, `main.py`, `System/tests/test_mtp_combo_scanner.py`):
+   - Fast binary GGUF header parser (< 5ms) scans available directories, matches architectures and vocabularies, calculates recommended layer offload (8 layers for 26B on 6GB VRAM), and provides GUI modal.
+   - Three-tier [Main A, Drafter B, Catch-all C] fallback in `main.py`: falls back automatically to zero-overhead Prompt Lookup Decoding when companion model unavailable.
+ - Wringer Persona Adherence Benchmark Framework (`benchmarks/wringer/persona_bank.json`, `benchmarks/wringer/Wringer.py`, `System/tests/test_persona_adherence_benchmark.py`):
+   - Created standalone `persona_bank.json` across Serenity 1-5, Serenity Prime, and Cecilia with 5 standard prompts each + 3 long-context drift prompts (both multi-turn chat and padded single context). Zero hardcoded user names.
+   - Implemented `run_persona_evaluation` and `generate_persona_chart` in `Wringer.py` with standalone reports (`persona_reports/{model}_persona_report.md`) and visual breakdown charts, excluded from `analyze.py` overall leaderboard.
+    - Structured CoT + JSON Output: Replaced 2-turn grammar prompt with single-pass `JUDGE_SYSTEM_PROMPT` enforcing explicit 1-10 scoring rubric and `{ "critique": "...", "score": <int> }` schema.
+   - [Verification]: Run live inference test with Muse Glimmer and Gemma-4 to verify zero tag leaks and zero stream stalls.
+- Prompt Lead & Response Persona Display Overhaul:
+   - Guaranteed response prefix is dynamically resolved: displays "Cecilia:" for Persona Level 7 or active Cecilia subagent modes, and "Serenity:" for Levels 0 through 6.
+   - Preserved chat template token separation (`<|im_start|>user`, `[INST]`, `<|turn|>`) to ensure prompt and thought/response isolation remains completely intact.
+   - Added "Prompt:" and "Cecilia:" to stop token parameters in `System/params.json`.
+- Theme Overhaul, Persona Dynamic Borders & Red-on-Red Contrast Fix:
+   - High-Contrast Red Themes: Remapped Persona Lvl 3 thermo color to vivid crimson `#FF3355`; overhauled `goth` theme to pure OLED black background (`#000000`), vivid crimson text (`#ff3b5c`), and scarlet trim highlights (`#ff2442`).
+   - Obsidian Dark Theme Split: Created distinct `obsidian_dark` theme featuring dark granite background (`#0c0a14`), midnight purple widget surface (`#151122`), midnight blue accents (`#080c1e`), luminous purple trim (`#6347a6`), and electric violet highlights (`#7c5cfc`).
+   - Persona Dynamic Borders: Response window border (`chat_history`, `past_history_view`) binds primary persona level color; prompt window border (`input_control_frame`, `user_input`) binds secondary persona level color (`PERSONA_SECONDARY_COLORS`) when model is loaded and persona active.
+   - Global Settings & UI Color Overhaul: Created `apply_theme_to_settings_window` recursively refreshing all frames, labels, buttons, entries, radiobuttons, and canvases upon opening or switching themes; eliminated stuck Yellow Blacket labels and entries; eliminated stuck Apex styling on action buttons (`send_button`, `deep_thought_button`, `hurry_button`, `ghost_button`, `btn_add`, `mic_button`, `lore_btn`).
+   - OLED Blackout Dark Mode: Enforced absolute `#000000` backgrounds in dark mode with theme-colored text and clear foreground contrast.
+   - User vs Response Separation: User text (`#007acc` / `#87CEFA`) and response text (`CHAT_FG_COLORS` / `#FFD700` lead) verified distinct across all themes and dark mode.
+- Ecstatic Avatar 4.5s Auto-Revert Timer: Added 4.5s timeout on `serenity_ecstatic` state transitioning back to `listening` (and idle); auto-cancels active timer when avatar state changes.
+- Leaked Special Tokens Stripping: Added `<|message|>`, `<|start|>`, `<|end|>` to tag cleanup patterns and closers in `main.py` and `System/vision_handler.py`.
+- Subagent Active Banner Display: Banner displays `Subagent: Lvl X, <Model>` when autonomous subagents execute (dispatched via `_swap_for_step` and `subagent_status` queue events); cleanly reverts to orchestrator model on step completion, session finalization, or halt.
+- History Archive Titles & Pipeline Condensing: Grouped repeat levels into compact count notation (e.g. `7(8)`, `7(3), 5(2), 2`) for archive badges and expanded pipeline headers; kept filenames and display titles concise without quantity spam.
+- GGUF Vocabulary & Architecture Auto-Repair: Solved `unknown pre-tokenizer type: 'minicpm5'` by auto-healing `tokenizer.ggml.pre` to `default` in `System/serenity_utils.py`; guarded known native llama.cpp architectures (`nemotron_h_moe`, `gpt-oss`, `olmo2`, etc.) and `spark2_5` from destructive `"llama"` overwrites; successfully tested and verified `Sharp-MiniCPM5-2B-Q6_K_XL.gguf` and `MiniCPM5-2B-heretic-abliterated-Q6_K.gguf`.
+- Model Chat Handler & Format Recovery: Resolved `KeyError: None` / `LlamaChatCompletionHandlerNotFoundException` when running text turns on models loaded with vision projector (Level 2 / Search tier); ensured automatic resolution of native GGUF `chat_template.default` / fallback chat formats and cached chat handler restoration across multimodal transitions.
+- catch-all forward-slash LaTeX symbol normalization, single-letter variable inline math ($U$, $x$), and complex composite expressions.
+- Multi-level history pipeline display & AutoSave modes: (All, full, ordered, first, last); History AutoSave modes (End, Close, Manual).
+- Vault history unlock & modal exit: preserved cached session key across set_user_context and profile switch to prevent reprompt loops accessing .history.encz archives; modal cancel/close during history access exits history (show_active_chat / _back_history) instead of destroying application.
+- LaTeX Math formatting overhaul: support /frac, /sum, /times, /mathbf, /left, /right, $$$$, nested braces, and protect currency amounts ($596,046,447,753,906 and $200)
+- Markdown formatting fix: prompt exclusion toggle (format_prompts_markdown default OFF), non-destructive visual tag overlay (md_hidden elide), arithmetic multiplication preservation (3*3*5*5 and a*b*c), and LaTeX symbol prefix order fix (\infty)
+- Multimodal massdumping resolved: fixed token estimation ballooning and implemented live streaming (thought to thought channel, text to chat)
+- Status bar overhaul: winfo_exists() safety guards, configurable linger time (status_bar_linger_sec), smart info rotation
+- Prefill avatar fix: Lvl 1-5 use serenity_thinking.png, Lvl 6 uses Meditating_Serenity.png, Lvl 7 uses Cecilia_01.png
+- Vision log locations verified and standardized (_STRATEGIC_analysis.txt / _MULTIMODAL_analysis.txt + Logs/vision_analysis.txt)
+- MTP drafting 'unknown architecture' fallback fix: catches unsupported GGUF arch without freezing UI/dialog threads
 
 V2.0 Roadmap:
 
-- V1.7.0 Add Subagents! Set up a Delegation section (toggleable in settings) to allow Lvls 6 and 7 to task others out, using handoffs, reports, and Orchestration/Collaboration between Lvls. example: I set up a chain for Lvl 6 to answer a hard question, and it first tasks Lvl 3 to store the info, Lvl 2 to pinpoint search for facts (Search function needs to filter out bloat, please fix), and Lvl 5 to do the figuring out. once Lvl 2 finishes its task, it reports to Lvl 3 or 6 as configured. once Lvl 5 finishes its task, it does the same. Lvl 3 then compiles the data and either sends to Lvl 5 for reasoning or 6 for approval as configured. Customization is key here. This will be primarily a Lvl 6 thing, but Cecilia gets a similar toggleable god mode:
-  Shadow Wizard: able to use any of the 6 levels' features at will or as suggested (Delegation secton). also has 'Divine Judgement'.
-  Divine Judgement: Has access to all the abilities of each level besides subagenting. the 'magic' of controlling others is the Shadow Wizard's special skill, and 'Divine Judgement' here refers to the one-way mirror of information and skill access.
-
-- V1.8.0 Deep Cook Cycles Verification (2, 3, 4, 8, 12 cycles).
+- V1.8.0 Deep Cook Cycles Verification (2, 3, 4, 8, 12, 16, 20, auto cycles).
+   - (COMPLETED) Verify Deep Cook cycle limit enforcement (2, 3, 4, 8, 12, 16, 20, auto) and cycle budget exit.
    - Verify Deep Cook Vision & Dynamic Auto-Offload Optimization.
+   - (COMPLETED) Verify dropdown functions and inter-step population (accordion hygiene, auto-fallback parent tag, batch population).
+   - Ensure agents works with deep cook aligned with cycles (OTL individual steps, cycles, etc)
+      - Verify that OTL actually works, that if Lvl 5 is asked for, that the Lvl 6 or 7 model gets offloaded so the Lvl 5 model can load, when its finished generating that one offloads and the Lvl 6 or 7 model loads to review the result.
+   - (COMPLETED) Add robust config settings, a 'Deep Cook' section to the Agents settings menu about how agents and deep cook should cooperate. 
+   - (COMPLETED) Ensure dropdowns close and open correctly, and the right context is placed where it belongs.
+   - (COMPLETED) Add settings for formatting: per-cycle, per-step, upon completion, inline. Ensure this exists for both deep cook and normal generation (Inline, after thought/response completion(chunked), Upon End).
    
-- V1.9.0 It is time again to organize the settings window.
-   - Add tabs [Models/Params with Templates below, Inference, Additional Settings, User Profiles with Security Vault below, Loading Bar]
-   - Templates, make the template application interface more visually indicative, make template write require 'copy' button press every time
-   - rename Global Engine & Memory Overrides to Inference.
-   - move dynamic param auto-tune to params section. replace it with Deep Cook toggle [Deep Cook toggle to Inference tab]
-   - Make efficient use of space
-   - Modify settings section of the tutorial when Settings gets redone. personalize wakthrough and tooltips.
+- V1.9.0 Creature comforts & Polishing
+- Overhaul tool calling, Cross refrence with SerenityDev to control the devserver, Integrate a terminal.
+- When unleashing Lvl 7, don't load the model first, to allow settings to properly populate.
+- Clicking on the status UI button should open the active Lvl's model selection
+   - Integrate Template selections in a follow-up pop-up.
+- Ensure scroll-lock setting / fix current robustly works while response is generating.
+- Overview 'History: All' mode
+- Marquee other areas! history file titles
+- Lvl 2 Refactor.
+- Consider colllapsible chat templates with an arrow on bottom.
+- (COMPLETED) Rename "Lvl 6: Transcendent" to "Serenity Prime" but keep it Lvl 6 for backend.
+- Feedback: RLHF, if user downvotes an interaction, spawn a non-intrusive comment box to describe the issue, give it ok and x buttons. Let's get them to learn from past mistakes.
+- Add a setting, ctx window overflow behavior: auto-increase (with lots of choices), ask first, and manual-only - error notification presented.
 
 - V2.0.0 
    - Stable, Polished & Verified Release (Manual Verification)
+   - Personas honed, models cross-refrenced
 
-Beyond V2.0 (Even = Minor Feature [Auto-Verification], Odd = Bug Patch):
-- Auto-verification for minor releases / features (even patches)
+Beyond V2.0:
+- Auto-verification for minor releases / features
 - Manual verification for major releases
 
-V2.0.2 [Feature] Overview DMN, especially for Lvls 6 & 7
+V2.1.0: Overview DMN, especially for Lvls 6 & 7
+   - As part of DMN, set up a presentation to the user (if simmering) for a reccomended archive cleanup (simmering files into DMN, so those files can be verified & removed once context is confirmed)
 
-V2.0.4 [Feature] Training station for small gemma models to learn from gemma-4-26b-a4b. allow other models. location: .\System\tests\benchmarks\training station".
+V2.2.0: Training station for small gemma models to learn from gemma-4-26b-a4b. allow other models. location: .\System\tests\benchmarks\training station".
 
-V2.0.6 [Feature] Subagents / MCP Overhaul
+V2.3.0: Subagents / MCP Overhaul
    - Add back MCP support, allow porting with SerenityDev. Consider Subagents.
    - More Subagent access, such as automating PC tasks
    - Coding, tool calling subagent alignment
+   - Stream subagent output to set dropdowns like the thinking one for each subagent.
 
-V2.0.8 [Feature] Resolve broken turbo3_tcq, turbo2_tcq, and kv cache sizes q6_0 and q6_1; update llama. Mismatched KV cache (k4/v3, k8/v4).
+V2.4.0: Resolve broken turbo3_tcq, turbo2_tcq, and kv cache sizes q6_0 and q6_1; update llama. Mismatched KV cache (k4/v3, k8/v4).
 
-V2.1.0 [Minor Milestone] Either revamp or remove rgb support
+V2.5.0: Either revamp or remove rgb support
 
-V2.1.2 [Feature] Animated / moving avatar images, Living avatar reactive settings. Procedural 3D Render Engine.
+V2.6.0: Animated / moving avatar images, Living avatar reactive settings. Procedural 3D Render Engine.
 
-V2.1.4 [Feature] Re-implement TriAttention and verify turbovec history lookup works
+V2.7.0: Re-implement TriAttention and verify turbovec history lookup works
    - merge TriAttention support with llama
    - verify turbovec lookup works for targeted and all
 
-V2.1.6 [Feature] https://github.com/MoonshotAI/Attention-Residuals  
+V2.8.0: https://github.com/MoonshotAI/Attention-Residuals  
 
-V2.1.8 Overhaul tool calling
+V2.9.0: Lvl 2 search lookup optimization using keyword actuated lookup extraction to filter bloat
+- Verify features like scrolling and clicking
 
-The Backburner:
-
-- Test Repetition Detection & Loop Handling [hyper, lazy, off].
-- Verify Vision & Image Recognition Alignment
-- Verify Multi-Modal Thought Channel Splitting & Tag Cleanup. 
+Backburner:
+Figure out app version compatibility and distro targets.
 - Test Dynamic Parameter Auto-Adjustment (for Coding, Math, Creative, and Factual tasks; user config; Settings toggle).
 - Verify Real-Time Diffusion Visual Denoising & Time-Grounding.  
 - Test Overfill (off/respond/wrapup/autocont).
-- Verify RLHF DMN state logging.
 - Test Wringer (t/s) telemetry, prefill/decode/overall metrics, speed outlier detection, speed highscore separation, speed/accuracy weighting, and comparison graph generation.
-- Test Debate Arena (Canvas LoadingSpinner, Speedy/Simmer pacing, and multi-round role alternation).   
-- Verify llama.cpp forward graph alignment for Muse-Glimmer (SWA window masking, Global NoPE layer RoPE exclusion, logit softcapping = 30.0, output projection bias `bo`, `f_attention_scale`).
-- Profile sampling defaults (temperature: 1.0, top_p: 0.95, top_k: 64, min_p: 0.0) vs sampler overrides.
-- Test Jinja chat template variable injection (`reasoning_strength: high`) vs raw tokenized inputs to isolate prefill prompt vs decoding kernel degradation.
+- Test Debate Arena (Canvas LoadingSpinner, Speedy/Simmer pacing, and multi-round role alternation).
+- Updated the font options
 
 TBD / Future Roadmap:
 - Fix UI scaling
 - Model Fetching Architecture: Design and implement Hugging Face / remote repository model fetcher with resumable chunks, sha256 checksums, and auto-routing to target model directories (S:/LLM / Models).
 - Avatar `serenity_frustrated`.
+- Figure out how to push updates easier to users
+  - Replace hardcoded font names with dynamic configuration.
+- Wringer.py: add semantic depth and other areas (excluding tricks and catches) benchmark test banks.
+	- Expand Lvls 6 and 7, add an optional persona alignment test
+	- Coding benchmarks

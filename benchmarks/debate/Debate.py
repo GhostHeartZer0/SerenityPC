@@ -15,12 +15,29 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
+def _bootstrap_venv():
+    if __name__ != "__main__":
+        return
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+    scripts_dir = os.path.join(project_root, ".venv", "Scripts") if sys.platform == "win32" else os.path.join(project_root, ".venv", "bin")
+    venv_py = os.path.join(scripts_dir, "python.exe" if sys.platform == "win32" else "python")
+    if os.path.exists(venv_py):
+        cur_py = os.path.normcase(os.path.abspath(sys.executable))
+        tgt_py = os.path.normcase(os.path.abspath(venv_py))
+        if cur_py != tgt_py:
+            env = os.environ.copy()
+            env["VIRTUAL_ENV"] = os.path.join(project_root, ".venv")
+            env["PATH"] = scripts_dir + os.pathsep + env.get("PATH", "")
+            import subprocess
+            result = subprocess.run([venv_py, os.path.abspath(__file__)] + sys.argv[1:], env=env, cwd=project_root)
+            sys.exit(result.returncode)
+
+_bootstrap_venv()
+
 # --- Project Root Setup ---
 DEBATE_DIR = os.path.dirname(os.path.abspath(__file__))
-BENCHMARKS_DIR = os.path.dirname(DEBATE_DIR)
-TESTS_DIR = os.path.dirname(BENCHMARKS_DIR)
-SYSTEM_DIR = os.path.dirname(TESTS_DIR)
-PROJECT_ROOT = os.path.dirname(SYSTEM_DIR)
+PROJECT_ROOT = os.path.abspath(os.path.join(DEBATE_DIR, "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -210,9 +227,9 @@ CTX_PRESETS = [
 
 
 # ============================================================
-# Debate Engine
+# Debate Cores (Models)
 # ============================================================
-class DebateEngine:
+class DebateCore:
     """Runs a multi-round debate between contestants, scores with a judge."""
 
     def __init__(self):
@@ -351,6 +368,9 @@ class DebateEngine:
         return filepath
 
 
+DebateEngine = DebateCore  # Backward-compatible alias
+
+
 # ============================================================
 # Debate UI
 # ============================================================
@@ -416,7 +436,7 @@ class DebateApp:
         self.root.configure(bg=self.THEME["bg"])
         self.root.minsize(800, 650)
 
-        self.engine = DebateEngine()
+        self.engine = DebateCore()
         self.contestants: List[Dict] = []
         self.judge_path: Optional[str] = None
         self.topic_var = tk.StringVar()
@@ -1042,7 +1062,18 @@ def cli_menu():
 
 
 if __name__ == "__main__":
-    if "--cli" in sys.argv:
-        cli_menu()
-    else:
-        DebateApp()
+    try:
+        if "--cli" in sys.argv:
+            cli_menu()
+        else:
+            DebateApp()
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            input("\n[!] Fatal error occurred. Press Enter to exit...")
+        except Exception:
+            pass
+        sys.exit(1)
