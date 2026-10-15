@@ -546,5 +546,7 @@
     "status_bar_linger_sec": 5.0,
     "settings_window_geometry": "860x950",
     "scroll_lock_enabled": false,
-    "user_notes": ""
+    "user_notes": "",
+    "format_prompts_markdown": false,
+    "vault_modal_geometry": "480x380+354+337"
 }

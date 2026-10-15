@@ -235,6 +235,8 @@ class TestUserProfilesAndStatusBar(unittest.TestCase):
             get_history_path = ChatbotApp.get_history_path
             _load_dmn_backbone = ChatbotApp._load_dmn_backbone
             _save_dmn_backbone = ChatbotApp._save_dmn_backbone
+            _get_conversation_level_pipeline = ChatbotApp._get_conversation_level_pipeline
+            _format_level_pipeline = ChatbotApp._format_level_pipeline
             save_config = lambda self: None
             _log_and_display = lambda self, msg: None
 

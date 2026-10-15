@@ -293,6 +293,17 @@ class UtilityDispatchEngine:
                 rationale=rationale
             ))
 
+        # Explicit user level request detection (e.g. "ask Lvl 5", "Level 5", "The Brains")
+        explicit_matches = re.findall(r'\b(?:lvl|level)\s*([1-6])\b', query, flags=re.IGNORECASE)
+        for m_lvl in explicit_matches:
+            req_id = int(m_lvl)
+            if req_id in allowed_agents and req_id not in selected_ids:
+                selected_ids.append(req_id)
+                for s in scores:
+                    if s.agent_id == req_id:
+                        s.selected = True
+                        s.rationale = f"Explicitly requested by user query (Lvl {req_id})"
+
         # Fallback: if minimal mode and no agent crossed threshold, dispatch minimal best agent
         if not selected_ids and allowed_agents:
             permitted_scores = [s for s in scores if s.agent_id in allowed_agents]
@@ -479,14 +490,19 @@ class OrchestrationManager:
             except Exception:
                 pass
 
+        initial_orch_tier = getattr(self.app, "current_model_tier", None) or lvl_to_tier.get(orchestrator_level, "transcendent" if orchestrator_level == 6 else "secret")
+        explicit_lvl_requested = bool(re.search(r'\b(?:lvl|level)\s*[1-6]\b', user_query, flags=re.IGNORECASE))
+        should_swap_models = (model_mode == "per_subagent_model") or explicit_lvl_requested
+
         def _swap_for_step(target_lvl: int):
             _set_subagent_banner(target_lvl)
-            if model_mode == "per_subagent_model" and hasattr(self.app, "model_paths"):
+            if should_swap_models and hasattr(self.app, "model_paths"):
                 tier = lvl_to_tier.get(target_lvl)
                 target_path = self.app.model_paths.get(tier)
-                curr_path = getattr(self.app, "model_path", None)
-                if target_path and target_path != curr_path:
-                    _log_subagent(f"[MODEL SWAP]: Offloading Orchestrator -> Loading Subagent Lvl {target_lvl} ({tier})...")
+                curr_lvl = getattr(self.app, "active_persona_level", None)
+                curr_tier = getattr(self.app, "current_model_tier", None)
+                if target_path and (curr_lvl != target_lvl or curr_tier != tier or target_path != getattr(self.app, "model_path", None)):
+                    _log_subagent(f"[OTL MODEL SWAP]: Offloading Orchestrator (Lvl {orchestrator_level}) -> Loading Subagent Lvl {target_lvl} ({tier})...")
                     if hasattr(self.app, "model_swap_synchronous"):
                         try:
                             ok = self.app.model_swap_synchronous(target_level=target_lvl, target_tier=tier)
@@ -501,14 +517,14 @@ class OrchestrationManager:
                             _log_subagent(f"[MODEL SWAP WARNING]: Could not swap to Lvl {target_lvl}: {e}")
 
         def _restore_orchestrator():
-            if model_mode == "per_subagent_model":
-                orch_tier = lvl_to_tier.get(orchestrator_level, "transcendent" if orchestrator_level == 6 else "secret")
+            if should_swap_models:
+                orch_tier = initial_orch_tier
                 curr_lvl = getattr(self.app, "active_persona_level", None)
                 curr_tier = getattr(self.app, "current_model_tier", None)
                 curr_path = getattr(self.app, "model_path", None)
                 orch_path = getattr(self.app, "model_paths", {}).get(orch_tier) if hasattr(self.app, "model_paths") else None
                 if curr_lvl != orchestrator_level or curr_tier != orch_tier or (orch_path and curr_path != orch_path):
-                    _log_subagent(f"[MODEL SWAP]: Restoring Orchestrator Model (Lvl {orchestrator_level})...")
+                    _log_subagent(f"[OTL MODEL SWAP]: Offloading Subagent -> Restoring Orchestrator Model (Lvl {orchestrator_level} / {orch_tier})...")
                     if hasattr(self.app, "model_swap_synchronous"):
                         try:
                             ok = self.app.model_swap_synchronous(target_level=orchestrator_level, target_tier=orch_tier)

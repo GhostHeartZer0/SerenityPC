@@ -108,12 +108,14 @@ class VaultManager:
         new_key = self.derive_key(password, new_salt)
         new_verifier = self._compute_verifier(new_key)
 
+        now_iso = datetime.datetime.now().isoformat()
         state = {
             "lock_enabled": True,
             "salt_hex": new_salt.hex(),
             "verifier_hash": new_verifier,
             "auto_lock_seconds": 0,
-            "last_migration": datetime.datetime.now().isoformat()
+            "created_at": now_iso,
+            "last_migration": now_iso
         }
         state_file = os.path.join(u_dir_abs, "vault_state.json")
         with open(state_file, "w", encoding="utf-8") as fp:
@@ -257,6 +259,42 @@ class VaultManager:
     def is_locked(self) -> bool:
         return self.is_lock_enabled() and self._is_locked
 
+    def get_profile_age_hours(self) -> float:
+        """Returns the age of the active user profile/vault in hours."""
+        ts_candidates = []
+        for key in ("created_at", "last_migration"):
+            raw_iso = self._state.get(key)
+            if raw_iso and isinstance(raw_iso, str):
+                try:
+                    dt = datetime.datetime.fromisoformat(raw_iso)
+                    ts_candidates.append(dt.timestamp())
+                except Exception:
+                    pass
+        for path_cand in (self.state_file, os.path.join(self.state_dir, "config.json"), self.state_dir):
+            if path_cand and os.path.exists(path_cand):
+                try:
+                    ts_candidates.append(os.path.getctime(path_cand))
+                except Exception:
+                    pass
+        if not ts_candidates:
+            return 0.0
+        oldest_ts = min(ts_candidates)
+        now_ts = datetime.datetime.now().timestamp()
+        return max(0.0, (now_ts - oldest_ts) / 3600.0)
+
+    def has_full_repo_read_access(self, min_age_hours: float = 72.0) -> bool:
+        """
+        Grants full repository read access ONLY if:
+        1. User profile has a master password enabled (lock_enabled == True),
+        2. Vault is currently unlocked, and
+        3. Profile is at least `min_age_hours` (72 hours) old.
+        """
+        if not self.is_lock_enabled() or self.is_locked():
+            return False
+        if not self._state.get("salt_hex") or not self._state.get("verifier_hash"):
+            return False
+        return self.get_profile_age_hours() >= float(min_age_hours)
+
     def get_auto_lock_seconds(self) -> int:
         return int(self._state.get("auto_lock_seconds", 0))
 
@@ -367,10 +405,13 @@ class VaultManager:
             return False, f"Migration failed. Rollback executed: {msg}"
 
         # 3. Update state
+        now_iso = datetime.datetime.now().isoformat()
         self._state["lock_enabled"] = True
         self._state["salt_hex"] = new_salt.hex()
         self._state["verifier_hash"] = new_verifier
-        self._state["last_migration"] = datetime.datetime.now().isoformat()
+        if not self._state.get("created_at"):
+            self._state["created_at"] = self._state.get("last_migration") or now_iso
+        self._state["last_migration"] = now_iso
         self._save_state()
 
         self._session_key = new_key

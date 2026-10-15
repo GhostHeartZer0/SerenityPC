@@ -148,7 +148,16 @@ def apply_theme_to_settings_window(win, app=None):
                 except Exception: pass
             elif w_class in ("Radiobutton", "Checkbutton"):
                 try:
-                    w.config(bg=bg, fg=fg, selectcolor=widget_bg, activebackground=bg, activeforeground=accent_hl)
+                    is_push = getattr(w, "_is_push_radio", False) or (w_class == "Radiobutton" and str(w.cget("indicatoron")) in ("0", "False", "false"))
+                    if is_push:
+                        sync_fn = getattr(w, "_sync_radio_fn", None)
+                        if callable(sync_fn):
+                            sync_fn()
+                        else:
+                            w.config(bg=widget_bg, fg=fg, selectcolor=accent, activebackground=accent, activeforeground="#000000")
+                    else:
+                        chk_bg = "#141418" if str(widget_bg).lower() in ("#000000", "#050505") else widget_bg
+                        w.config(bg=bg, fg=fg, selectcolor=chk_bg, activebackground=bg, activeforeground=accent_hl)
                 except Exception: pass
             elif w_class == "Canvas":
                 try:
@@ -267,6 +276,12 @@ def open_settings_window(app, is_generating=None):
         win.bind("<Leave>", _unbind_settings_mousewheel, add="+")
 
         def on_closing():
+            try:
+                if "_apply_settings" in locals():
+                    _apply_settings(close_window=True, silent=True)
+                    return
+            except Exception as close_err:
+                print(f"[UI] Settings close apply warning: {close_err}")
             try:
                 geom = win.winfo_geometry()
                 if geom and "x" in geom and not geom.startswith("1x1"):
@@ -392,7 +407,7 @@ def open_settings_window(app, is_generating=None):
             "history_autosave_var": tk.StringVar(value=app.config.get("history_autosave_mode", "End")),
             "history_level_format_var": tk.StringVar(value=app.config.get("history_level_format", "All")),
             "reasoning_var": tk.StringVar(value=init_reasoning),
-            "delegation_enabled_var": tk.BooleanVar(value=app.config.get("delegation_enabled", False)),
+            "delegation_enabled_var": tk.BooleanVar(value=app.config.get("delegation_enabled", True)),
             "delegation_model_mode_var": tk.StringVar(value=app.config.get("delegation_model_mode", "lvl6_7_model")),
             "subagent_density_var": tk.StringVar(value=app.config.get("subagent_selection_mode", "minimal")),
             "cecilia_mode_var": tk.StringVar(value=app.config.get("cecilia_delegation_mode", "shadow_wizard")),
@@ -679,7 +694,7 @@ def open_settings_window(app, is_generating=None):
                 except: pass
 
         # --- 6. Save and Apply Logic ---
-        def _apply_settings(close_window=False):
+        def _apply_settings(close_window=False, silent=False):
             app.config["media_rendering"] = vars_dict["media_var"].get()
             app.state["deep_cook_behavior"] = vars_dict["v_behavior"].get()
             if app.state["deep_cook_behavior"] == "oneshot":
@@ -887,17 +902,98 @@ def open_settings_window(app, is_generating=None):
             except Exception as te:
                 print(f"[SETTINGS] Failed to apply theme: {te}")
 
-            app.save_config()
-            if draft_toggled and hasattr(app, "swap_tier") and hasattr(app, "current_model_tier"):
+            if hasattr(app, "save_config"):
+                app.save_config()
+            if not silent and draft_toggled and hasattr(app, "swap_tier") and hasattr(app, "current_model_tier"):
                 app.swap_tier(app.current_model_tier)
 
             if close_window:
-                messagebox.showinfo("Success", "Settings saved!", parent=win)
+                if not silent:
+                    messagebox.showinfo("Success", "Settings saved!", parent=win)
+                try:
+                    win.unbind_all("<MouseWheel>")
+                    print("[UI] Settings listener detached.")
+                except Exception:
+                    pass
                 win.destroy()
             else:
-                messagebox.showinfo("Success", "Settings applied successfully!", parent=win)
-                try: win.lift()
-                except Exception: pass
+                if not silent:
+                    messagebox.showinfo("Success", "Settings applied successfully!", parent=win)
+                    try: win.lift()
+                    except Exception: pass
+
+        def _live_sync_var(*_args):
+            """Immediately syncs interactive Settings toggles/radios into app.config and persists to disk."""
+            try:
+                if "deep_cook_cycles_var" in vars_dict:
+                    c_raw = str(vars_dict["deep_cook_cycles_var"].get()).strip().lower()
+                    app.config["deep_cook_cycles"] = "auto" if c_raw == "auto" else (int(c_raw) if c_raw.isdigit() else 3)
+                if "deep_cook_coop_var" in vars_dict:
+                    app.config["deep_cook_agent_coop"] = vars_dict["deep_cook_coop_var"].get()
+                if "deep_cook_format_var" in vars_dict:
+                    app.config["deep_cook_formatting"] = vars_dict["deep_cook_format_var"].get()
+                if "normal_format_var" in vars_dict:
+                    app.config["normal_generation_formatting"] = vars_dict["normal_format_var"].get()
+                if "delegation_enabled_var" in vars_dict:
+                    app.config["delegation_enabled"] = bool(vars_dict["delegation_enabled_var"].get())
+                if "delegation_model_mode_var" in vars_dict:
+                    app.config["delegation_model_mode"] = vars_dict["delegation_model_mode_var"].get()
+                if "subagent_density_var" in vars_dict:
+                    app.config["subagent_selection_mode"] = vars_dict["subagent_density_var"].get()
+                if "cecilia_mode_var" in vars_dict:
+                    app.config["cecilia_delegation_mode"] = vars_dict["cecilia_mode_var"].get()
+                if "show_cecilia_slider_var" in vars_dict:
+                    app.config["show_cecilia_slider"] = bool(vars_dict["show_cecilia_slider_var"].get())
+                if "chain_preset_var" in vars_dict:
+                    app.config["delegation_chain_preset"] = vars_dict["chain_preset_var"].get()
+                if "handoff_target_var" in vars_dict:
+                    app.config["delegation_handoff_target"] = vars_dict["handoff_target_var"].get()
+                if "v_behavior" in vars_dict:
+                    app.state["deep_cook_behavior"] = vars_dict["v_behavior"].get()
+                    app.config["deep_thought_behavior"] = vars_dict["v_behavior"].get()
+                if "k_cache_var" in vars_dict:
+                    app.config["k_cache_type"] = vars_dict["k_cache_var"].get()
+                if "v_cache_var" in vars_dict:
+                    app.config["v_cache_type"] = vars_dict["v_cache_var"].get()
+                if "hao_var" in vars_dict:
+                    app.config["hao_preset"] = vars_dict["hao_var"].get()
+                if "swa_var" in vars_dict:
+                    app.config["swa_kv_cache"] = vars_dict["swa_var"].get()
+                if "auto_vram_var" in vars_dict:
+                    app.config["auto_vram_offload"] = bool(vars_dict["auto_vram_var"].get())
+                if "spec_draft_var" in vars_dict:
+                    app.config["speculative_drafting"] = bool(vars_dict["spec_draft_var"].get())
+                if "thinking_var" in vars_dict:
+                    app.config["thinking_checkbox"] = bool(vars_dict["thinking_var"].get())
+                if "inline_md_var" in vars_dict:
+                    app.config["inline_markdown"] = bool(vars_dict["inline_md_var"].get())
+                if "format_prompts_var" in vars_dict:
+                    app.config["format_prompts_markdown"] = bool(vars_dict["format_prompts_var"].get())
+                if "overfill_behavior_var" in vars_dict:
+                    app.config["overfill_behavior_mode"] = vars_dict["overfill_behavior_var"].get()
+                    app.config["budget_recovery_mode"] = vars_dict["overfill_behavior_var"].get()
+                if "halt_behavior_var" in vars_dict:
+                    app.config["halt_behavior_mode"] = vars_dict["halt_behavior_var"].get()
+                if "reasoning_var" in vars_dict:
+                    app.config["reasoning_strength"] = vars_dict["reasoning_var"].get()
+                    app.config["muse_reasoning_strength"] = vars_dict["reasoning_var"].get()
+                if "resp_len_var" in vars_dict:
+                    app.config["response_length"] = vars_dict["resp_len_var"].get()
+                if "stream_var" in vars_dict:
+                    app.state["streaming_mode"] = vars_dict["stream_var"].get()
+                if "ratio_var" in vars_dict:
+                    app.config["max_token_ratio"] = vars_dict["ratio_var"].get()
+                if hasattr(app, "save_config"):
+                    app.save_config()
+            except Exception as sync_err:
+                print(f"[SETTINGS] Live sync warning: {sync_err}")
+
+        for _vk, _vv in list(vars_dict.items()):
+            if hasattr(_vv, "trace_add"):
+                try:
+                    _vv.trace_add("write", _live_sync_var)
+                except Exception:
+                    pass
 
         # Top Action Buttons
         save_close_btn = tk.Button(btn_frame, text="Save & Close", command=lambda: _apply_settings(True),

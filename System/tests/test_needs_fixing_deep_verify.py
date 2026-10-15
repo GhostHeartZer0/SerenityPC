@@ -139,6 +139,7 @@ class TestNeedsFixingDeepVerify(unittest.TestCase):
         self.app._load_dmn_backbone = MagicMock()
 
         # Switch to UserB (with password provided)
+        os.makedirs(self.app.get_user_dir("UserB"), exist_ok=True)
         with patch("tkinter.simpledialog.askstring", return_value="correct_pass"):
             res = ChatbotApp.switch_user(self.app, "UserB")
             self.assertTrue(res)
@@ -156,6 +157,7 @@ class TestNeedsFixingDeepVerify(unittest.TestCase):
         self.app.vault_manager = vault
         self.app.get_active_username = lambda: "Default"
 
+        os.makedirs(self.app.get_user_dir("PrivateUser"), exist_ok=True)
         with patch("tkinter.simpledialog.askstring", return_value=None):
             res = ChatbotApp.switch_user(self.app, "PrivateUser")
             self.assertFalse(res)
