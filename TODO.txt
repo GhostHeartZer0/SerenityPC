@@ -1,22 +1,22 @@
 # SerenityPC TODO List
 
-- [Human Decision Needed]: Decide whether lvl6/lvl7 test_bank items swap or stay as-is (current lvl6 Qs read Prime-like, lvl7 Qs read Cecilia-like) before expanding questions to ~10 each.
-- Persona prompts (Plan 4 confirmed): Lvl 7 prompt untouched; Divine Judgement stays a normal mode, nothing new.
-
 Needs Fixing:
-Ensure past prompts aren't being repeated in history... I have like 3 files that start the same but have wildly different prompts beyond that.
-Wringer.py - add a max guard, that prompts the model to continue if a max tokens limit was reached or close to it.
-- Clarify templating engine
-- Keyword / History lookups in thought log backend logs. (not entire history files!)
-- Dark Mode, individual selected items in Inference & Execution tab not distinguishable, need to see which one is selected.
-put affect engine stats in Backend Logs, under Thought log.
-	- Implemented 3D Continuous Affect Engine (PAD: V, A, D) with Ornstein-Uhlenbeck baseline reversion, time grounding, dynamic sampling parameters (min-p & temp), and anti-docility dominance recoil ($D \mathrel{+}= 0.2$, $V \mathrel{-}= 0.15$) against adversarial domestication.
-	- highscore leaderboards (top 5 each Lvl) for score percentage & speed
-	- Deep Cook: dropdowns not showing anything: Step (1, 2, or 3), Memory Assesment   
-  --- Cycle 3 | Drafting 1 --- is only visible in steps dropdown when nothing appears to be happening.
+- (None currently pending for v1.8.0 - all items resolved and verified)
 
 Completed Log: (Verify)
- `System/semantic_vault.py`, `System/thought_isolation.py`, `main.py`, `System/tests/test_hybrid_cognitive_vessel.py`):
+- History Turn Deduplication & Merging (`main.py`, `System/tests/test_security_hardening.py`):
+   - Implemented `_deduplicate_history_messages` to prevent repeated consecutive prompt loops in `.history.jsonz` and `.history.encz` files.
+- Wringer Max-Token Continuation Guard & Top-5 Leaderboards (`benchmarks/wringer/Wringer.py`, `benchmarks/wringer/analyze.py`):
+   - Implemented multi-pass continuation guard prompting model to continue when reaching or nearing (>= 90%) max output tokens.
+   - Added Top-5 highscore leaderboards per Level for score percentage and decode speed (t/s).
+- Clarified Templating Engine & Dark Mode Contrast (`System/settings_tabs.py`, `System/tests/test_needs_fixing_deep_verify.py`):
+   - Clarified action modes with explicit labels (`Save (Core → Slot)`, `Write (Slot → Core)`, `Modify (Edit Slot)`), instructions, slot markers (`★`), and parameter inspection popups.
+   - Fixed Dark Mode selected item distinguishability via `bind_radio_contrast` across all Inference & Execution tab radio groups.
+- Keyword / History Lookups in Thought Log Backend Logs (`System/kv_manager.py`, `main.py`, `System/tests/test_security_hardening.py`):
+   - Implemented `search_snippets` in `TurboVecIndex` extracting concise keyword-matched excerpts (bounded to 240 chars) without dumping entire history files into backend logs.
+- Affect Engine Stats in Backend Logs under Thought Log (`main.py`, `System/affect_engine.py`):
+   - Integrated pre-gen and post-turn 3D PAD vectors, dynamic temperament, sampling modulations, and anti-docility dominance recoil logging directly to the Thought Log.
+- Cecilia Hybrid Cognitive Vessel & Semantic Persistence (`System/affect_engine.py`, `System/semantic_vault.py`, `System/thought_isolation.py`, `main.py`, `System/tests/test_hybrid_cognitive_vessel.py`):
    - Implemented SQLite Semantic Vault with persistent DMN background distillation (`distilled_insights`, `interaction_history`) and keyword/recency grounding, guaranteeing Cecilia's semantic essence survives KV-cache flushes and context window recycling.
    - Enforced zero-leakage Thought Channel Isolation ensuring internal reasoning scratchpads never bleed into speech buffers.
 - Speculative MTP & Drafter Alignment Engine with Catch-all Fallback (`System/mtp_combo_scanner.py`, `System/settings_tabs.py`, `main.py`, `System/tests/test_mtp_combo_scanner.py`):
@@ -31,14 +31,6 @@ Completed Log: (Verify)
    - Guaranteed response prefix is dynamically resolved: displays "Cecilia:" for Persona Level 7 or active Cecilia subagent modes, and "Serenity:" for Levels 0 through 6.
    - Preserved chat template token separation (`<|im_start|>user`, `[INST]`, `<|turn|>`) to ensure prompt and thought/response isolation remains completely intact.
    - Added "Prompt:" and "Cecilia:" to stop token parameters in `System/params.json`.
-- Theme Overhaul, Persona Dynamic Borders & Red-on-Red Contrast Fix:
-   - High-Contrast Red Themes: Remapped Persona Lvl 3 thermo color to vivid crimson `#FF3355`; overhauled `goth` theme to pure OLED black background (`#000000`), vivid crimson text (`#ff3b5c`), and scarlet trim highlights (`#ff2442`).
-   - Obsidian Dark Theme Split: Created distinct `obsidian_dark` theme featuring dark granite background (`#0c0a14`), midnight purple widget surface (`#151122`), midnight blue accents (`#080c1e`), luminous purple trim (`#6347a6`), and electric violet highlights (`#7c5cfc`).
-   - Persona Dynamic Borders: Response window border (`chat_history`, `past_history_view`) binds primary persona level color; prompt window border (`input_control_frame`, `user_input`) binds secondary persona level color (`PERSONA_SECONDARY_COLORS`) when model is loaded and persona active.
-   - Global Settings & UI Color Overhaul: Created `apply_theme_to_settings_window` recursively refreshing all frames, labels, buttons, entries, radiobuttons, and canvases upon opening or switching themes; eliminated stuck Yellow Blacket labels and entries; eliminated stuck Apex styling on action buttons (`send_button`, `deep_thought_button`, `hurry_button`, `ghost_button`, `btn_add`, `mic_button`, `lore_btn`).
-   - OLED Blackout Dark Mode: Enforced absolute `#000000` backgrounds in dark mode with theme-colored text and clear foreground contrast.
-   - User vs Response Separation: User text (`#007acc` / `#87CEFA`) and response text (`CHAT_FG_COLORS` / `#FFD700` lead) verified distinct across all themes and dark mode.
-- Ecstatic Avatar 4.5s Auto-Revert Timer: Added 4.5s timeout on `serenity_ecstatic` state transitioning back to `listening` (and idle); auto-cancels active timer when avatar state changes.
 - Leaked Special Tokens Stripping: Added `<|message|>`, `<|start|>`, `<|end|>` to tag cleanup patterns and closers in `main.py` and `System/vision_handler.py`.
 - Subagent Active Banner Display: Banner displays `Subagent: Lvl X, <Model>` when autonomous subagents execute (dispatched via `_swap_for_step` and `subagent_status` queue events); cleanly reverts to orchestrator model on step completion, session finalization, or halt.
 - History Archive Titles & Pipeline Condensing: Grouped repeat levels into compact count notation (e.g. `7(8)`, `7(3), 5(2), 2`) for archive badges and expanded pipeline headers; kept filenames and display titles concise without quantity spam.
@@ -57,16 +49,6 @@ Completed Log: (Verify)
 
 V2.0 Roadmap:
 
-- V1.8.0 Deep Cook Cycles Verification (2, 3, 4, 8, 12, 16, 20, auto cycles).
-   - (COMPLETED) Verify Deep Cook cycle limit enforcement (2, 3, 4, 8, 12, 16, 20, auto) and cycle budget exit.
-   - Verify Deep Cook Vision & Dynamic Auto-Offload Optimization.
-   - (COMPLETED) Verify dropdown functions and inter-step population (accordion hygiene, auto-fallback parent tag, batch population).
-   - Ensure agents works with deep cook aligned with cycles (OTL individual steps, cycles, etc)
-      - Verify that OTL actually works, that if Lvl 5 is asked for, that the Lvl 6 or 7 model gets offloaded so the Lvl 5 model can load, when its finished generating that one offloads and the Lvl 6 or 7 model loads to review the result.
-   - (COMPLETED) Add robust config settings, a 'Deep Cook' section to the Agents settings menu about how agents and deep cook should cooperate. 
-   - (COMPLETED) Ensure dropdowns close and open correctly, and the right context is placed where it belongs.
-   - (COMPLETED) Add settings for formatting: per-cycle, per-step, upon completion, inline. Ensure this exists for both deep cook and normal generation (Inline, after thought/response completion(chunked), Upon End).
-   
 - V1.9.0 Creature comforts & Polishing
 - Overhaul tool calling, Cross refrence with SerenityDev to control the devserver, Integrate a terminal.
 - When unleashing Lvl 7, don't load the model first, to allow settings to properly populate.
@@ -133,3 +115,5 @@ TBD / Future Roadmap:
 - Wringer.py: add semantic depth and other areas (excluding tricks and catches) benchmark test banks.
 	- Expand Lvls 6 and 7, add an optional persona alignment test
 	- Coding benchmarks
+   - [Human Decision Needed]: Decide whether lvl6/lvl7 test_bank items swap or stay as-is (current lvl6 Qs read Prime-like, lvl7 Qs read Cecilia-like) before expanding questions to ~10 each.
+

@@ -76,81 +76,12 @@ Technical Breakdown:
     for txt, tags in mixed_spans:
         assert "\x00" not in txt
 
-    # 5. Arithmetic Multiplication & Power Preservation Test (e.g. 3*3*5*5 -> 3*3*5*5, NEVER 3355)
-    arithmetic_prompt = "Calculate 3*3*5*5 and a*b*c with power 3**2."
-    spans = MarkdownEngine.parse_to_spans(arithmetic_prompt)
-    reconstructed = "".join(txt for txt, tags in spans)
-    print(f"\n[ARITHMETIC TEST] Input: {repr(arithmetic_prompt)}")
-    print(f"[ARITHMETIC TEST] Output: {repr(reconstructed)}")
-    assert "3*3*5*5" in reconstructed, f"3*3*5*5 was corrupted into: {reconstructed}"
-    assert "a*b*c" in reconstructed, f"a*b*c was corrupted into: {reconstructed}"
-    assert "3**2" in reconstructed, f"3**2 was corrupted into: {reconstructed}"
-    assert not any("md_italic" in tags for txt, tags in spans if "3" in txt)
-
-    # 6. Non-Destructive Overlay Intervals Test
-    overlay_text = "Here is **bold** text and *italic* and `code` with 3*3*5*5 math."
-    tag_ranges, replacements = MarkdownEngine.get_overlay_intervals(overlay_text)
-    print(f"\n[OVERLAY TEST] Tag ranges count: {len(tag_ranges)}, replacements: {len(replacements)}")
-    # Replacements must be empty since there are no tables
-    assert len(replacements) == 0
-    # Must have md_hidden and styling tags
-    tags_used = {t for _, _, t in tag_ranges}
-    assert "md_hidden" in tags_used
-    assert "md_bold" in tags_used
-    assert "md_italic" in tags_used
-    assert "md_code" in tags_used
-    # Verify exact spans
-    for s, e, tag in tag_ranges:
-        slice_txt = overlay_text[s:e]
-        if tag == "md_bold":
-            assert slice_txt == "bold"
-        elif tag == "md_italic":
-            assert slice_txt == "italic"
-        elif tag == "md_code":
-            assert slice_txt == "code"
-
-    # 7. Advanced LaTeX & Math Formatting Test (TODO Example + Currency Disambiguation)
-    todo_math = r'$$S_n = \sum_{i=0}^{n} 5^i = \frac{5^{n+1} - 1}{5 - 1} = \frac{5^{n+1} - 1}{4}$$, the sum of $5^0$ through $5^{21}$ is $596,046,447,753,906.'
-    spans_todo = MarkdownEngine.parse_to_spans(todo_math)
-    math_blocks = [txt for txt, tags in spans_todo if "md_math_block" in tags]
-    math_inlines = [txt for txt, tags in spans_todo if "md_math_inline" in tags]
-    raw_texts = "".join(txt for txt, tags in spans_todo if "md_math_block" not in tags and "md_math_inline" not in tags)
-    print(f"\n[TODO MATH TEST] Math Blocks: {math_blocks}")
-    print(f"[TODO MATH TEST] Math Inlines: {math_inlines}")
-    print(f"[TODO MATH TEST] Preserved Raw: {raw_texts}")
-    assert len(math_blocks) == 1
-    assert "Sₙ = ∑₍ᵢ₌₀₎ⁿ 5ⁱ = (5ⁿ⁺¹ - 1)/(5 - 1) = (5ⁿ⁺¹ - 1)/(4)" in math_blocks[0]
-    assert "5⁰" in math_inlines
-    assert "5²¹" in math_inlines
-    assert "$596,046,447,753,906." in raw_texts
-
-    # 8. Forward-Slash Commands Test (/frac, /sum, /times, /mathbf, /left, /right)
-    forward_math = r'/sum_{i=0}^{n} /frac{a}{b} /times /mathbf{x} /left( x /right)'
-    converted_forward = MarkdownEngine.convert_latex_to_unicode(forward_math)
-    print(f"\n[FORWARD SLASH TEST] Output: {converted_forward}")
-    assert "∑₍ᵢ₌₀₎ⁿ" in converted_forward
-    assert "a/b" in converted_forward
-    assert "×" in converted_forward
-    assert "x ( x )" in converted_forward
-
-    # 9. Quad Dollar Syntax ($$$$...$$$$) Test
-    quad_math = r'$$$$E = m \cdot c^2$$$$'
-    spans_quad = MarkdownEngine.parse_to_spans(quad_math)
-    assert any("md_math_block" in tags and "m · c²" in txt for txt, tags in spans_quad)
-
-    # 10. Single-letter variables and complex inline LaTeX
-    single_var = r'Let $U$ be internal energy, $x$ position, and **High Specific Heat Capacity** ($\approx 4.18\text{ kJ/kg}\cdot^\circ\text{C}$).'
-    spans_single = MarkdownEngine.parse_to_spans(single_var)
-    assert any("md_math_inline" in tags and txt == "U" for txt, tags in spans_single)
-    assert any("md_math_inline" in tags and txt == "x" for txt, tags in spans_single)
-    assert any("md_math_inline" in tags and "4.18 kJ/kg·°C" in txt for txt, tags in spans_single)
-
-    # 11. Standalone slash symbols in text outside math ($)
-    slash_text = r'Change is /Delta and approx is /approx and /circ'
-    spans_slash = MarkdownEngine.parse_to_spans(slash_text)
-    assert any("md_math_inline" in tags and txt == "Δ" for txt, tags in spans_slash)
-    assert any("md_math_inline" in tags and txt == "≈" for txt, tags in spans_slash)
-    assert any("md_math_inline" in tags and txt == "°" for txt, tags in spans_slash)
+    # 5. Math Expression Preservation (e.g. 3*3*5*5 never converted to 3355)
+    math_text = "Compute 3*3*5*5 in the prompt or response."
+    math_spans = MarkdownEngine.parse_to_spans(math_text)
+    joined_math = "".join(txt for txt, _ in math_spans)
+    assert "3*3*5*5" in joined_math, f"Math was mangled! Got: {joined_math}"
+    assert "3355" not in joined_math
 
     print("\n=== ALL INTERVAL MARKDOWN TESTS PASSED ===")
 

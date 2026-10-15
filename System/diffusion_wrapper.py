@@ -8,16 +8,10 @@ class DiffusionCLIWrapper:
         self.app = app_instance
         self.model_path = model_path
         self.n_gpu_layers = n_gpu_layers
-        self.n_ctx = min(n_ctx, 4096)
+        self.n_ctx = n_ctx
         self.kwargs = kwargs
         self.chat_handler = kwargs.get("chat_handler", None)
         self.process = None
-
-    def token_bos(self):
-        return 2
-
-    def token_eos(self):
-        return 1
 
     def _push_event(self, status, content):
         if self.app and hasattr(self.app, "process_queue"):
@@ -57,22 +51,19 @@ class DiffusionCLIWrapper:
                 
         if not exe_path:
             self._push_event("diag_log_update", "ERROR: llama-diffusion-cli not found in standard paths!")
-            yield {"choices": [{"text": "", "delta": {"content": ""}}]}
+            yield {"choices": [{"text": ""}]}
             try: os.remove(temp_path)
             except: pass
             return
 
-        # Clamp max tokens to 1-2 canvas blocks (default 256)
-        n_predict = min(int(kwargs.get("max_tokens", 256)), 256)
+        n_predict = kwargs.get("max_tokens", 2048)
         
-        # Calculate context size exactly tailored to the prompt + generation, capped to 4096
+        # Calculate context size exactly tailored to the prompt + generation
         estimated_prompt_tokens = int(len(prompt) / 3.0) + 512
         actual_ctx = estimated_prompt_tokens + n_predict
-        actual_ctx = min(actual_ctx, self.n_ctx, 4096)
-
-        eb_max_steps = str(kwargs.get("diffusion_eb_max_steps", self.kwargs.get("diffusion_eb_max_steps", 24)))
-        eb_entropy_bound = str(kwargs.get("diffusion_eb_entropy_bound", self.kwargs.get("diffusion_eb_entropy_bound", 0.20)))
-        diff_steps = str(kwargs.get("diffusion_steps", self.kwargs.get("diffusion_steps", 64)))
+        
+        # Safety cap to prevent OOM
+        actual_ctx = min(actual_ctx, self.n_ctx)
 
         cmd = [
             exe_path,
@@ -82,12 +73,7 @@ class DiffusionCLIWrapper:
             "-ub", str(actual_ctx),
             "-f", temp_path,
             "-n", str(n_predict),
-            "--diffusion-visual",
-            "--diffusion-eb", "auto",
-            "--diffusion-eb-max-steps", eb_max_steps,
-            "--diffusion-eb-entropy-bound", eb_entropy_bound,
-            "--diffusion-steps", diff_steps,
-            "--diffusion-kv-cache", "on"
+            "--diffusion-visual"
         ]
 
         self.process = subprocess.Popen(
@@ -185,17 +171,15 @@ class DiffusionCLIWrapper:
         if last_clean_frame:
             self._push_event("diag_log_update", f"[DIFFUSION] Denoising finished in {elapsed_total:.2f}s ({len(step_times)} steps).")
             self._push_event("streaming_replace", "")
-            yield {"choices": [{"text": last_clean_frame, "delta": {"content": last_clean_frame}}]}
+            yield {"choices": [{"text": last_clean_frame}]}
         else:
-            yield {"choices": [{"text": "", "delta": {"content": ""}}]}
+            yield {"choices": [{"text": ""}]}
 
     def create_chat_completion(self, messages, stream=True, **kwargs):
         prompt = ""
         for m in messages:
-            role = m.get("role", "user")
-            content = m.get("content", "")
-            prompt += f"<start_of_turn>{role}\n{content}<end_of_turn>\n"
-        prompt += "<start_of_turn>model\n"
+            prompt += f"<|turn>{m['role']}\n{m['content']}<turn|>\n"
+        prompt += "<|turn>model\n"
         
         gen = self(prompt, stream=stream, **kwargs)
         if stream:
@@ -203,8 +187,5 @@ class DiffusionCLIWrapper:
         else:
             final_text = ""
             for chunk in gen:
-                if "delta" in chunk["choices"][0] and "content" in chunk["choices"][0]["delta"]:
-                    final_text += chunk["choices"][0]["delta"]["content"]
-                elif "text" in chunk["choices"][0]:
-                    final_text += chunk["choices"][0]["text"]
+                final_text += chunk["choices"][0]["text"]
             return {"choices": [{"message": {"content": final_text}}]}

@@ -78,6 +78,58 @@ def patch_llama_deallocator():
     except Exception:
         pass
 
+class BatchRelativeScoresView:
+    """
+    Maps absolute [n_past : n_past + n_tokens] slices and [idx] lookups into a fixed (n_batch, n_vocab) buffer.
+    Prevents ValueError broadcast shape crashes during speculative decoding (e.g. LlamaPromptLookupDecoding
+    or GgufDraftModel) where eval() decodes [last_token] + draft_tokens with self._logits_all=True while
+    scores is allocated with n_batch rows instead of n_ctx rows.
+    """
+    def __init__(self, backing_array):
+        self._buf = backing_array
+        self._n_batch = backing_array.shape[0]
+        self._offset = 0
+        self._last_len = 1
+
+    @property
+    def shape(self):
+        return self._buf.shape
+
+    @property
+    def dtype(self):
+        return self._buf.dtype
+
+    def __getitem__(self, key):
+        if isinstance(key, tuple) and len(key) == 2:
+            row_key, col_key = key
+            if isinstance(row_key, slice):
+                start = row_key.start or 0
+                stop = row_key.stop if row_key.stop is not None else (start + 1)
+                n_tok = max(1, min(self._n_batch, stop - start))
+                self._offset = start
+                self._last_len = n_tok
+                return self._buf[0:n_tok, col_key]
+            elif isinstance(row_key, int):
+                rel = (row_key - self._offset) if row_key >= 0 else (self._last_len + row_key)
+                rel = max(0, min(rel, self._n_batch - 1))
+                return self._buf[rel, col_key]
+        return self._buf[key]
+
+    def __setitem__(self, key, value):
+        self.__getitem__(key)[...] = value
+
+def wrap_model_scores_buffer(model):
+    """
+    Wraps model.scores in BatchRelativeScoresView if model has scores allocated as an ndarray.
+    """
+    if model is not None and hasattr(model, "scores") and model.scores is not None:
+        try:
+            if not isinstance(model.scores, BatchRelativeScoresView):
+                model.scores = BatchRelativeScoresView(model.scores)
+        except Exception as e:
+            print(f"[ENGINE] Warning wrapping model scores buffer: {e}")
+    return model
+
 def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_arch: str = None) -> bool:
     """
     Patches general.architecture and associated key prefixes in a GGUF file header

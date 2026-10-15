@@ -7,9 +7,7 @@
     "<|im_end|>",
     "<|eot_id|>",
     "You:",
-    "Prompt:",
-    "Serenity:",
-    "Cecilia:"
+    "Serenity:"
   ],
   "temperature": 0.8,
   "min_p": 0.05,

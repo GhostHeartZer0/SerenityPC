@@ -14,14 +14,16 @@ class MarkdownEngine:
         '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
         '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
         '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
-        'n': 'ⁿ', 'i': 'ⁱ', 'x': 'ˣ', 'y': 'ʸ', 'a': 'ᵃ', 'b': 'ᵇ', 'c': 'ᶜ', 'k': 'ᵏ', 'm': 'ᵐ'
+        'n': 'ⁿ', 'i': 'ⁱ', 'x': 'ˣ', 'y': 'ʸ', 'a': 'ᵃ', 'b': 'ᵇ', 'c': 'ᶜ', 'd': 'ᵈ',
+        'e': 'ᵉ', 'f': 'ᶠ', 'g': 'ᵍ', 'h': 'ʰ', 'j': 'ʲ', 'k': 'ᵏ', 'l': 'ˡ', 'm': 'ᵐ',
+        'o': 'ᵒ', 'p': 'ᵖ', 'r': 'ʳ', 's': 'ˢ', 't': 'ᵗ', 'u': 'ᵘ', 'v': 'ᵛ', 'w': 'ʷ', 'z': 'ᶻ'
     }
 
     SUBSCRIPT_MAP = {
         '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
         '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
         '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎',
-        'a': 'ₐ', 'e': 'ₑ', 'i': 'ᵢ', 'j': 'ⱼ', 'k': 'ₖ',
+        'a': 'ₐ', 'e': 'ₑ', 'h': 'ₕ', 'i': 'ᵢ', 'j': 'ⱼ', 'k': 'ₖ', 'l': 'ₗ',
         'm': 'ₘ', 'n': 'ₙ', 'o': 'ₒ', 'p': 'ₚ', 'r': 'ᵣ',
         's': 'ₛ', 't': 'ₜ', 'u': 'ᵤ', 'v': 'ᵥ', 'x': 'ₓ'
     }
@@ -125,8 +127,29 @@ class MarkdownEngine:
                 replacement = f"({c_num})/({c_den})"
             s = s[:f_start] + replacement + s[full_e:]
 
+        # 1.5 Math accents: \dot{Q} -> Q̇, \ddot{x} -> ẍ, \hat{x} -> x̂, \bar{x} -> x̄, \vec{x} -> x⃗, \tilde{x} -> x̃
+        accent_map = {
+            'dot': '\u0307', 'ddot': '\u0308', 'hat': '\u0302', 'widehat': '\u0302',
+            'bar': '\u0304', 'overline': '\u0304', 'tilde': '\u0303', 'widetilde': '\u0303',
+            'vec': '\u20d7', 'overrightarrow': '\u20d7'
+        }
+        accent_pat = r'\\(dot|ddot|widehat|hat|overline|bar|widetilde|tilde|overrightarrow|vec)\s*\{'
+        while True:
+            m = re.search(accent_pat, s)
+            if not m:
+                break
+            a_start = m.start()
+            a_cmd = m.group(1)
+            inner, _, in_e = cls._extract_balanced_braces(s[a_start:])
+            if inner is None:
+                break
+            c_inner = cls.convert_latex_to_unicode(inner.strip())
+            comb = accent_map.get(a_cmd, '')
+            rep_acc = (c_inner + comb) if len(c_inner) == 1 else f"{c_inner}{comb}"
+            s = s[:a_start] + rep_acc + s[a_start + in_e:]
+
         # 2. Formatting macros \mathbf, \text, \mathrm, etc. with balanced braces & whitespace preservation
-        macro_pattern = r'\\(?:mathbf|mathrm|mathit|text|textbf|textit|underline|mathbb|mathcal|boldsymbol)\s*\{'
+        macro_pattern = r'\\(?:mathbf|mathrm|mathit|mathsf|mathtt|text|textbf|textit|textrm|textup|underline|mathbb|mathcal|mathscr|mathfrak|boldsymbol|operatorname|mbox|hbox)\s*\{'
         while True:
             m = re.search(macro_pattern, s)
             if not m:
@@ -187,21 +210,25 @@ class MarkdownEngine:
         s = re.sub(r'([∑∏∫∬∭∮∂∇]₍[^₎]+₎)\^\{([^{}]+)\}', replace_sup_limit, s)
         s = re.sub(r'([∑∏∫∬∭∮∂∇]₍[^₎]+₎)\^([0-9a-zA-Z\+\-])', replace_sup_limit, s)
 
-        # 8. Convert simple superscripts: x^2 -> x², x^{10} -> x¹⁰
+        # 8. Convert simple superscripts: x^2 -> x², x^{10} -> x¹⁰ (avoid partial conversion on multi-char words)
         def replace_sup(m):
-            base, sup = m.group(1), m.group(2)
-            sup_clean = "".join(cls.SUPERSCRIPT_MAP.get(c, c) for c in sup)
-            return f"{base}{sup_clean}"
-        s = re.sub(r'([a-zA-Z0-9\)])\^\{([^{}]+)\}', replace_sup, s)
-        s = re.sub(r'([a-zA-Z0-9\)])\^([0-9nixy\+\-])', replace_sup, s)
+            base, sup = m.group(1), m.group(2).strip()
+            if all(c in cls.SUPERSCRIPT_MAP for c in sup) and (len(sup) <= 2 or not sup.isalpha()):
+                sup_clean = "".join(cls.SUPERSCRIPT_MAP[c] for c in sup)
+                return f"{base}{sup_clean}"
+            return f"{base}^({sup})" if len(sup) > 1 else f"{base}^{sup}"
+        s = re.sub(r'([^\s_\^\{])\^\{([^{}]+)\}', replace_sup, s)
+        s = re.sub(r'([^\s_\^\{])\^([0-9nixy\+\-])(?![a-zA-Z0-9])', replace_sup, s)
 
-        # 9. Convert simple subscripts: x_1 -> x₁, x_{10} -> x₁₀, S_n -> Sₙ
+        # 9. Convert simple subscripts: x_1 -> x₁, x_{10} -> x₁₀, \rho_{Pl} -> ρ_Pl (keep multi-letter words readable)
         def replace_sub(m):
-            base, sub = m.group(1), m.group(2)
-            sub_clean = "".join(cls.SUBSCRIPT_MAP.get(c, c) for c in sub)
-            return f"{base}{sub_clean}"
-        s = re.sub(r'([a-zA-Z0-9\)])_\{([^{}]+)\}', replace_sub, s)
-        s = re.sub(r'([a-zA-Z0-9\)])_([0-9aeijkmnoprstuvx])', replace_sub, s)
+            base, sub = m.group(1), m.group(2).strip()
+            if all(c in cls.SUBSCRIPT_MAP for c in sub) and (len(sub) <= 2 or not any(c.isalpha() for c in sub)):
+                sub_clean = "".join(cls.SUBSCRIPT_MAP[c] for c in sub)
+                return f"{base}{sub_clean}"
+            return f"{base}_({sub})" if " " in sub else f"{base}_{sub}"
+        s = re.sub(r'([^\s_\^\{])_\{([^{}]+)\}', replace_sub, s)
+        s = re.sub(r'([^\s_\^\{])_([0-9aehijklmnoqrstuvx])(?![a-zA-Z0-9])', replace_sub, s)
 
         # 10. Clean up residual backslashes on basic math
         s = re.sub(r'\\([a-zA-Z]+)', r'\1', s)

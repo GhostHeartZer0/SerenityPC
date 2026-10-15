@@ -1,0 +1,28 @@
+{
+    "engine": "llama-cpp",
+    "model_type": "Gemma-4-MoE",
+    "offloading": {
+        "strategy": "HAO",
+        "n_gpu_layers": 99,
+        "override_tensors": [
+            "exps=CPU"
+        ],
+        "description": "Pin 3.8B active experts to DRAM while keeping Global Attention and Encoders in VRAM."
+    },
+    "memory": {
+        "ctx_size": 32768,
+        "cache_type_k": "q4_0",
+        "cache_type_v": "q4_0",
+        "flash_attn": true,
+        "no_kv_offload": false
+    },
+    "ui_logic": {
+        "stream": false,
+        "wit_layer": {
+            "init": "Waking up the experts... (SATA speeds, hang tight)",
+            "thinking": "Hold up, lemme cook...",
+            "batching": "Almost there... batching the response.",
+            "delivery": "Wall dropping. Here's the deep dive:"
+        }
+    }
+}

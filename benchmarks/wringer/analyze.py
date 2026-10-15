@@ -21,8 +21,10 @@ for f in os.listdir(report_dir):
             levels = [(lvl, score, str(round(float(score) * 10, 1))) for lvl, score in raw_levels]
         if not levels: continue
         results[model] = {}
+        speed_matches = dict(re.findall(r'## (lvl\d+|carwash_test)[\s\S]*?Decode:\s*([\d\.]+)\s*t/s', content))
         for lvl, avg, pct in levels:
-            results[model][lvl] = {'avg': float(avg), 'pct': float(pct)}
+            tps_val = float(speed_matches.get(lvl, 0.0)) if lvl in speed_matches else 0.0
+            results[model][lvl] = {'avg': float(avg), 'pct': float(pct), 'tps': tps_val}
 
 # Calculate overall averages
 chart_data = {}
@@ -65,6 +67,21 @@ for m, data in sorted_models:
         else:
             row += " - |"
     print(row)
+
+
+print("\n### Top 5 Highscore Leaderboards Per Level (Score % & Decode Speed)")
+for lvl in all_display_levels:
+    lvl_entries = [(m, results[m][lvl]) for m in results if lvl in results[m]]
+    top5_score = sorted(lvl_entries, key=lambda x: (x[1]['pct'], x[1]['avg']), reverse=True)[:5]
+    top5_speed = sorted([e for e in lvl_entries if e[1].get('tps', 0) > 0], key=lambda x: x[1]['tps'], reverse=True)[:5]
+    print(f"\n#### {lvl.upper()}")
+    print("Top 5 Score Percentage:")
+    for rank, (m_name, m_d) in enumerate(top5_score, 1):
+        print(f"  {rank}. {m_name} — {m_d['pct']:.1f}% ({m_d['avg']:.2f}/10)")
+    if top5_speed:
+        print("Top 5 Decode Speed:")
+        for rank, (m_name, m_d) in enumerate(top5_speed, 1):
+            print(f"  {rank}. {m_name} — {m_d['tps']:.2f} t/s ({m_d['pct']:.1f}%)")
 
 # Fallback chart generation
 if chart_data:

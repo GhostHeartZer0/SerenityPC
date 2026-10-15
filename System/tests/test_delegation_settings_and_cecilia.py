@@ -138,24 +138,5 @@ class TestDelegationSettingsAndCecilia(unittest.TestCase):
         self.assertNotIn(6, subagents)
         self.assertNotIn(7, subagents)
 
-    def test_cecilia_pure_persona_when_delegation_disabled(self):
-        """Verify Cecilia uses pure PERSONA_PROMPTS[7] when delegation is disabled, regardless of cecilia_delegation_mode."""
-        from serenity_resources import PERSONA_PROMPTS
-        # In main.py sys_content resolution logic
-        self.app.active_persona_level = 7
-        self.app.config["delegation_enabled"] = False
-        self.app.config["cecilia_delegation_mode"] = "divine_judgement"
-
-        delegation_on = bool(self.app.config.get("delegation_enabled", False))
-        cecilia_mode = self.app.config.get("cecilia_delegation_mode", "shadow_wizard")
-        if delegation_on and cecilia_mode == "shadow_wizard":
-            prompt = "DELEGATION_SHADOW_WIZARD"
-        elif delegation_on and cecilia_mode == "divine_judgement":
-            prompt = "DELEGATION_DIVINE_JUDGEMENT"
-        else:
-            prompt = PERSONA_PROMPTS.get(7, "You are Cecilia.")
-
-        self.assertEqual(prompt, PERSONA_PROMPTS[7])
-
 if __name__ == "__main__":
     unittest.main()

@@ -1,14 +1,21 @@
-"""System/hud_viewer.py
-Standalone visual prompt & diagram HUD viewer for SerenityPC.
-Eliminates runtime Python script generation/execution.
-"""
-
 import sys
 import json
 import tkinter as tk
 from tkinter import scrolledtext
 
-def display_hud(req_type: str, content: str):
+def main():
+    if len(sys.argv) < 2:
+        return
+    data_path = sys.argv[1]
+    try:
+        with open(data_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return
+
+    req_type = data.get("req_type", "IMAGE")
+    content = data.get("content", "")
+
     root = tk.Tk()
     root.title("Serenity Visual HUD")
     root.attributes('-topmost', True)
@@ -32,19 +39,4 @@ def display_hud(req_type: str, content: str):
     root.mainloop()
 
 if __name__ == "__main__":
-    if len(sys.argv) > 2:
-        req_t = sys.argv[1]
-        payload = sys.argv[2]
-    elif len(sys.argv) == 2:
-        try:
-            data = json.loads(sys.argv[1])
-            req_t = data.get("type", "VISUAL")
-            payload = data.get("prompt", "")
-        except Exception:
-            req_t = "VISUAL"
-            payload = sys.argv[1]
-    else:
-        req_t = "VISUAL"
-        payload = "No content provided."
-
-    display_hud(req_t, payload)
+    main()
