@@ -170,7 +170,7 @@
         "mid": 64,
         "transcendent": 64
     },
-    "sash_pos": 481,
+    "sash_pos": 632,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
     "active_persona_level": 1,
@@ -547,6 +547,5 @@
     "settings_window_geometry": "860x950",
     "scroll_lock_enabled": false,
     "user_notes": "",
-    "format_prompts_markdown": false,
-    "vault_modal_geometry": "480x380+354+337"
+    "format_prompt_markdown": false
 }

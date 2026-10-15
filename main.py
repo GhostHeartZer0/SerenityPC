@@ -10661,6 +10661,8 @@ class ChatbotApp:
 sys.excepthook = log_uncaught_exception
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     try:
         enable_high_dpi_awareness()
         print("Starting SerenityPC...")

@@ -21,6 +21,11 @@
 ## Current Version:
 
 ### Version 1.8.0
+- **Standalone Onedir Distribution Layout & Asset Packaging (`build_exe.bat`, `SerenityPC.spec`)**:
+  - Resolved delayed expansion issue in `build_exe.bat` ensuring post-build assembly step correctly populates standalone folder layout (`Media`, `Users`, `Models`, `Logs`, `History`, `System/config.json`, `System/serenity.ico`).
+  - Added normalized `BUILD_MODE` parsing and delayed expansion resolution in `build_exe.bat`.
+  - Added `('Media', 'System/Media')` to `datas` bundle in `SerenityPC.spec` ensuring loading screen frames, avatar images, and `serenity_resources.MEDIA_DIR` resolve cleanly across both onedir and onefile builds.
+  - Synchronized `exe_name` fallback with `APP_NAME` environment variable in `SerenityPC.spec`.
 - **Wringer Max Guard, Top-5 Leaderboards, History Deduplication & Thought Log Snippets (`benchmarks/wringer/Wringer.py`, `benchmarks/wringer/analyze.py`, `System/kv_manager.py`, `System/vault_manager.py`, `System/tool_registry.py`, `System/orchestration_manager.py`, `main.py`, `System/tests/test_security_hardening.py`)**:
   - Wringer Max-Token Continuation Guard: Implemented multi-pass continuation guard in `Wringer.py` prompting the model to resume seamlessly when reaching or nearing (>= 90%) max output tokens.
   - Per-Level Top-5 Highscore Leaderboards: Implemented score percentage and decode speed (t/s) Top-5 leaderboards per Level with persistence in `wringer_highscores.json` and ranking analysis in `analyze.py`.
