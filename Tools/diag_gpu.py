@@ -8,9 +8,12 @@ def get_cuda_path():
     if os.path.exists(base_install):
         versions = glob.glob(os.path.join(base_install, "v*")) 
         if versions:
+            v12 = [v for v in versions if os.path.basename(v).startswith("v12")]
+            if v12:
+                return os.path.join(sorted(v12)[-1], "bin")
             latest = sorted(versions)[-1]
             return os.path.join(latest, "bin")
-    return None
+    return os.environ.get('CUDA_PATH') or os.environ.get('CUDA_HOME')
 
 cuda_bin = get_cuda_path()
 print(f"Detected CUDA Bin: {cuda_bin}")

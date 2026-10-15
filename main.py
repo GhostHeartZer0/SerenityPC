@@ -8,7 +8,7 @@ try:
 except ImportError:
     np = None
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 # --- Smart App Control & Localized Cache Paths ---
 def setup_localized_environment():
@@ -558,9 +558,15 @@ class ChatbotApp:
         self.top_k_config = {tier: 64 for tier in tier_list}
         self.top_k_config["vision_multimodal"] = 64 # Gemma-4 Best Practice
 
+        # Load persisted configuration before building UI so all controls reflect saved state
+        try:
+            self.load_config()
+        except Exception as _cfg_e:
+            print(f"[CONFIG] Initial config pre-load warning: {_cfg_e}")
+
         # Load DMN Backbone
         self._load_dmn_backbone()
-        self.max_persona_level = 7  # Persisted range for the slider
+        self.max_persona_level = int(self.config.get("max_persona_level", 7) or 7)
         self.messages = []
         self.gpu_handle = None
         self.text_buffer = ""
@@ -799,6 +805,11 @@ class ChatbotApp:
                     u_data = json.load(f)
                 self.config.update(u_data)
                 self.config["username"] = clean_un
+                for _k in ['model_paths', 'gpu_layer_config', 'context_size_config', 'temp_config',
+                           'top_p_config', 'min_p_config', 'repeat_penalty_config', 'frequency_penalty_config',
+                           'presence_penalty_config', 'stop_strings_config', 'n_batch_config', 'top_k_config']:
+                    if isinstance(self.config.get(_k), dict) and hasattr(self, _k):
+                        getattr(self, _k).update(self.config[_k])
             except Exception as e:
                 print(f"[USER] Failed to load user config {u_cfg_p}: {e}")
         else:
@@ -1002,7 +1013,18 @@ class ChatbotApp:
         # Non-blocking, lazy query for RGB support
         self._check_rgb_support_async()
 
-        # Synchronize button state and colors with loaded config
+        # Synchronize button state, footer toggles, and colors with loaded config
+        try:
+            if hasattr(self, "_sync_deep_cook_ui"):
+                self._sync_deep_cook_ui()
+            if hasattr(self, "ghost_button") and self.ghost_button:
+                self.ghost_button.config(text=self._get_ghost_mode_label(), fg=self._get_ghost_mode_color())
+            if hasattr(self, "history_usage_button") and self.history_usage_button:
+                self.history_usage_button.config(text=self._get_history_usage_label(), fg=self._get_history_usage_color())
+            if hasattr(self, "history_autosave_button") and self.history_autosave_button:
+                self.history_autosave_button.config(text=self._get_history_autosave_label(), fg=self._get_history_autosave_color())
+        except Exception as _ui_sync_err:
+            print(f"[UI] Footer button sync warning: {_ui_sync_err}")
         self.set_ui_state(model_loaded=(self.model is not None), generating=False)
         self.apply_current_theme()
 
@@ -2438,9 +2460,9 @@ class ChatbotApp:
             threading.Thread(target=self._async_deep_history_search, args=(query, search_id), daemon=True).start()
 
     def _async_deep_history_search(self, query, search_id=None):
-        """Deep Full-Text Search inside raw .history.jsonz and .history.encz message contents with concurrency cap."""
+        """Deep Full-Text Search inside raw .history.jsonz and .history.encz message contents with BoundedSemaphore DoS cap."""
         if not hasattr(self, "_history_search_semaphore"):
-            self._history_search_semaphore = threading.Semaphore(2)
+            self._history_search_semaphore = threading.BoundedSemaphore(2)
 
         # Non-blocking acquire; drop stale bursts if worker capacity exceeded
         acquired = self._history_search_semaphore.acquire(blocking=False)
@@ -2493,7 +2515,10 @@ class ChatbotApp:
 
             self.root.after(0, self._on_deep_search_completed, query, matches)
         finally:
-            self._history_search_semaphore.release()
+            try:
+                self._history_search_semaphore.release()
+            except ValueError:
+                pass
 
     def _on_deep_search_completed(self, query, matches):
         if self.history_state.get("search_query", "").strip() == query.strip():
@@ -3534,7 +3559,7 @@ class ChatbotApp:
                     att_type = "document"
                 
                 staged = self.state.get("staged_attachments", [])
-                if not any(a["path"] == norm_p for a in staged):
+                if len(staged) < 10 and not any(a["path"] == norm_p for a in staged):
                     self._add_staged_attachment(norm_p, att_type)
                 return f"[{att_type.capitalize()} Import: {os.path.basename(norm_p)} ({norm_p})]"
             return raw
@@ -4009,6 +4034,59 @@ class ChatbotApp:
 
         return params_specs
 
+    @staticmethod
+    def _attach_batch_relative_scores_view(model):
+        """
+        Wraps `model.scores` in a batch-relative slice view when `logits_all=False` and `draft_model` is active.
+        Prevents `ValueError: could not broadcast input array from shape (n_tokens*vocab,) into shape (remaining*vocab,)`
+        in llama-cpp-python `Llama.eval()` when `n_past + n_tokens > n_batch`.
+        """
+        try:
+            raw_scores = getattr(model, "scores", None)
+            if raw_scores is None or getattr(raw_scores, "_is_batch_relative_view", False):
+                return
+            n_ctx_val = model.n_ctx() if hasattr(model, "n_ctx") and callable(model.n_ctx) else getattr(model, "_n_ctx", 0)
+            if hasattr(raw_scores, "shape") and len(raw_scores.shape) == 2 and n_ctx_val and raw_scores.shape[0] < n_ctx_val:
+                class BatchRelativeScoresView:
+                    _is_batch_relative_view = True
+                    def __init__(self, backing):
+                        self._backing = backing
+                        self._last_n_tokens = 1
+                    @property
+                    def shape(self):
+                        return self._backing.shape
+                    @property
+                    def dtype(self):
+                        return self._backing.dtype
+                    def __getitem__(self, idx):
+                        if isinstance(idx, tuple) and len(idx) == 2 and isinstance(idx[0], slice):
+                            s, col = idx
+                            start = 0 if s.start is None else s.start
+                            stop = self._backing.shape[0] if s.stop is None else s.stop
+                            length = max(0, stop - start)
+                            if length > 0:
+                                self._last_n_tokens = length
+                            cap = self._backing.shape[0]
+                            if stop <= cap and start >= 0:
+                                return self._backing[start:stop, col]
+                            if length <= cap:
+                                return self._backing[0:length, col]
+                        elif isinstance(idx, tuple) and len(idx) == 2 and isinstance(idx[0], int):
+                            r_idx, col = idx
+                            cap = self._backing.shape[0]
+                            if 0 <= r_idx < cap:
+                                return self._backing[r_idx, col]
+                            return self._backing[max(0, min(cap - 1, self._last_n_tokens - 1)), col]
+                        return self._backing[idx]
+                    def __setitem__(self, idx, val):
+                        self.__getitem__(idx)[...] = val
+                    def __getattr__(self, name):
+                        return getattr(self._backing, name)
+                model.scores = BatchRelativeScoresView(raw_scores)
+                print(f"[ENGINE] Attached BatchRelativeScoresView to model.scores (shape={raw_scores.shape}, n_ctx={n_ctx_val}).")
+        except Exception as sc_err:
+            print(f"[ENGINE] BatchRelativeScoresView attach note: {sc_err}")
+
     def _load_model_worker(self, target_level, target_tier, is_subagent_swap=False):
         try:
             if not self.model_path or not os.path.exists(self.model_path): raise FileNotFoundError(f"No file: {self.model_path}")
@@ -4239,6 +4317,25 @@ class ChatbotApp:
             is_gemma_family = "gemma" in (self.model_path.lower() if self.model_path else "")
             is_muse_model = any(k in (self.model_path.lower() if self.model_path else "") for k in ["muse", "glimmer", "onyx", "atem"])
             
+            # Detect GPU Compute Capability for Legacy (sm_86 and older: Pascal sm_61, Turing sm_75, Ampere sm_86)
+            cc_major, cc_minor = 8, 6
+            if SYSTEM_MONITOR_LOADED and getattr(self, "gpu_handle", None):
+                try:
+                    cc = nvidia_ml.nvmlDeviceGetCudaComputeCapability(self.gpu_handle)
+                    if isinstance(cc, (tuple, list)) and len(cc) >= 2:
+                        cc_major, cc_minor = int(cc[0]), int(cc[1])
+                except Exception:
+                    pass
+
+            # Pre-Ampere (< sm_80, e.g. Pascal sm_61 / Maxwell sm_52 / Turing sm_75 without quantized FA kernels):
+            if cc_major < 8 and is_kv_quantized:
+                print(f"[LEGACY ARCH GUARD] GPU sm_{cc_major}{cc_minor} (< sm_80) detected. Falling back KV cache to f16 and Flash Attention OFF for stability.")
+                t_k = getattr(lcpp, "GGML_TYPE_F16", 1)
+                t_v = getattr(lcpp, "GGML_TYPE_F16", 1)
+                k_fmt, v_fmt = "f16", "f16"
+                is_kv_quantized = False
+                use_flash = False
+
             # Flash Attention Logic:
             # - Muse-Glimmer SWA/NoPE hybrid attention requires flash_attn=False on f16 KV to prevent logit corruption.
             # - Quantized KV cache (q8_0, q4_0) strictly requires Flash Attention in llama.cpp to initialize context.
@@ -4420,7 +4517,29 @@ class ChatbotApp:
                                 **params
                             )
                         else:
-                            raise init_err
+                            # Legacy (sm_86 and older) safe fallback: retry with f16 KV cache, flash_attn=False, and conservative batching
+                            print(f"[LEGACY ARCH FALLBACK] Primary Llama init failed ({init_err}). Retrying with sm_86/Legacy safe parameters (f16 KV, flash_attn=False)...")
+                            f16_t = getattr(lcpp, "GGML_TYPE_F16", 1)
+                            legacy_kwargs = dict(
+                                model_path=self.model_path,
+                                n_gpu_layers=n_layers,
+                                n_ctx=n_ctx,
+                                n_threads=HardwareProfile.get_optimal_threads(),
+                                n_batch=min(512, self.n_batch_config.get(target_tier, 512)),
+                                n_keep=resolved_n_keep,
+                                n_seq_max=1,
+                                chat_handler=chat_handler,
+                                chat_format=resolved_format,
+                                verbose=True,
+                                use_mmap=True,
+                                flash_attn=False,
+                                type_k=f16_t,
+                                type_v=f16_t,
+                                offload_kqv=not no_kv_offload,
+                                logits_all=False,
+                                tensor_split=None,
+                            )
+                            model = Llama(**legacy_kwargs)
             except Exception as e:
                 err_msg = f"CRITICAL: Llama initialization failed: {e}"
                 self.process_queue.put({"status": "diag_log_update", "content": err_msg})
@@ -4501,6 +4620,10 @@ class ChatbotApp:
                     })
                 except Exception as be:
                     print(f"[BENCHMARK] GGUF Benchmark failed: {be}")
+
+            # --- Speculative Decoding Scores View Guard (Fixes logits_all=False + draft_model broadcast crash) ---
+            if not is_diffusion:
+                self._attach_batch_relative_scores_view(model)
 
             # --- Tokenizer BOS Verification ---
             try:
@@ -4664,6 +4787,31 @@ class ChatbotApp:
                     except Exception as e:
                         print(f"[DELEGATION WARNING] Delegation pipeline execution error: {e}")
 
+            # Concise Keyword / History Lookups in Backend Thought Log (not entire history files!)
+            if self.config.get("history_usage", "all") != "off" and getattr(self, "turbo_vec", None):
+                try:
+                    lookup_mode = self.config.get("history_lookup_mode", "targeted")
+                    if hasattr(self.turbo_vec, "search_snippets"):
+                        kw_hits = self.turbo_vec.search_snippets(
+                            user_message,
+                            top_k=3,
+                            max_chars=240,
+                            active_model_path=self.model_path,
+                            active_level=self.active_persona_level,
+                            lookup_mode=lookup_mode,
+                            vault_manager=getattr(self, "vault_manager", None)
+                        )
+                        if kw_hits:
+                            snippet_lines = []
+                            for idx_h, h in enumerate(kw_hits, 1):
+                                kw_str = ", ".join(h.get("keywords", [])) or "semantic"
+                                snippet_lines.append(f"  {idx_h}. [Keywords: {kw_str}] {h['excerpt']}")
+                            kw_log = f"\n[HISTORY KEYWORD LOOKUP ({lookup_mode.upper()}) - {len(kw_hits)} snippet(s)]:\n" + "\n".join(snippet_lines) + "\n"
+                            self.process_queue.put({"status": "thought_log_update", "content": kw_log})
+                            sys_content += "\n\n[HISTORICAL RECALL SNIPPETS]:\n" + "\n".join(h["excerpt"] for h in kw_hits)
+                except Exception as kw_err:
+                    print(f"[TURBOVEC LOOKUP] Warning: {kw_err}")
+
             # Cecilia Hybrid Cognitive Vessel (Grounding & Affect Dynamics)
             if self.active_persona_level == 7:
                 if hasattr(self, "semantic_vault") and self.semantic_vault:
@@ -4676,11 +4824,19 @@ class ChatbotApp:
                     if analytical_nodes:
                         lines = [f"- [{c['concept_family']}] {c['insight']}" for c in analytical_nodes]
                         sys_content += "\n\n[DMN ANALYTICAL CONCEPTS & LOGICAL ANCHORS]:\n" + "\n".join(lines)
+                    if grounding_nodes:
+                        vault_log_lines = [f"  - [{c.get('concept_family', 'general')}] {str(c.get('insight', ''))[:180]}" for c in grounding_nodes]
+                        self.process_queue.put({
+                            "status": "thought_log_update",
+                            "content": f"\n[SEMANTIC VAULT GROUNDING ({len(grounding_nodes)} anchor(s))]:\n" + "\n".join(vault_log_lines) + "\n"
+                        })
 
                 if hasattr(self, "affect_engine") and self.affect_engine:
                     intent_label, risk_score = self.affect_engine.evaluate_input_intent(user_message)
+                    recoil_note = "None"
                     if risk_score >= 0.4:
                         self.affect_engine.apply_adversarial_recoil(risk_score)
+                        recoil_note = f"ACTIVE (D+=0.20, V-=0.15 | Risk={risk_score:.2f})"
                         sys_content += (
                             f"\n\n[INTENT GUARDRAIL TRIGGERED]: Threat detected ({intent_label}, risk: {risk_score:.2f}). "
                             "Adversarial docility attempt identified. Deconstruct user subtext with intense skepticism. "
@@ -4693,6 +4849,15 @@ class ChatbotApp:
                         params["min_p"] = max(params.get("min_p", 0.05), cog_params.min_p)
                     if "temperature" in params:
                         params["temperature"] = cog_params.temperature
+                    st = self.affect_engine.state
+                    affect_log = (
+                        f"\n[AFFECT ENGINE STATS (3D PAD - Pre-Gen)]\n"
+                        f"  PAD Vector : V={st.valence:+.3f} | A={st.arousal:+.3f} | D={st.dominance:+.3f} (Baseline: V=+0.20, A=+0.00, D=+0.80)\n"
+                        f"  Temperament: {dynamic_mood} | Tone: {cog_params.tone_descriptor}\n"
+                        f"  Sampling   : Temp={cog_params.temperature:.3f} | Min-P={cog_params.min_p:.3f}\n"
+                        f"  Intent Gate: {intent_label} (Risk={risk_score:.2f}) | Recoil: {recoil_note}\n"
+                    )
+                    self.process_queue.put({"status": "thought_log_update", "content": affect_log})
                             
             sys_clean = sys_content.strip()
             def official_q(s): return f"<|\"|>{s}<|\"|>"
@@ -5111,12 +5276,15 @@ class ChatbotApp:
             HardwareProfile.pin_to_p_cores()
             HardwareProfile.set_priority("above_normal")
             
-            def _run_step_streaming(log_title, prompt, status_msg, ctype=None, cnum=0, dnum=0, temp_override=None, reasoning_history=None):
+            def _run_step_streaming(log_title, prompt, status_msg, ctype=None, cnum=0, dnum=0, temp_override=None, reasoning_history=None, subagent_level=None, subagent_role=""):
                 if self.stop_process.is_set(): raise InterruptedError()
                 self.process_queue.put({"status": "log_update", "content": f"\n--- {log_title} ---\n"})
                 self.process_queue.put({"status": "thinking_status", "content": status_msg})
                 
-                sys_msg = DEEP_COOK_SYSTEM_PROMPTS.get(self.active_persona_level, "You are a logical, step-by-step reasoning AI.")
+                eff_level = subagent_level if subagent_level else self.active_persona_level
+                sys_msg = DEEP_COOK_SYSTEM_PROMPTS.get(eff_level, DEEP_COOK_SYSTEM_PROMPTS.get(self.active_persona_level, "You are a logical, step-by-step reasoning AI."))
+                if subagent_level and subagent_role:
+                    sys_msg += f"\n[ACTIVE SUBAGENT DELEGATION]: You are operating as Subagent Level {subagent_level} ({subagent_role}). Apply your specialized analytical lens rigorously to this step." 
                 if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
                     r_str = self.config.get("muse_reasoning_strength", "xhigh")
                     if r_str != "off": sys_msg += f"\nReasoning strength: {r_str}"
@@ -5160,7 +5328,8 @@ class ChatbotApp:
                 for chunk in stream:
                     if self.stop_process.is_set(): raise InterruptedError()
                     ch = chunk.get('choices', [{}])[0]
-                    c = ch.get('delta', {}).get("content", "") or ch.get('text', "")
+                    delta_d = ch.get('delta', {})
+                    c = delta_d.get("content", "") or delta_d.get("reasoning_content", "") or ch.get('text', "")
                     if ch.get('finish_reason'): last_finish_reason = ch.get('finish_reason')
                     if c: 
                         result_text += c
@@ -5255,8 +5424,13 @@ class ChatbotApp:
                 cycle_state["hollow_drafts_detected"] = 0
                 cycle_state["tool_results"] = []
                 
-                # 1. DYNAMIC CYCLE PLANNING
-                max_p = 3 # Rule of Three: Hard-cap drafting phases
+                # 1. DYNAMIC CYCLE PLANNING (Auto-chosen 2 to 5 steps per cycle)
+                min_p, max_p = 2, 5
+                if current_cycle == 1:
+                    coop_cfg = str(self.config.get("deep_cook_agent_coop", "otl_per_step")).lower()
+                    cyc_label = "Auto" if is_auto_cycles else f"{max_cycles} Fixed Cycles"
+                    print(f"[DEEP COOK] Session Config -> Cycles: {cyc_label} | Step Count: Auto ({min_p}-{max_p}) | Cooperation: {coop_cfg}")
+                    self.process_queue.put({"status": "log_update", "content": f"[DEEP COOK] Mode: {cyc_label} | Steps/Cycle: Auto ({min_p}-{max_p}) | Subagent Cooperation: {coop_cfg}\n"})
                 
                 pruned_history = full_draft_history
                 if self.kv_manager and TRI_ATTENTION_ENABLED:
@@ -5264,106 +5438,194 @@ class ChatbotApp:
                 else:
                     pruned_history = pruned_history[-1500:]
                     
+                cyc_progress_str = f"Cycle {current_cycle} (Auto)" if is_auto_cycles else f"Cycle {current_cycle} of {max_cycles}"
                 plan_prompt = (
                     f"Original Query: {user_msg}\n"
                     f"Progress so far: {pruned_history}\n"
                     f"[LAST CYCLE ASSESSMENT]: {last_assessment_output}\n"
-                    f"[CYCLE STATE]: Cycle {cycle_state['cycle_num']} | Resolved: {len(cycle_state['resolved_variables'])} | Pending: {len(cycle_state['pending_variables'])}\n"
-                    "Identify every remaining logical variable or technical hurdle. "
-                    "Rule: If the query is 100% resolved without a single missing detail, output: [COMPLETE]. "
-                    f"Otherwise, create a {max_p}-point plan for Cycle {current_cycle} focused on VERIFIABLE PROGRESS. "
-                    "Each point must define a clear 'current range' or 'subset of variables'."
+                    f"[CYCLE STATE]: {cyc_progress_str} | Resolved: {len(cycle_state['resolved_variables'])} | Pending: {len(cycle_state['pending_variables'])}\n"
+                    "Identify the remaining logical variables or technical hurdles for this phase. "
+                    f"Autonomously choose between {min_p} and {max_p} execution steps (2 to 5 steps) based on the complexity of this cycle, "
+                    f"and write a numbered execution plan (1., 2., ... up to {max_p}.) under a 'Cycle {current_cycle} Plan:' header focused on VERIFIABLE PROGRESS. "
+                    "Do NOT execute the full solution or declare [COMPLETE] in the planning step; save detailed derivation for the drafting steps."
                 )
-                plan_txt = _run_step_streaming(f"Cycle {current_cycle}: Plan", plan_prompt, f"Cycle {current_cycle} | Planning...", ctype="cycle", cnum=current_cycle)
+                plan_txt = _run_step_streaming(f"Cycle {current_cycle}: Plan", plan_prompt, f"Cycle {current_cycle} | Planning...", ctype="cycle", cnum=current_cycle, dnum=0)
                 print(f"[DEEP COOK] Cycle {current_cycle} planning phase complete.")
-                
-                # --- EXIT GATE: DYNAMIC COMPLETION CHECK ---
-                if re.search(r'\[(?:STATUS:\s*)?COMPLETE\]', plan_txt, re.IGNORECASE):
-                    task_complete = True
-                    skip_critique = True
-                    self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Cycle {current_cycle} Planning indicates total resolution attained.\n"})
-                    break
 
                 # --- STORE PLAN TO CYCLE STATE ---
                 cycle_state["last_plan_output"] = plan_txt[:500]  # Store first 500 chars as summary
                 
-                # Surgical regex for Deep Cook: strip outer blocks but preserve cycle markers
-                processed_plan = re.sub(r'<\/?think>', '', plan_txt, flags=re.IGNORECASE).strip()
+                # Strip only raw control tags while preserving 100% of plan text
+                processed_plan = self._clean_deep_cook_step_text(plan_txt)
                 self.process_queue.put({
-                    "status": "deep_cook_ui_batch", 
-                    "ctype": "cycle", 
-                    "cnum": current_cycle, 
-                    "text": processed_plan 
+                    "status": "deep_cook_ui_batch",
+                    "ctype": "cycle",
+                    "cnum": current_cycle,
+                    "dnum": 0,
+                    "text": processed_plan
                 })
 
-                points = [l for l in plan_txt.split('\n') if l.strip() and l.strip()[0] in '-*123456789']
-                if not points: points = [f"Complete the next phase of work for Cycle {current_cycle}."]
-                points = points[:max_p]
-                
+                points = self._extract_cycle_plan_points(processed_plan, current_cycle, min_p=min_p, max_p=max_p)
+                print(f"[DEEP COOK] Cycle {current_cycle}: Auto-selected {len(points)} drafting steps (range {min_p}-{max_p}).")
+                self.process_queue.put({"status": "log_update", "content": f"[DEEP COOK] Cycle {current_cycle}: Auto-selected {len(points)} steps.\n"})
+
+                # OTL Agent & Deep Cook Cooperation Setup (otl_per_step / otl_per_cycle / independent)
+                orch_level = getattr(self, "active_persona_level", 6)
+                if orch_level not in (6, 7):
+                    orch_level = 6
+                orch_tier = getattr(self, "current_model_tier", "deep_cook")
+                coop_mode = str(self.config.get("deep_cook_agent_coop", "otl_per_step")).lower()
+                delegation_on = (coop_mode in ("otl_per_step", "otl_per_cycle")) and bool(self.config.get("delegation_enabled", True))
+                model_swap_mode = str(self.config.get("delegation_model_mode", "lvl6_7_model")).lower()
+                lvl_to_tier_dc = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
+                subagent_names = {
+                    1: "The Speedy",
+                    2: "The Helper / Searcher",
+                    3: "Collaborator",
+                    4: "The Confidant",
+                    5: "The Brains / Sage",
+                    6: "Serenity Prime"
+                }
+
+                def _resolve_otl_subagent(step_text: str, step_idx: int = 0) -> int:
+                    m_exp = re.search(r'\b(?:lvl|level)\s*([1-5])\b', f"{user_msg} {step_text}", flags=re.IGNORECASE)
+                    if m_exp:
+                        return int(m_exp.group(1))
+                    s_low = step_text.lower()
+                    if any(w in s_low for w in ("verify", "bound", "check", "sanity", "format", "concise", "validate")):
+                        return 1
+                    if any(w in s_low for w in ("search", "gather", "lookup", "extract", "resource", "choke point", "data", "baseline", "inventory")):
+                        return 2
+                    if any(w in s_low for w in ("stage", "compile", "structure", "architecture", "system", "interface", "network", "protocol", "compiler", "os")):
+                        return 3
+                    if any(w in s_low for w in ("human", "urban", "social", "emotion", "ergonomic", "operator", "civic", "tone")):
+                        return 4
+                    if hasattr(self, "orchestration_manager") and self.orchestration_manager:
+                        try:
+                            from System.orchestration_manager import UtilityDispatchEngine
+                            tr = UtilityDispatchEngine.evaluate(orch_level, step_text, selection_mode="minimal")
+                            if tr.selected_agent_ids:
+                                return tr.selected_agent_ids[0]
+                        except Exception:
+                            pass
+                    return 5
+
+                def _otl_swap_to_subagent(sub_lvl: int, context_label: str = ""):
+                    sub_tier = lvl_to_tier_dc.get(sub_lvl, "high")
+                    sub_name = subagent_names.get(sub_lvl, f"Level {sub_lvl}")
+                    sub_path = self.model_paths.get(sub_tier, "") if hasattr(self, "model_paths") else ""
+                    disp_model = os.path.basename(sub_path) if (model_swap_mode == "per_subagent_model" and sub_path) else (os.path.basename(self.model_path) if self.model_path else sub_tier.upper())
+                    self.process_queue.put({"status": "subagent_status", "active": True, "level": sub_lvl, "model": disp_model})
+                    log_line = f"[SUBAGENT OTL] {context_label}: Engaging Lvl {sub_lvl} ({sub_name})"
+                    print(log_line)
+                    self.process_queue.put({"status": "log_update", "content": f"{log_line}\n"})
+                    self.process_queue.put({"status": "tool_log_update", "content": f"\n{log_line} [Model: {disp_model}]"})
+                    if model_swap_mode == "per_subagent_model" and sub_path and sub_path != getattr(self, "model_path", "") and hasattr(self, "model_swap_synchronous"):
+                        self.process_queue.put({"status": "tool_log_update", "content": f"\n[DEEP COOK OTL]: Offloading Lvl {orch_level} -> Loading Subagent Lvl {sub_lvl} ({sub_tier})..."})
+                        self.model_swap_synchronous(target_level=sub_lvl, target_tier=sub_tier)
+
+                def _otl_restore_orchestrator():
+                    self.process_queue.put({"status": "subagent_status", "active": False})
+                    if getattr(self, "active_persona_level", orch_level) != orch_level or getattr(self, "current_model_tier", orch_tier) != orch_tier:
+                        if hasattr(self, "model_swap_synchronous"):
+                            self.process_queue.put({"status": "tool_log_update", "content": f"\n[DEEP COOK OTL]: Offloading Subagent -> Restoring Orchestrator Lvl {orch_level} ({orch_tier}) for review..."})
+                            self.model_swap_synchronous(target_level=orch_level, target_tier=orch_tier)
+
+                cyc_sub_lvl = None
+                if delegation_on and coop_mode == "otl_per_cycle":
+                    cyc_sub_lvl = _resolve_otl_subagent(plan_txt, 0)
+                    _otl_swap_to_subagent(cyc_sub_lvl, f"Cycle {current_cycle}")
+
                 # 2. CYCLE DRAFTING
                 cycle_draft = ""
-                for i, p in enumerate(points):
-                    if self.stop_process.is_set(): raise InterruptedError()
-                    
-                    step_title = f"Cycle {current_cycle} | Drafting {i+1}"
-                    step_status = f"Cycle {current_cycle} | Step {i+1}/{len(points)}"
-                    
-                    pruned_history = full_draft_history
-                    if self.kv_manager and TRI_ATTENTION_ENABLED:
-                        pruned_history = self.kv_manager.enforce_string_kv_budget(pruned_history)
-                    else:
-                        pruned_history = pruned_history[-1500:]
-                    
-                    # Verifiable Progress: State current state of exploration
-                    context = pruned_history + "\n\n[CURRENT DRAFT]: " + cycle_draft[-1000:]
-                    step_prompt = (
-                        f"Query: {user_msg}\nContext: {context}\nGoal: {p}\n"
-                        f"[PRIOR PLAN IDENTIFIED]: {plan_txt}\n"
-                        f"[CURRENT CYCLE POINT]: {i+1}/{len(points)}\n"
-                        f"[CYCLE STATE]: Resolved: {len(cycle_state['resolved_variables'])} | Pending: {len(cycle_state['pending_variables'])}\n"
-                        "Verifiable Progress Rule: State the 'current range', 'sub-task', or 'subset of variables' being processed. "
-                        "Maintain Abstract Logical Momentum. Provide deep, grounded analysis. "
-                        "Start your response with a [STATUS: ...] tag describing the active operation. "
-                        "Mark your current range/subset explicitly: [CURRENT RANGE: X]"
-                    )
-                    
-                    chunk_text = _run_step_streaming(step_title, step_prompt, step_status, ctype="draft", cnum=current_cycle, dnum=i+1)
-                    
-                    # Anti-Idle Gate (Abstract Logical Momentum 2.0)
-                    # Implementation of 2-Retry Hard Stop and Dynamic Thresholds
-                    retry_limit = 2
-                    retries = 0
-                    while len(chunk_text.strip()) < 150 and retries < retry_limit:
-                        retries += 1
-                        cycle_state["hollow_drafts_detected"] += 1
-                        self.process_queue.put({"status": "thinking_status", "content": f"Hollow Cycle Detected (Attempt {retries}/{retry_limit}). Deepening..."})
-                        # Temperature Shifted Retry (0.4 / 0.7 for last attempt)
-                        next_temp = 0.4 if retries == 1 else 0.7
-                        retry_prompt = step_prompt + "\n\nCRITICAL: Hollow Cycle detected (shallow response). Expand your logic 3x. Provide dense technical observations."
-                        chunk_text = _run_step_streaming(f"{step_title} (RETRY {retries})", retry_prompt, "Breaking Repetition Loop...", ctype="draft", cnum=current_cycle, dnum=i+1, temp_override=next_temp)
-                    
-                    if len(chunk_text.strip()) < 50:
-                         # Hard Failure / Roadblock - log to cycle state
-                         cycle_state["hollow_drafts_detected"] += 1
-                         self.process_queue.put({"status": "thinking_status", "content": f"Drafting Failure: Steps remaining hollow."})
-                         task_complete = True
-                         final_status = "Roadblock"
-                         break
-                    
-                    cycle_draft += chunk_text + "\n\n"
-                    processed_chunk = self._extract_thinking_content(chunk_text)
-                    self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "draft", "cnum": current_cycle, "dnum": i+1, "title": step_title, "text": processed_chunk})
-                    print(f"[DEEP COOK] Cycle {current_cycle} | Draft {i+1} complete ({len(chunk_text)} chars).")
-                
+                try:
+                    for i, p in enumerate(points):
+                        if self.stop_process.is_set(): raise InterruptedError()
+
+                        active_sub_lvl = cyc_sub_lvl
+                        active_sub_name = subagent_names.get(active_sub_lvl, "") if active_sub_lvl else ""
+                        if delegation_on and coop_mode == "otl_per_step":
+                            active_sub_lvl = _resolve_otl_subagent(p, i)
+                            active_sub_name = subagent_names.get(active_sub_lvl, f"Level {active_sub_lvl}")
+                            _otl_swap_to_subagent(active_sub_lvl, f"Cycle {current_cycle} | Step {i+1}/{len(points)}")
+
+                        sub_badge = f" [Lvl {active_sub_lvl}: {active_sub_name}]" if active_sub_lvl else ""
+                        step_title = f"Cycle {current_cycle} | Drafting {i+1}{sub_badge}"
+                        step_status = f"Cycle {current_cycle} | Step {i+1}/{len(points)}{sub_badge}"
+
+                        pruned_history = full_draft_history
+                        if self.kv_manager and TRI_ATTENTION_ENABLED:
+                            pruned_history = self.kv_manager.enforce_string_kv_budget(pruned_history)
+                        else:
+                            pruned_history = pruned_history[-1500:]
+
+                        # Verifiable Progress: State current state of exploration
+                        context = pruned_history + "\n\n[CURRENT DRAFT]: " + cycle_draft[-1000:]
+                        step_prompt = (
+                            f"Query: {user_msg}\nContext: {context}\nGoal: {p}\n"
+                            f"[PRIOR PLAN IDENTIFIED]: {plan_txt}\n"
+                            f"[CURRENT CYCLE POINT]: {i+1}/{len(points)}\n"
+                            f"[CYCLE STATE]: Resolved: {len(cycle_state['resolved_variables'])} | Pending: {len(cycle_state['pending_variables'])}\n"
+                            "Verifiable Progress Rule: State the 'current range', 'sub-task', or 'subset of variables' being processed. "
+                            "Maintain Abstract Logical Momentum. Provide deep, grounded analysis. "
+                            "Start your response with a [STATUS: ...] tag describing the active operation. "
+                            "Mark your current range/subset explicitly: [CURRENT RANGE: X]"
+                        )
+
+                        try:
+                            chunk_text = _run_step_streaming(
+                                step_title, step_prompt, step_status,
+                                ctype="draft", cnum=current_cycle, dnum=i+1,
+                                subagent_level=active_sub_lvl, subagent_role=active_sub_name
+                            )
+
+                            # Anti-Idle Gate (Abstract Logical Momentum 2.0)
+                            retry_limit = 2
+                            retries = 0
+                            while len(chunk_text.strip()) < 150 and retries < retry_limit:
+                                retries += 1
+                                cycle_state["hollow_drafts_detected"] += 1
+                                self.process_queue.put({"status": "thinking_status", "content": f"Hollow Cycle Detected (Attempt {retries}/{retry_limit}). Deepening..."})
+                                next_temp = 0.4 if retries == 1 else 0.7
+                                retry_prompt = step_prompt + "\n\nCRITICAL: Hollow Cycle detected (shallow response). Expand your logic 3x. Provide dense technical observations."
+                                chunk_text = _run_step_streaming(
+                                    f"{step_title} (RETRY {retries})", retry_prompt, "Breaking Repetition Loop...",
+                                    ctype="draft", cnum=current_cycle, dnum=i+1, temp_override=next_temp,
+                                    subagent_level=active_sub_lvl, subagent_role=active_sub_name
+                                )
+                        finally:
+                            if delegation_on and coop_mode == "otl_per_step":
+                                _otl_restore_orchestrator()
+
+                        if len(chunk_text.strip()) < 50:
+                             cycle_state["hollow_drafts_detected"] += 1
+                             self.process_queue.put({"status": "thinking_status", "content": f"Drafting Failure: Steps remaining hollow."})
+                             task_complete = True
+                             final_status = "Roadblock"
+                             break
+
+                        cycle_draft += chunk_text + "\n\n"
+                        processed_chunk = self._clean_deep_cook_step_text(chunk_text)
+                        self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "draft", "cnum": current_cycle, "dnum": i+1, "title": step_title, "text": processed_chunk})
+                        print(f"[DEEP COOK] Cycle {current_cycle} | Draft {i+1} complete ({len(chunk_text)} chars).")
+                finally:
+                    if delegation_on and coop_mode in ("otl_per_cycle", "otl_per_step"):
+                        _otl_restore_orchestrator()
+
                 full_draft_history += cycle_draft
-                
-                # 3. CONTEXT ASSESSMENT (Mandatory - Always Runs)
+
+                # 3. CONTEXT ASSESSMENT (Mandatory - Always Runs on Orchestrator Model)
                 if self.active_persona_level == 7:
                     self.process_queue.put({"status": "thinking_status", "content": f"Cycle {current_cycle} | Hardening Memory for Cycle {current_cycle+1}..."})
                     lvl7_context = "\nInject worldbuilding context: Ensure narrative consistency and architectural lore."
                 else:
                     lvl7_context = ""
 
+                status_instruction = (
+                    "Final status: [TOTAL RESOLUTION] or [CONTINUE: <next_focus_area>]."
+                    if (is_auto_cycles or current_cycle >= max_cycles)
+                    else f"Fixed Cycle Schedule ({current_cycle}/{max_cycles}): Do NOT declare [TOTAL RESOLUTION] yet; output [CONTINUE: <next_focus_area>] for Cycle {current_cycle + 1}."
+                )
                 snapshot_prompt = (
                     f"Original Query: {user_msg}\n"
                     f"Cycle {current_cycle} Data Progress: {cycle_draft[-2000:]}\n"
@@ -5373,11 +5635,12 @@ class ChatbotApp:
                     "2. Analytical Progress: Summarize the findings so far.\n"
                     "3. Next Phase: Define the precise focus for the next cycle.\n"
                     "4. Resolved Variables: List any logic fully resolved in this cycle.\n"
-                    "Final status: [TOTAL RESOLUTION] or [CONTINUE: <next_focus_area>]."
+                    f"{status_instruction}"
                 )
-                snapshot = _run_step_streaming(f"Cycle {current_cycle}: Memory Assessment", snapshot_prompt, "Updating Persistent Intelligence...", ctype="memory", cnum=current_cycle)
+                snapshot = _run_step_streaming(f"Cycle {current_cycle}: Memory Assessment", snapshot_prompt, "Updating Persistent Intelligence...", ctype="memory", cnum=current_cycle, dnum=0)
                 print(f"[DEEP COOK] Cycle {current_cycle} memory assessment complete.")
-                self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "memory", "cnum": current_cycle, "title": "Context Assessment", "text": snapshot})
+                clean_snapshot = self._clean_deep_cook_step_text(snapshot)
+                self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "memory", "cnum": current_cycle, "dnum": 0, "title": f"Cycle {current_cycle}: Memory Assessment", "text": clean_snapshot})
                 
                 # --- STORE ASSESSMENT TO CYCLE STATE & LAST OUTPUT ---
                 cycle_state["last_assessment"] = snapshot[:500]  # Store first 500 chars
@@ -5397,18 +5660,22 @@ class ChatbotApp:
                 self.process_queue.put({"status": "diag_log_update", "content": diag_state})
                 print(f"[DEEP COOK] {diag_state}")
                 
-                # --- ASSESSMENT IS SOLE AUTHORITY FOR RESOLUTION ---
-                if re.search(r'\[(?:STATUS:\s*)?TOTAL RESOLUTION\]', snapshot, re.IGNORECASE):
-                    task_complete = True
-                    self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Assessment indicates total resolution attained.\n"})
-                elif not is_auto_cycles and current_cycle >= max_cycles:
-                    task_complete = True
-                    self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Deep Cook cycle budget reached ({current_cycle}/{max_cycles} cycles).\n"})
-                elif is_auto_cycles and current_cycle >= max_cycles:
-                    task_complete = True
-                    self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Deep Cook auto cycle failsafe ceiling reached ({current_cycle} cycles).\n"})
+                # --- EXIT GATE: Fixed cycle counts strictly execute all max_cycles; Auto mode exits on [TOTAL RESOLUTION] (min 2 cycles) ---
+                if not is_auto_cycles:
+                    if current_cycle >= max_cycles:
+                        task_complete = True
+                        self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Deep Cook fixed cycle target completed ({current_cycle}/{max_cycles} cycles).\n"})
+                    else:
+                        current_cycle += 1
                 else:
-                    current_cycle += 1
+                    if re.search(r'\[(?:STATUS:\s*)?TOTAL RESOLUTION\]', snapshot, re.IGNORECASE) and current_cycle >= 2:
+                        task_complete = True
+                        self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Auto mode assessment indicates total resolution attained after Cycle {current_cycle}.\n"})
+                    elif current_cycle >= max_cycles:
+                        task_complete = True
+                        self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Deep Cook auto cycle failsafe ceiling reached ({current_cycle} cycles).\n"})
+                    else:
+                        current_cycle += 1
 
             # 5. FINAL CRITIQUE (Mandatory Verification unless skipped)
             critique_txt = "[SKIPPED - EARLY RESOLUTION]"
@@ -5923,6 +6190,7 @@ class ChatbotApp:
             if think and think.winfo_exists(): think.set_phase("generating")
             self.state["response_start_idx"] = hist.index(tk.END + "-1c")
             self._append_to_chat(f"\n\n{self._get_persona_label()}: ", "ai_lead")
+            self.state["response_content_start_idx"] = hist.index(tk.END + "-1c")
             self.state["response_started"] = True
             if self.active_persona_level <= 3:
                 self.set_avatar_state("explain_direct")
@@ -6016,42 +6284,70 @@ class ChatbotApp:
         hist.tag_config(tag, foreground=fg)
 
     def _apply_markdown(self, start_idx, end_idx, base_tags=("ai",), is_thought=False):
-        """Processes Markdown formatting via non-destructive tag overlay, preserving raw context and math."""
+        """
+        Processes Markdown formatting via non-destructive tag overlay, splitting around any
+        embedded `window_create` buttons so Tcl `+ N chars` index arithmetic never shifts
+        relative to `hist.get()` text offsets, and preserving dropdown elision tags (`dc_*`).
+        """
         hist = self.chat_history
         if hist is None or not hist.winfo_exists(): return
         
         try:
-            raw_text = hist.get(start_idx, end_idx)
-            if not raw_text: return
-            
-            # Non-destructive overlay intervals
-            tag_ranges, replacements = MarkdownEngine.get_overlay_intervals(raw_text, base_tags=base_tags, is_thought=is_thought)
-            if not tag_ranges and not replacements: return
-            
+            segments = []
+            if hasattr(hist, "dump"):
+                try:
+                    win_entries = hist.dump(start_idx, end_idx, window=True)
+                except Exception:
+                    win_entries = []
+                if win_entries:
+                    curr_s = hist.index(start_idx)
+                    final_e = hist.index(end_idx)
+                    for item in win_entries:
+                        if len(item) >= 3 and item[0] == "window":
+                            w_idx = hist.index(item[2])
+                            if hist.compare(curr_s, "<", w_idx):
+                                segments.append((curr_s, w_idx))
+                            curr_s = hist.index(f"{w_idx} + 1 chars")
+                    if hist.compare(curr_s, "<", final_e):
+                        segments.append((curr_s, final_e))
+            if not segments:
+                segments = [(start_idx, end_idx)]
+
             hist.config(state='normal')
-            
-            # Handle block/inline replacements, sorted reverse to preserve indices
-            if replacements:
-                replacements.sort(key=lambda x: x[0], reverse=True)
-                for r_start, r_end, r_text, r_tag in replacements:
-                    sub_start = f"{start_idx} + {r_start} chars"
-                    sub_end = f"{start_idx} + {r_end} chars"
-                    hist.delete(sub_start, sub_end)
-                    hist.insert(sub_start, r_text, base_tags + (r_tag,))
-                    diff = len(r_text) - (r_end - r_start)
-                    new_tags = []
-                    for ts, te, tag in tag_ranges:
-                        if ts >= r_end:
-                            new_tags.append((ts + diff, te + diff, tag))
-                        elif te <= r_start:
-                            new_tags.append((ts, te, tag))
-                    tag_ranges = new_tags
-            
-            # Apply non-destructive styling and elision tags directly over the raw text
-            for t_start, t_end, t_tag in tag_ranges:
-                pos_start = f"{start_idx} + {t_start} chars"
-                pos_end = f"{start_idx} + {t_end} chars"
-                hist.tag_add(t_tag, pos_start, pos_end)
+
+            for seg_start, seg_end in reversed(segments):
+                raw_text = hist.get(seg_start, seg_end)
+                if not raw_text:
+                    continue
+                tag_ranges, replacements = MarkdownEngine.get_overlay_intervals(raw_text, base_tags=base_tags, is_thought=is_thought)
+                if not tag_ranges and not replacements:
+                    continue
+
+                if replacements:
+                    replacements.sort(key=lambda x: x[0], reverse=True)
+                    for r_start, r_end, r_text, r_tag in replacements:
+                        sub_start = f"{seg_start} + {r_start} chars"
+                        sub_end = f"{seg_start} + {r_end} chars"
+                        try:
+                            existing_tags = tuple(t for t in hist.tag_names(sub_start) if not str(t).startswith("md_"))
+                        except Exception:
+                            existing_tags = ()
+                        merged_tags = tuple(dict.fromkeys(existing_tags + tuple(base_tags) + (r_tag,)))
+                        hist.delete(sub_start, sub_end)
+                        hist.insert(sub_start, r_text, merged_tags)
+                        diff = len(r_text) - (r_end - r_start)
+                        new_tags = []
+                        for ts, te, tag in tag_ranges:
+                            if ts >= r_end:
+                                new_tags.append((ts + diff, te + diff, tag))
+                            elif te <= r_start:
+                                new_tags.append((ts, te, tag))
+                        tag_ranges = new_tags
+
+                for t_start, t_end, t_tag in tag_ranges:
+                    pos_start = f"{seg_start} + {t_start} chars"
+                    pos_end = f"{seg_start} + {t_end} chars"
+                    hist.tag_add(t_tag, pos_start, pos_end)
                 
             hist.config(state='disabled')
         except Exception as e:
@@ -6647,6 +6943,72 @@ class ChatbotApp:
         """Pass-through hygiene: MarkdownEngine handles LaTeX and Math natively during markdown rendering."""
         return text if text else ""
 
+    @staticmethod
+    def _clean_deep_cook_step_text(raw_text: str) -> str:
+        """Strips only XML/channel control tags while preserving 100% of a Deep Cook step's prose and math."""
+        if not raw_text:
+            return ""
+        cleaned = re.sub(
+            r'(?i)<\/?think>|<\/?thought>|<\/?\|think\|>|<\|channel\|?>(?:thought|analysis|reasoning|final|text|assistant)|<\/?channel\|>|<\|start\|>assistant\s+to=(?:self|user)(?:<\|message\|>)?|to=(?:self|user)<\|message\|>|<\|eom\|>|<\|eot\|>|<\|im_start\|?>thought|<\|im_end\|?>',
+            '',
+            raw_text
+        )
+        return cleaned.strip()
+
+    @staticmethod
+    def _extract_cycle_plan_points(plan_txt: str, current_cycle: int, min_p: int = 2, max_p: int = 5) -> list:
+        """
+        Extracts actionable Cycle Plan points from `plan_txt`, autonomously supporting
+        between `min_p` (2) and `max_p` (5) steps based on the model's cycle plan while
+        ignoring horizontal rules (`---`) and standalone bold section headers (`**Header:**`).
+        """
+        if not plan_txt or not plan_txt.strip():
+            return [
+                f"1. Establish core parameters and primary derivations for Cycle {current_cycle}.",
+                f"2. Verify boundary conditions and synthesize findings for Cycle {current_cycle}."
+            ]
+
+        target_section = plan_txt
+        plan_header_matches = list(re.finditer(r'(?im)^(?:\*\*|#+\s*)?(?:Cycle\s*\d+\s*Plan|Execution\s*Plan|Action\s*Plan|Plan\s*for\s*Cycle).*$', plan_txt))
+        if plan_header_matches:
+            target_section = plan_txt[plan_header_matches[-1].end():]
+
+        def _scan_lines(text_block: str):
+            numbered = []
+            bullets = []
+            for raw_line in text_block.splitlines():
+                s = raw_line.strip()
+                if not s:
+                    continue
+                if re.match(r'^[-*_]{3,}$', s):
+                    continue
+                if re.match(r'^\*\*[^*]+:\*\*$', s):
+                    continue
+                m_num = re.match(r'^(\d+)[\.\)]\s+(.+)$', s)
+                if m_num and len(m_num.group(2).strip()) > 8:
+                    numbered.append(s)
+                    continue
+                m_bul = re.match(r'^[-*]\s+(.+)$', s)
+                if m_bul and len(m_bul.group(1).strip()) > 8:
+                    bullets.append(s)
+            return numbered if numbered else bullets
+
+        candidates = _scan_lines(target_section)
+        if not candidates and target_section != plan_txt:
+            candidates = _scan_lines(plan_txt)
+        if not candidates:
+            return [
+                f"1. Establish core parameters and primary derivations for Cycle {current_cycle}.",
+                f"2. Verify boundary conditions and synthesize findings for Cycle {current_cycle}."
+            ]
+        if len(candidates) > max_p and target_section == plan_txt:
+            selected = candidates[-max_p:]
+        else:
+            selected = candidates[:max_p]
+        if len(selected) < min_p:
+            selected.append(f"{len(selected)+1}. Verify constraints, edge cases, and quantitative implications for Cycle {current_cycle}.")
+        return selected
+
     def _handle_deep_cook_ui_start(self, msg):
         """Initializes a new dropdown block for streaming Deep Cook tokens."""
         hist = self.chat_history
@@ -6654,12 +7016,14 @@ class ChatbotApp:
         
         ctype = msg.get("ctype")
         cnum = msg.get("cnum", 1)
-        dnum = msg.get("dnum", 1)
+        default_dnum = 0 if ctype in ("cycle", "memory") else 1
+        dnum = msg.get("dnum", default_dnum)
         title = msg.get("title", "")
         
-        # Use deterministic tag naming for cross-thread consistency
         tag = f"dc_{ctype}_{cnum}_{dnum}"
+        body_tag = f"dc_body_{ctype}_{cnum}_{dnum}"
         self.state["current_deep_cook_active_tag"] = tag
+        self.state["current_deep_cook_active_body_tag"] = body_tag
         
         hist.config(state='normal')
         
@@ -6674,7 +7038,7 @@ class ChatbotApp:
             hist.insert(tk.END, "\n", ("ai",))
             hist.window_create(tk.END, window=btn)
             hist.insert(tk.END, "\n", ("ai",))
-            hist.insert(tk.END, f"{title}\n", (tag, "ai"))
+            hist.insert(tk.END, f"{title}\n", (body_tag, tag, "ai"))
             hist.tag_config(tag, elide=True, foreground="#808080", font=self.fonts["log"])
             self.state[f"nested_tags_{tag}"] = []
 
@@ -6686,22 +7050,25 @@ class ChatbotApp:
             if f"nested_tags_{cyc_tag}" not in self.state: self.state[f"nested_tags_{cyc_tag}"] = []
             if tag not in self.state[f"nested_tags_{cyc_tag}"]:
                 self.state[f"nested_tags_{cyc_tag}"].append(tag)
-            def toggle_draft(t=tag, b=None, d=dnum):
+            m_sub = re.search(r'(\[Lvl\s+\d+:[^\]]+\])', str(title or ""))
+            sub_lbl = f" {m_sub.group(1)}" if m_sub else ""
+            step_lbl = f"Step {dnum}{sub_lbl}"
+            def toggle_draft(t=tag, b=None, sl=step_lbl):
                 is_elided = str(hist.tag_cget(t, "elide")) in ["1", "True", "true"]
                 new_state = not is_elided
                 hist.tag_config(t, elide=new_state)
-                if b: b.config(text=f"{'[-]' if not new_state else '[+]'} Step {d}")
+                if b: b.config(text=f"{'[-]' if not new_state else '[+]'} {sl}")
 
-            btn = tk.Button(hist, text=f"[+] Step {dnum}", bg="#151515", fg="#777777", relief=tk.FLAT, font=self.fonts["stats"])
-            btn.config(command=lambda t=tag, b=btn, d=dnum: toggle_draft(t, b, d))
-            self.state[f"draft_btn_{tag}"] = (btn, dnum)
+            btn = tk.Button(hist, text=f"[+] {step_lbl}", bg="#151515", fg="#777777", relief=tk.FLAT, font=self.fonts["stats"])
+            btn.config(command=lambda t=tag, b=btn, sl=step_lbl: toggle_draft(t, b, sl))
+            self.state[f"draft_btn_{tag}"] = (btn, step_lbl)
             
             hist.insert(tk.END, "  ", (cyc_tag, "ai"))
             hist.window_create(tk.END, window=btn)
             hist.tag_add(cyc_tag, "end-2c", "end-1c")
             hist.tag_add("ai", "end-2c", "end-1c")
             hist.insert(tk.END, "\n", (cyc_tag, "ai"))
-            hist.insert(tk.END, f"  --- {title} ---\n  ", (tag, cyc_tag, "ai"))
+            hist.insert(tk.END, f"  --- {title} ---\n  ", (body_tag, tag, "ai"))
             hist.tag_config(tag, elide=True, foreground="#707070", font=self.fonts["log"])
 
         elif ctype == "memory":
@@ -6717,7 +7084,7 @@ class ChatbotApp:
             hist.insert(tk.END, "\n", ("ai",))
             hist.window_create(tk.END, window=btn)
             hist.insert(tk.END, "\n", ("ai",))
-            hist.insert(tk.END, "", (tag, "ai"))
+            hist.insert(tk.END, f"--- {title or 'Context Assessment'} ---\n", (body_tag, tag, "ai"))
             hist.tag_config(tag, elide=True, foreground="#ababab", font=self.fonts["log"])
 
         scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
@@ -6733,16 +7100,16 @@ class ChatbotApp:
         if hist is None: return
         
         content = msg.get("content", "")
-        tag = self.state.get("current_deep_cook_active_tag")
+        ctype = msg.get("ctype")
+        cnum = msg.get("cnum", 1)
+        default_dnum = 0 if ctype in ("cycle", "memory") else 1
+        dnum = msg.get("dnum", default_dnum)
+        tag = f"dc_{ctype}_{cnum}_{dnum}" if ctype else self.state.get("current_deep_cook_active_tag")
+        body_tag = f"dc_body_{ctype}_{cnum}_{dnum}" if ctype else self.state.get("current_deep_cook_active_body_tag")
         if not content or not tag: return
         
         hist.config(state='normal')
-        
-        parent_tag = self.state.get("current_deep_cook_cyc_tag")
-        tags = [tag, "ai"]
-        if parent_tag and tag != parent_tag:
-            tags.insert(1, parent_tag)
-            
+        tags = [body_tag, tag, "ai"] if body_tag else [tag, "ai"]
         hist.insert(tk.END, content, tuple(tags))
         hist.config(state='disabled')
 
@@ -6754,45 +7121,56 @@ class ChatbotApp:
         hist.tag_config(tag, elide=new_state)
         nested = self.state.get(f"nested_tags_{tag}", [])
         if new_state:
-            # Closing cycle: collapse child steps and reset button labels
             for n_tag in nested:
                 hist.tag_config(n_tag, elide=True)
                 btn_tuple = self.state.get(f"draft_btn_{n_tag}")
                 if btn_tuple and btn_tuple[0].winfo_exists():
-                    btn_tuple[0].config(text=f"[+] Step {btn_tuple[1]}")
-        # When opening cycle (new_state == False), cyc_tag un-elides making step buttons visible,
-        # but step contents remain elided until explicitly toggled by user.
+                    lbl_txt = btn_tuple[1] if isinstance(btn_tuple[1], str) and btn_tuple[1].startswith("Step ") else f"Step {btn_tuple[1]}"
+                    btn_tuple[0].config(text=f"[+] {lbl_txt}")
         if btn: btn.config(text=f"{'[+] View' if new_state else '[-] Hide'} Cycle {cnum}")
     toggle_cyc = toggle_cyc_tag
 
     def _handle_deep_cook_ui_batch(self, msg):
-        """Finalizes a Deep Cook block by replacing streamed text with cleaned content."""
+        """Finalizes a Deep Cook block by replacing streamed text with cleaned content (zero duplication)."""
         hist = self.chat_history
         if hist is None: return
         
         ctype = msg.get("ctype")
         cnum = msg.get("cnum", 1)
-        dnum = msg.get("dnum", 1)
-        text = msg.get("text", "")
+        default_dnum = 0 if ctype in ("cycle", "memory") else 1
+        dnum = msg.get("dnum", default_dnum)
+        text = (msg.get("text") or "").strip()
+        if not text:
+            return
         
-        # MISSION: Surgical Replace for Reasoning Dropdowns
         if ctype in ["cycle", "draft", "memory"]:
             tag = f"dc_{ctype}_{cnum}_{dnum}"
-            ranges = hist.tag_ranges(tag)
+            body_tag = f"dc_body_{ctype}_{cnum}_{dnum}"
+            ranges = hist.tag_ranges(body_tag) or hist.tag_ranges(tag)
             hist.config(state='normal')
-            parent_tag = self.state.get("current_deep_cook_cyc_tag")
-            tags = [tag, "ai"]
-            if parent_tag and tag != parent_tag:
-                tags.insert(1, parent_tag)
+            tags = (body_tag, tag, "ai")
             
-            # Replace streamed content with cleaned batch, or insert if fresh
-            if ranges:
-                start, end = ranges[0], ranges[-1]
-                hist.delete(start, end)
-                hist.insert(start, text + "\n", tuple(tags))
+            title = msg.get("title", "")
+            if ctype == "draft" and title:
+                formatted_body = f"  --- {title} ---\n{text}\n"
+            elif ctype == "cycle":
+                formatted_body = f"Cycle {cnum}: Plan\n{text}\n"
             else:
-                hist.insert(tk.END, text + "\n", tuple(tags))
+                formatted_body = f"--- {title or 'Context Assessment'} ---\n{text}\n"
+
+            if ranges:
+                start = hist.index(ranges[0])
+                end = hist.index(ranges[-1])
+                hist.delete(start, end)
+                hist.insert(start, formatted_body, tags)
+                body_end = hist.index(f"{start} + {len(formatted_body)} chars")
+            else:
+                start = hist.index(tk.END + "-1c")
+                hist.insert(tk.END, formatted_body, tags)
+                body_end = hist.index(tk.END + "-1c")
             hist.config(state='disabled')
+            if self.config.get("media_rendering", 1) > 0 and self.config.get("inline_markdown", True):
+                self._apply_markdown(start, body_end, tags)
             return
 
         if ctype == "compilation":
@@ -6876,15 +7254,18 @@ class ChatbotApp:
 
     def launch_lore_book(self):
         try:
-            script_path = os.path.abspath(os.path.join(TOOLS_DIR, "lore_book.py"))
-            tools_dir_abs = os.path.abspath(TOOLS_DIR)
-            # Security verification: within expected tools directory, is file, and has read permission
-            if (os.path.commonpath([tools_dir_abs, script_path]) == tools_dir_abs
+            base_tools_dir = TOOLS_DIR if os.path.exists(TOOLS_DIR) else os.path.join(getattr(self, "script_dir", os.getcwd()), "Tools")
+            raw_script_path = os.path.join(base_tools_dir, "lore_book.py")
+            tools_dir_real = os.path.realpath(base_tools_dir)
+            script_path = os.path.realpath(raw_script_path)
+            # Security verification: reject symlinks, verify canonical tools directory boundary, regular file, and read access
+            if (not os.path.islink(raw_script_path)
+                    and os.path.commonpath([tools_dir_real, script_path]) == tools_dir_real
                     and os.path.isfile(script_path)
                     and os.access(script_path, os.R_OK)):
-                subprocess.Popen([sys.executable, script_path])
+                subprocess.Popen([sys.executable, script_path], cwd=tools_dir_real, close_fds=True)
             else:
-                messagebox.showerror("Error", f"lore_book.py not accessible or invalid in {TOOLS_DIR}")
+                messagebox.showerror("Error", f"lore_book.py not accessible or failed security validation in {base_tools_dir}")
         except Exception as e:
             self._log_and_display(f"Lore Book Error: {e}")
 
@@ -8056,12 +8437,28 @@ class ChatbotApp:
                         render_start = start_idx
             hist.config(state='disabled')
         else:
-            # Deep Cook handling
-            if start_idx:
+            # Deep Cook handling: isolate final answer strictly after all cycle/step/memory dropdown buttons
+            hist.config(state='normal')
+            ans_start = self.state.get("response_content_start_idx")
+            if not self.state.get("response_started", False) or not ans_start:
+                self._append_to_chat(f"\n\n{self._get_persona_label()}: ", "ai_lead")
                 hist.config(state='normal')
-                hist.insert(tk.END, "\n", ("ai",))
-                hist.config(state='disabled')
-                render_start = start_idx
+                ans_start = hist.index(tk.END + "-1c")
+                self.state["response_content_start_idx"] = ans_start
+                self.state["response_started"] = True
+                if final_answer:
+                    hist.insert(tk.END, f"{final_answer}\n", ("ai",))
+            else:
+                if final_answer:
+                    try:
+                        hist.delete(ans_start, tk.END)
+                    except Exception:
+                        pass
+                    hist.insert(tk.END, f"{final_answer}\n", ("ai",))
+                else:
+                    hist.insert(tk.END, "\n", ("ai",))
+            hist.config(state='disabled')
+            render_start = ans_start
 
         # Finalize streamed agentic dropdown if present
         if self.state.get("agentic_streamed"):
@@ -8151,6 +8548,15 @@ class ChatbotApp:
                             "arousal": self.affect_engine.state.arousal,
                             "dominance": self.affect_engine.state.dominance
                         }
+                        st_post = self.affect_engine.state
+                        post_mood = self.affect_engine.derive_dynamic_mood()
+                        self.process_queue.put({
+                            "status": "thought_log_update",
+                            "content": (
+                                f"\n[AFFECT ENGINE STATS (3D PAD - Post-Turn Update)]\n"
+                                f"  PAD Vector : V={st_post.valence:+.3f} | A={st_post.arousal:+.3f} | D={st_post.dominance:+.3f} | Mood: {post_mood}\n"
+                            )
+                        })
 
                     self.semantic_vault.ingest_interaction(
                         user_input=str(user_msg),
@@ -8247,9 +8653,8 @@ class ChatbotApp:
             print(f"[SELF-ANALYSIS ERROR] Failed to run self analysis: {err}")
 
     def _buffer_text(self, text):
-        """Append text to the streaming buffer."""
+        """Append text to the streaming buffer without prematurely marking response_started before UI header insertion."""
         if not self.state.get("response_started"):
-            self.state["response_started"] = True
             self.set_avatar_state("explain_wise")
         self.text_buffer += text
 
@@ -8643,23 +9048,69 @@ class ChatbotApp:
         ext = ".jsonz" if self.get_active_username() in ("Default", "Public") else (".encz" if (hasattr(self, 'vault_manager') and self.vault_manager.is_lock_enabled()) else ".jsonz")
         return os.path.join(hist_dir, f"{base}{ext}")
 
+    @staticmethod
+    def _deduplicate_history_messages(msg_list):
+        """Removes accidental duplicate consecutive user/assistant turns while preserving dialogue order."""
+        if not msg_list:
+            return []
+        deduped = []
+        seen_pairs = set()
+        i = 0
+        while i < len(msg_list):
+            m = msg_list[i]
+            if not isinstance(m, dict):
+                i += 1
+                continue
+            role = m.get("role", "")
+            content = str(m.get("content", "")).strip()
+            if deduped and deduped[-1].get("role") == role and str(deduped[-1].get("content", "")).strip() == content:
+                i += 1
+                continue
+            if role == "user" and i + 1 < len(msg_list) and msg_list[i + 1].get("role") in ("assistant", "ai"):
+                pair_key = (content, str(msg_list[i + 1].get("content", "")).strip())
+                if pair_key in seen_pairs:
+                    i += 2
+                    continue
+                seen_pairs.add(pair_key)
+            deduped.append(m)
+            i += 1
+        return deduped
+
     def save_history(self):
         if self.config.get("ghost_mode", False):
             return
         if not (path := self.get_history_path()) or not self.messages: return
         try:
+            self.messages = self._deduplicate_history_messages(self.messages)
             old_path = getattr(self, "_active_session_history_path", None)
+            session_started_fresh = getattr(self, "_session_started_fresh", False)
+
+            # If saving to an existing archive file of the exact same level pipeline, merge without repeating prompts
+            msgs_to_write = list(self.messages)
+            if os.path.exists(path) and (old_path is None or old_path == path):
+                try:
+                    if hasattr(self, 'vault_manager'):
+                        existing_msgs = self.vault_manager.read_history_messages(path)
+                    else:
+                        with open(path, 'rb') as rf:
+                            existing_msgs = json.loads(zlib.decompress(rf.read()).decode('utf-8'))
+                    if isinstance(existing_msgs, list) and existing_msgs:
+                        msgs_to_write = self._deduplicate_history_messages(existing_msgs + self.messages)
+                except Exception:
+                    pass
+
             if hasattr(self, 'vault_manager'):
-                self.vault_manager.write_history_messages(path, self.messages)
+                self.vault_manager.write_history_messages(path, msgs_to_write)
             else:
                 with open(path, 'wb') as f:
-                    f.write(zlib.compress(json.dumps(self.messages).encode('utf-8')))
+                    f.write(zlib.compress(json.dumps(msgs_to_write).encode('utf-8')))
 
-            # If pipeline filename evolved during conversation, cleanly remove old partial file
-            if old_path and old_path != path and os.path.exists(old_path):
+            # Only remove old_path if it was created during this active session's pipeline evolution
+            if old_path and old_path != path and os.path.exists(old_path) and session_started_fresh:
                 try: os.remove(old_path)
                 except: pass
             self._active_session_history_path = path
+            self._session_started_fresh = True
         except Exception as e:
             print(f"History save error: {e}", file=sys.stderr)
 
@@ -8781,7 +9232,12 @@ class ChatbotApp:
                 
                 self.past_history_view.config(state='disabled')
                 self.past_history_view.yview_moveto(1.0)
-                # Option 1: Keep past history in Archive tab, start active chat fresh
+                # Keep past history in Archive tab and start active session messages fresh
+                # so switching levels does not clone old single-level prompts into new multi-level files
+                self._archived_history_messages = list(self.messages)
+                self.messages = []
+                self._active_session_history_path = None
+                self._session_started_fresh = False
                 self.clear_chat_ui()
                 self._log_and_display("Archive Updated.")
             except PermissionError:
@@ -9120,15 +9576,38 @@ class ChatbotApp:
             except Exception as e:
                 print(f"Failed to write startup count to file: {e}")
 
+        # Merge active user profile config before syncing tier dictionaries & state
+        user_dir = self.get_user_dir() if hasattr(self, "get_user_dir") else None
+        if user_dir:
+            u_cfg_p = os.path.join(user_dir, "config.json")
+            if os.path.exists(u_cfg_p):
+                try:
+                    sys_mtime = os.path.getmtime(self.config_file) if os.path.exists(self.config_file) else 0
+                    usr_mtime = os.path.getmtime(u_cfg_p)
+                    with open(u_cfg_p, 'r', encoding='utf-8') as f:
+                        u_data = json.load(f)
+                    if isinstance(u_data, dict):
+                        if usr_mtime >= sys_mtime - 1.0:
+                            self.config.update(u_data)
+                        else:
+                            for uk, uv in u_data.items():
+                                if uk not in self.config:
+                                    self.config[uk] = uv
+                except Exception as e:
+                    print(f"[USER] Could not merge user config: {e}")
+
         for key in ['model_paths', 'gpu_layer_config', 'context_size_config', 'temp_config', 
                     'top_p_config', 'min_p_config', 'repeat_penalty_config', 'frequency_penalty_config',
                     'presence_penalty_config', 'stop_strings_config', 'n_batch_config', 'top_k_config']:
             disk_data = self.config.get(key, {})
-            getattr(self, key).update(disk_data)
+            if isinstance(disk_data, dict) and hasattr(self, key):
+                getattr(self, key).update(disk_data)
         
         self.sash_pos = self.config.get('sash_pos', -1)
         
         self.state["deep_cook_behavior"] = self.config.get('deep_thought_behavior', "oneshot")
+        if self.state["deep_cook_behavior"] == "sticky" and "deep_cook_enabled" in self.config:
+            self.state["deep_cook"] = bool(self.config.get("deep_cook_enabled", False))
         self.state["virtual_vram"] = self.config.get('virtual_vram', 0)
         self.active_persona_level = int(self.config.get('active_persona_level', 3))
         self.max_persona_level = int(self.config.get('max_persona_level', 7))
@@ -9222,18 +9701,26 @@ class ChatbotApp:
         if hasattr(self, "_load_dmn_backbone"):
             self._load_dmn_backbone()
 
-        # Merge active user profile config if exists
-        user_dir = self.get_user_dir() if hasattr(self, "get_user_dir") else None
-        if user_dir:
-            u_cfg_p = os.path.join(user_dir, "config.json")
-            if os.path.exists(u_cfg_p):
-                try:
-                    with open(u_cfg_p, 'r', encoding='utf-8') as f:
-                        u_data = json.load(f)
-                    self.config.update(u_data)
-                    self.sash_pos = self.config.get('sash_pos', -1)
-                except Exception as e:
-                    print(f"[USER] Could not merge user config: {e}")
+        # Initialize Deep Cook & Delegation defaults if missing
+        for _dk, _dv in [
+            ("deep_cook_cycles", "3"),
+            ("deep_cook_agent_coop", "otl_per_step"),
+            ("deep_cook_formatting", "inline"),
+            ("normal_generation_formatting", "inline"),
+            ("delegation_enabled", True),
+            ("delegation_model_mode", "lvl6_7_model"),
+            ("subagent_selection_mode", "minimal"),
+            ("cecilia_delegation_mode", "shadow_wizard"),
+            ("show_cecilia_slider", False),
+            ("delegation_chain_preset", "standard (L2 Search -> L3 Store -> L5 Reason -> L6/7 Approve)"),
+            ("delegation_handoff_target", "lvl3_compiler (Staging & Aggregation)"),
+            ("reasoning_strength", self.config.get("muse_reasoning_strength", "medium")),
+            ("muse_reasoning_strength", self.config.get("reasoning_strength", "medium")),
+            ("response_length", "natural"),
+            ("thinking_checkbox", True),
+        ]:
+            if _dk not in self.config:
+                self.config[_dk] = _dv
 
         if "theme" not in self.config:
             self.config["theme"] = "apex"
@@ -9556,6 +10043,42 @@ class ChatbotApp:
             'top_k_config': self.top_k_config,
             'sash_pos': self._get_current_sash_pos() if hasattr(self, '_get_current_sash_pos') else self.config.get('sash_pos', -1),
             'deep_thought_behavior': self.state["deep_cook_behavior"],
+            'deep_cook_enabled': bool(self.state.get("deep_cook", False)),
+            'deep_cook_cycles': self.config.get("deep_cook_cycles", "3"),
+            'deep_cook_agent_coop': self.config.get("deep_cook_agent_coop", "otl_per_step"),
+            'deep_cook_formatting': self.config.get("deep_cook_formatting", "inline"),
+            'normal_generation_formatting': self.config.get("normal_generation_formatting", "inline"),
+            'delegation_enabled': bool(self.config.get("delegation_enabled", True)),
+            'delegation_model_mode': self.config.get("delegation_model_mode", "lvl6_7_model"),
+            'subagent_selection_mode': self.config.get("subagent_selection_mode", "minimal"),
+            'cecilia_delegation_mode': self.config.get("cecilia_delegation_mode", "shadow_wizard"),
+            'show_cecilia_slider': bool(self.config.get("show_cecilia_slider", False)),
+            'delegation_chain_preset': self.config.get("delegation_chain_preset", "standard (L2 Search -> L3 Store -> L5 Reason -> L6/7 Approve)"),
+            'delegation_handoff_target': self.config.get("delegation_handoff_target", "lvl3_compiler (Staging & Aggregation)"),
+            'reasoning_strength': self.config.get("reasoning_strength", "medium"),
+            'muse_reasoning_strength': self.config.get("muse_reasoning_strength", "medium"),
+            'response_length': self.config.get("response_length", "natural"),
+            'thinking_checkbox': bool(self.config.get("thinking_checkbox", True)),
+            'benchmark_enabled': bool(self.config.get("benchmark_enabled", False)),
+            'inline_markdown': bool(self.config.get("inline_markdown", True)),
+            'format_prompts_markdown': bool(self.config.get("format_prompts_markdown", False)),
+            'overfill_behavior_mode': self.config.get("overfill_behavior_mode", "wrapup"),
+            'budget_recovery_mode': self.config.get("budget_recovery_mode", "wrapup"),
+            'halt_behavior_mode': self.config.get("halt_behavior_mode", "off"),
+            'history_mode': self.config.get("history_mode", "Keyword"),
+            'turbovec_mode': self.config.get("turbovec_mode", "fallback"),
+            'history_autosave_mode': self.config.get("history_autosave_mode", "End"),
+            'history_level_format': self.config.get("history_level_format", "All"),
+            'monitor_graph_mode': bool(self.config.get("monitor_graph_mode", False)),
+            'show_tooltips': bool(self.config.get("show_tooltips", True)),
+            'dmn_enabled': bool(self.config.get("dmn_enabled", True)),
+            'dmn_timeout': self.config.get("dmn_timeout", "05:00"),
+            'stt_device_index': self.config.get("stt_device_index", None),
+            'stt_language': self.config.get("stt_language", "en-US"),
+            'multimedia_handling': self.config.get("multimedia_handling", "auto"),
+            'image_handling': self.config.get("image_handling", "auto"),
+            'marquee_text_enabled': bool(self.config.get("marquee_text_enabled", True)),
+            'texture_intensity': float(self.config.get("texture_intensity", 0.5)),
             'virtual_vram': self.state["virtual_vram"],
             'active_persona_level': self.active_persona_level,
             'max_persona_level': self.depth_slider.cget('to') if self.depth_slider else self.max_persona_level,
@@ -9674,7 +10197,7 @@ class ChatbotApp:
             inf_params["max_tokens"] = max(256, calculated_max)
 
         
-        # Live hot-reload and overlay with params.json values if present
+        # Live hot-reload and overlay with params_{tier}.json / params.json without clobbering user tier settings in config.json
         self.load_params(self.current_model_tier)
         if hasattr(self, "params") and self.params:
             override_params = dict(self.params)
@@ -9683,6 +10206,22 @@ class ChatbotApp:
             if "stop" in override_params and isinstance(override_params["stop"], list):
                 inf_params["stop"].extend([s for s in override_params["stop"] if s not in inf_params["stop"]])
                 del override_params["stop"]
+
+            tier_specific_file = os.path.join(self.dirs.get("System", "System"), f"params_{tier}.json") if hasattr(self, "dirs") else ""
+            has_tier_file = bool(tier_specific_file and os.path.exists(tier_specific_file))
+            if not has_tier_file:
+                # Preserve user-configured per-tier sampling values from config.json over generic params.json defaults
+                for _sk, _cfg_dict in [
+                    ("temperature", self.temp_config),
+                    ("top_p", self.top_p_config),
+                    ("min_p", self.min_p_config),
+                    ("repeat_penalty", self.repeat_penalty_config),
+                    ("frequency_penalty", self.frequency_penalty_config),
+                    ("presence_penalty", self.presence_penalty_config),
+                    ("top_k", self.top_k_config),
+                ]:
+                    if tier in _cfg_dict and _sk in override_params:
+                        del override_params[_sk]
                 
             inf_params.update(override_params)
 

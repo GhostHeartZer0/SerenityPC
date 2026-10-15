@@ -216,8 +216,11 @@ class TurboVecIndex:
                 if f in self._ingested_files:
                     continue
                 try:
-                    with open(f, 'rb') as fp:
-                        history = json.loads(zlib.decompress(fp.read()).decode('utf-8'))
+                    if f.endswith(".encz") and getattr(self, "vault_manager", None) is not None:
+                        history = self.vault_manager.read_history_messages(f)
+                    else:
+                        with open(f, 'rb') as fp:
+                            history = json.loads(zlib.decompress(fp.read()).decode('utf-8'))
                     
                     texts = []
                     temp_metadata = []
@@ -312,3 +315,39 @@ class TurboVecIndex:
             
             scored_res.sort(key=lambda x: x[0], reverse=True)
             return [text for _, text in scored_res[:top_k]]
+
+    def search_snippets(self, query: str, top_k: int = 3, max_chars: int = 240, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted", vault_manager: Any = None) -> List[Dict[str, Any]]:
+        """
+        Performs targeted keyword/vector history lookup and returns concise matched excerpts
+        (never dumping entire history files) for Thought Log backend observability.
+        """
+        if self.mode == "off" or not query or not query.strip():
+            return []
+        if vault_manager is not None:
+            self.vault_manager = vault_manager
+        raw_hits = self.search(query, top_k=top_k, active_model_path=active_model_path, active_level=active_level, lookup_mode=lookup_mode)
+        if not raw_hits:
+            return []
+        import re
+        terms = [t.lower() for t in re.findall(r'\w{3,}', query)]
+        snippets = []
+        for text in raw_hits:
+            clean = " ".join(str(text).split())
+            best_pos = 0
+            for t in terms:
+                idx = clean.lower().find(t)
+                if idx != -1:
+                    best_pos = max(0, idx - 60)
+                    break
+            excerpt = clean[best_pos : best_pos + max_chars]
+            if best_pos > 0:
+                excerpt = "..." + excerpt
+            if best_pos + max_chars < len(clean):
+                excerpt = excerpt + "..."
+            matched_kw = [t for t in terms if t in clean.lower()][:5]
+            snippets.append({
+                "keywords": matched_kw,
+                "excerpt": excerpt,
+                "char_len": len(excerpt)
+            })
+        return snippets

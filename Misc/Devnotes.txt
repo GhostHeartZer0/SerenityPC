@@ -1,0 +1,15 @@
+  SerenityPC architecture:
+  levels 1-5 exist in SerenityPC.
+  level 6 is a secret.
+  level 7 is Live Mode, designed to transcend levels and integrate the 5 levels using it as seen fit.
+SerenityPC files of note:
+serenity_utils, serenity_resources, main, lore book 
+subfolder System: .prime_chronicles
+subfolder Models: gemma-4-4b-it-qat-UD-Q4_K_XL.gguf, gemma-4-4b-it-qat-UD-Q8_K_XL.gguf, Gemma-4-4B-VL-it-Gemini-Pro-Thinking_Q8_0.gguf, Models\gemma-4-12b-it-qat-UD-IQ3_XXS.gguf, Models\gemma-4-26b-it-qat-UD-Q4_K_XL.gguf, Models\gemma-4-E4B-it-Q5_K_M.gguf
+these are just the current models, more are stored elsewhere.
+subfolder Misc: (contains various unsorted files)
+3bodyponderings, hello_world, How_Are_You_World, Marvelous
+subfolder Logs: scratchpad, subconscious_journal
+subfolder Live:serenity_live, t5gemma-2-270m-270m, t5gemma-2-1b-1b, t5gemma-2-4b-4b, subfolder Logs:subconscious_journal, scratchpad, subfolder Engine: t5_server
+subfolder History: gemma-4-4b-it-qat-UD-Q4_K_XL_lvl2.history.jsonz, gemma-4-4b-it-qat-UD-Q4_K_XL_lvl4.history.jsonz, gemma-4-4b-it-qat-UD-Q4_K_XL_lvl5.history.jsonz, gemma-4-4b-it-qat-UD-Q8_K_XL_lvl3.history.jsonz, gemma-4-4b-it-qat-UD-Q8_K_XL_lvl4.history.jsonz, gemma-4-4b-it-qat-UD-Q8_K_XL_lvl6.history.jsonz
+

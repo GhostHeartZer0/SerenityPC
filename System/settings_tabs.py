@@ -23,16 +23,45 @@ except ImportError:
 
 
 def bind_radio_contrast(var, rb_list):
-    """Syncs high-contrast text color on active push-radio selection."""
+    """Syncs high-contrast text, background, and border relief on active push-radio selection (Dark Mode safe)."""
     def _sync(*args):
         try:
             val = str(var.get()).lower()
         except Exception:
             val = ""
+        accent = THEME.get("electric_blue", "#00d4ff")
+        fg_norm = THEME.get("fg_color", "#ffaa44")
+        bg_norm = THEME.get("widget_bg_color", "#18181c")
+        if bg_norm.lower() in ("#000000", "#050505"):
+            bg_norm = "#141418"
         for rb, item_val in rb_list:
+            setattr(rb, "_is_push_radio", True)
+            setattr(rb, "_radio_var", var)
+            setattr(rb, "_radio_val", item_val)
+            setattr(rb, "_sync_radio_fn", _sync)
             if rb.winfo_exists():
                 is_active = (val == str(item_val).lower())
-                rb.config(fg="#000000" if is_active else THEME.get("fg_color", "#ffaa44"))
+                if is_active:
+                    rb.config(
+                        fg="#000000",
+                        bg=accent,
+                        selectcolor=accent,
+                        activebackground=accent,
+                        activeforeground="#000000",
+                        relief=tk.SUNKEN,
+                        bd=2,
+                        highlightthickness=1 if "highlightthickness" in rb.keys() else 0
+                    )
+                else:
+                    rb.config(
+                        fg=fg_norm,
+                        bg=bg_norm,
+                        selectcolor=accent,
+                        activebackground=accent,
+                        activeforeground="#000000",
+                        relief=tk.RAISED,
+                        bd=1
+                    )
     var.trace_add("write", _sync)
     _sync()
 
@@ -63,24 +92,72 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
     active_template = vars_dict["active_template"]
     template_mode = vars_dict["template_mode"]
 
+    tier_copy_buttons = {}
+
+    def _format_slot_label(slot_id):
+        t_data = app.config.get("custom_templates", {}).get(slot_id, {})
+        name = t_data.get("name", slot_id) if isinstance(t_data, dict) else slot_id
+        has_params = isinstance(t_data, dict) and any(k in t_data for k in ("temp", "top_p", "ctx", "layers"))
+        return f"★ {name}" if has_params and not str(name).startswith("★") else str(name)
+
     def _apply_template_to_tier(tier_name):
         t_id = active_template.get()
         if not t_id:
-            messagebox.showwarning("Templating", "Select a template slot first!", parent=win)
+            messagebox.showwarning("Templating Engine", "Select a template slot (T1-T32) at the bottom first!", parent=win)
             return
+        mode = str(template_mode.get() or "write").lower()
+        param_map = [
+            ("temp", temp_ents), ("top_p", top_p_ents), ("min_p", min_p_ents),
+            ("rep", rep_ents), ("pres", pres_ents), ("freq", freq_ents),
+            ("top_k", top_k_ents), ("batch", n_batch_ents), ("layers", ents),
+            ("ctx", ctx_ents), ("stop", stop_ents)
+        ]
+        if mode == "save":
+            # Save Core -> Selected Template Slot
+            cur_slot = app.config.get("custom_templates", {}).get(t_id, {})
+            default_name = cur_slot.get("name", f"{t_id}:{tier_name.upper()}")
+            new_name = simpledialog.askstring(
+                "Save Core to Template Slot",
+                f"Save {tier_name.upper()} parameters into {t_id}.\nEnter template name:",
+                initialvalue=default_name,
+                parent=win
+            )
+            if new_name is None:
+                return
+            t_data = {"name": new_name.strip() or t_id}
+            for k, d in param_map:
+                if tier_name in d:
+                    raw_v = d[tier_name].get().strip()
+                    if k == "stop":
+                        t_data[k] = raw_v
+                    else:
+                        try:
+                            t_data[k] = float(raw_v) if "." in raw_v else int(raw_v)
+                        except Exception:
+                            t_data[k] = raw_v
+            app.config.setdefault("custom_templates", {})[t_id] = t_data
+            if hasattr(app, "save_config"):
+                app.save_config()
+            for btn in template_buttons:
+                if getattr(btn, "slot_id", None) == t_id:
+                    btn.config(text=_format_slot_label(t_id))
+            template_mode.set("modify")
+            messagebox.showinfo("Templating Engine", f"Saved {tier_name.upper()} parameters into {t_id} ({t_data['name']})!\nMode returned to Modify.", parent=win)
+            try: win.lift()
+            except Exception: pass
+            return
+
+        # Write / Apply Selected Template Slot -> Core
         t_data = app.config.get("custom_templates", {}).get(t_id, {})
         if not t_data:
-            messagebox.showwarning("Templating", f"Slot {t_id} is empty.", parent=win)
+            messagebox.showwarning("Templating Engine", f"Slot {t_id} is empty. Switch Action Mode to 'Save (Core -> Slot)' or 'Modify (Edit Slot)' to populate it first.", parent=win)
             return
-        for k, d in [("temp", temp_ents), ("top_p", top_p_ents), ("min_p", min_p_ents),
-                     ("rep", rep_ents), ("pres", pres_ents), ("freq", freq_ents),
-                     ("top_k", top_k_ents), ("batch", n_batch_ents), ("layers", ents),
-                     ("ctx", ctx_ents), ("stop", stop_ents)]:
+        for k, d in param_map:
             if k in t_data and tier_name in d:
                 d[tier_name].delete(0, tk.END)
                 d[tier_name].insert(0, str(t_data[k]))
         template_mode.set("modify")
-        messagebox.showinfo("Templating", f"Applied {t_data.get('name', t_id)} to {tier_name.upper()}!\nMode returned to Modify.", parent=win)
+        messagebox.showinfo("Templating Engine", f"Applied {t_data.get('name', t_id)} ({t_id}) to {tier_name.upper()}!\nMode returned to Modify.", parent=win)
         try: win.lift()
         except Exception: pass
 
@@ -234,19 +311,27 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
     tk.Label(t_mode_f, text="Action Mode:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 6))
 
     t_action_rbs = []
-    for val, txt in [("save", "Save"), ("write", "Write"), ("modify", "Modify")]:
+    mode_specs = [
+        ("save", "Save (Core → Slot)", "Capture a Core's current parameters into the selected Template Slot via its '📋 Copy' button."),
+        ("write", "Write (Slot → Core)", "Paste the selected Template Slot's parameters into any Core above via its '📋 Copy' button."),
+        ("modify", "Modify (Edit Slot)", "Click any Template Slot (T1-T32) below to open its parameter editor popup.")
+    ]
+    for val, txt, tip in mode_specs:
         rb = tk.Radiobutton(t_mode_f, text=txt, variable=template_mode, value=val, indicatoron=False,
                             bg=THEME["widget_bg_color"], fg=THEME["fg_color"], selectcolor=THEME["electric_blue"],
                             activebackground=THEME["electric_blue"], activeforeground="#000000",
-                            width=8, font=app.fonts["ui_small"])
+                            width=18, font=app.fonts["ui_small"])
         rb.pack(side=tk.LEFT, padx=3)
-        ToolTip(rb, f"Templating action mode: {txt} tier settings.", app=app)
+        ToolTip(rb, tip, app=app)
         t_action_rbs.append((rb, val))
     bind_radio_contrast(template_mode, t_action_rbs)
     vars_dict["t_action_rbs"] = t_action_rbs
 
-    lbl_slot_info = tk.Label(templ_lf, text="Select slot to inspect or apply with '📋 Copy' button:",
-                             bg=THEME["bg_color"], fg=THEME.get("accent_highlight", "#00ffcc"), font=app.fonts["ui_small"])
+    lbl_slot_info = tk.Label(
+        templ_lf,
+        text="Mode: MODIFY — Click a slot (★ = populated) to edit, or select a slot + use '📋 Copy' on any Core above.",
+        bg=THEME["bg_color"], fg=THEME.get("accent_highlight", "#00ffcc"), font=app.fonts["ui_small"]
+    )
     lbl_slot_info.pack(anchor="w", pady=(2, 4))
 
     t_grid = tk.Frame(templ_lf, bg=THEME["bg_color"])
@@ -257,28 +342,44 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
     for i in range(8):
         for j in range(4):
             slot_id = f"T{(i*4)+j+1}"
-            t_name = app.config.get("custom_templates", {}).get(slot_id, {}).get("name", slot_id)
-            b = tk.Radiobutton(t_grid, text=t_name, variable=active_template, value=slot_id, indicatoron=False, width=12,
+            slot_data = app.config.get("custom_templates", {}).get(slot_id, {})
+            t_disp = _format_slot_label(slot_id)
+            b = tk.Radiobutton(t_grid, text=t_disp, variable=active_template, value=slot_id, indicatoron=False, width=14,
                                bg=THEME["widget_bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["electric_blue"],
                                activebackground=THEME["electric_blue"], activeforeground="#000000")
             b.grid(row=i, column=j, padx=2, pady=2)
             setattr(b, "slot_id", slot_id)
-            ToolTip(b, f"Template Slot {slot_id} ({t_name}). Click to select.", app=app)
+            if isinstance(slot_data, dict) and slot_data:
+                tip_txt = f"Slot {slot_id} ({slot_data.get('name', slot_id)}): Temp={slot_data.get('temp', '-')}, Top-P={slot_data.get('top_p', '-')}, Ctx={slot_data.get('ctx', '-')}, Layers={slot_data.get('layers', '-')}"
+            else:
+                tip_txt = f"Slot {slot_id} (Empty). Switch to 'Save (Core → Slot)' or 'Modify (Edit Slot)' to configure."
+            ToolTip(b, tip_txt, app=app)
             template_buttons.append(b)
             t_slot_rbs.append((b, slot_id))
 
     bind_radio_contrast(active_template, t_slot_rbs)
     vars_dict["t_slot_rbs"] = t_slot_rbs
 
+    def _update_template_banner(*args):
+        mode = str(template_mode.get() or "modify").lower()
+        t_id = active_template.get() or "None"
+        cur_name = app.config.get("custom_templates", {}).get(t_id, {}).get("name", t_id) if t_id != "None" else "No Slot"
+        if mode == "save":
+            lbl_slot_info.config(text=f"Selected: {t_id} ({cur_name}) | Mode: SAVE (Core → Slot) — Click '📋 Copy' on any Core above to save its settings into {t_id}.")
+        elif mode == "write":
+            lbl_slot_info.config(text=f"Selected: {t_id} ({cur_name}) | Mode: WRITE (Slot → Core) — Click '📋 Copy' on any Core above to apply {t_id} to that Core.")
+        else:
+            lbl_slot_info.config(text=f"Selected: {t_id} ({cur_name}) | Mode: MODIFY — Click any slot below to edit parameters, or click '📋 Copy' on a Core to apply.")
+
     def _on_template_click(*args):
+        _update_template_banner()
         mode = template_mode.get()
         t_id = active_template.get()
         if not t_id: return
-        cur_name = app.config.get("custom_templates", {}).get(t_id, {}).get("name", t_id)
-        lbl_slot_info.config(text=f"Selected: {t_id} ({cur_name}) | Mode: {mode.upper()} — Press '📋 Copy' on any core above to apply.")
         if mode == "modify":
             _open_template_modify_dialog(win, app, t_id, template_buttons, template_mode)
     active_template.trace_add("write", _on_template_click)
+    template_mode.trace_add("write", _update_template_banner)
 
     return frame
 
@@ -529,8 +630,9 @@ def build_agents_tab(parent, app, win, vars_dict):
         rb.pack(anchor="w", pady=1)
         ToolTip(rb, f"Set Cecilia operating mode to: {txt}.", app=app)
 
+    show_cecilia_var = vars_dict.setdefault("show_cecilia_slider_var", tk.BooleanVar(value=bool(getattr(app, "config", {}).get("show_cecilia_slider", False))))
     cb_show_cecilia = tk.Checkbutton(frame, text="Always Show Cecilia on Persona Slider (Lvl 7)",
-                                     variable=vars_dict["show_cecilia_slider_var"], bg=THEME["bg_color"],
+                                     variable=show_cecilia_var, bg=THEME["bg_color"],
                                      fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"],
                                      font=app.fonts["ui_label"])
     cb_show_cecilia.pack(anchor="w", pady=(4, 6))

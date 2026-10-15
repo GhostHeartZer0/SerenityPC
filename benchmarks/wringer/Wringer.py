@@ -570,8 +570,12 @@ class WringerFramework:
                         stream=True
                     )
                     
+                    last_finish_reason = None
                     for chunk in gen:
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        ch0 = chunk.get("choices", [{}])[0]
+                        if ch0.get("finish_reason"):
+                            last_finish_reason = ch0.get("finish_reason")
+                        delta = ch0.get("delta", {})
                         content_chunk = delta.get("content") or ""
                         reasoning_chunk = delta.get("reasoning_content") or ""
                         if content_chunk or reasoning_chunk:
@@ -581,18 +585,64 @@ class WringerFramework:
                                 full_thought += reasoning_chunk
                             if content_chunk:
                                 full_answer += content_chunk
-                            
-                    t_end = time.perf_counter()
-                    
-                    if t_first_token is None:
-                        t_first_token = t_end
 
                     if full_thought:
                         full_text = f"<think>\n{full_thought.strip()}\n</think>\n{full_answer.strip()}".strip()
                     else:
                         full_text = full_answer.strip()
-                        
                     output_tokens = self._estimate_tokens(full_text, llm=llm, add_bos=False)
+
+                    # Max-Token Continuation Guard: prompt model to continue if max_tokens reached or >= 90% close
+                    cont_round = 0
+                    while cont_round < 2 and (last_finish_reason == "length" or output_tokens >= int(allowed_gen * 0.90)):
+                        remaining_ctx = target_ctx - prompt_tokens - output_tokens - 64
+                        if remaining_ctx < 256:
+                            break
+                        cont_round += 1
+                        cont_budget = max(256, min(MAX_GEN_TOKENS // 2, remaining_ctx))
+                        print(f"    [MAX-TOKEN GUARD] Output reached {output_tokens}/{allowed_gen} tokens (finish_reason={last_finish_reason}). Triggering continuation pass #{cont_round} (budget={cont_budget})...")
+                        cont_msgs = list(messages) + [
+                            {"role": "assistant", "content": full_text},
+                            {"role": "user", "content": "You reached or neared the maximum token limit before completing your response. Continue seamlessly from the exact point where you left off and deliver your final conclusion concisely."}
+                        ]
+                        last_finish_reason = None
+                        cont_gen = llm.create_chat_completion(
+                            messages=cont_msgs,
+                            max_tokens=cont_budget,
+                            temperature=temp,
+                            top_p=0.95,
+                            top_k=64,
+                            stream=True
+                        )
+                        cont_thought = ""
+                        cont_answer = ""
+                        for chunk in cont_gen:
+                            ch0 = chunk.get("choices", [{}])[0]
+                            if ch0.get("finish_reason"):
+                                last_finish_reason = ch0.get("finish_reason")
+                            delta = ch0.get("delta", {})
+                            c_chunk = delta.get("content") or ""
+                            r_chunk = delta.get("reasoning_content") or ""
+                            if r_chunk:
+                                cont_thought += r_chunk
+                            if c_chunk:
+                                cont_answer += c_chunk
+                        if cont_thought:
+                            full_thought = (full_thought + "\n" + cont_thought).strip()
+                        if cont_answer:
+                            full_answer = (full_answer + " " + cont_answer).strip()
+                        if full_thought:
+                            full_text = f"<think>\n{full_thought.strip()}\n</think>\n{full_answer.strip()}".strip()
+                        else:
+                            full_text = full_answer.strip()
+                        output_tokens = self._estimate_tokens(full_text, llm=llm, add_bos=False)
+                        if last_finish_reason != "length" and len(cont_answer) < int(cont_budget * 2):
+                            break
+
+                    t_end = time.perf_counter()
+                    
+                    if t_first_token is None:
+                        t_first_token = t_end
                     
                     prefill_time = max(0.0001, t_first_token - t_start)
                     decode_time = max(0.0001, t_end - t_first_token)
@@ -1269,6 +1319,46 @@ class WringerFramework:
                 best_data["speed_model"] = model_name
                 updated = True
                 
+            # Maintain Top-5 Leaderboards per Level for Score Percentage and Decode Speed (t/s)
+            score_lb = [e for e in best_data.get("top5_score_leaderboard", []) if isinstance(e, dict) and e.get("model") != model_name]
+            if best_score_model != "N/A" and not any(e.get("model") == best_score_model for e in score_lb):
+                score_lb.append({
+                    "model": best_score_model,
+                    "percentage": float(best_data.get("percentage", round(best_score * 10, 1))),
+                    "average_score": float(best_score),
+                    "decode_tps": float(best_data.get("best_decode_tps", 0.0))
+                })
+            score_lb.append({
+                "model": model_name,
+                "percentage": float(curr_pct),
+                "average_score": float(curr_score),
+                "decode_tps": float(curr_decode_tps)
+            })
+            score_lb.sort(key=lambda x: (x.get("percentage", 0.0), x.get("average_score", 0.0), x.get("decode_tps", 0.0)), reverse=True)
+            best_data["top5_score_leaderboard"] = [
+                {"rank": idx_r, **entry} for idx_r, entry in enumerate(score_lb[:5], 1)
+            ]
+
+            speed_lb = [e for e in best_data.get("top5_speed_leaderboard", []) if isinstance(e, dict) and e.get("model") != model_name]
+            if best_tps_model != "N/A" and not any(e.get("model") == best_tps_model for e in speed_lb):
+                speed_lb.append({
+                    "model": best_tps_model,
+                    "decode_tps": float(best_tps),
+                    "percentage": float(best_data.get("percentage", 0.0)),
+                    "average_score": float(best_score)
+                })
+            speed_lb.append({
+                "model": model_name,
+                "decode_tps": float(curr_decode_tps),
+                "percentage": float(curr_pct),
+                "average_score": float(curr_score)
+            })
+            speed_lb.sort(key=lambda x: (x.get("decode_tps", 0.0), x.get("percentage", 0.0)), reverse=True)
+            best_data["top5_speed_leaderboard"] = [
+                {"rank": idx_r, **entry} for idx_r, entry in enumerate(speed_lb[:5], 1)
+            ]
+            updated = True
+
             best_data["last_tested_model"] = model_name
             best_data["last_anomaly_count"] = curr_anomalies
             best_data["last_avg_response_time"] = curr_resp_time
@@ -1287,12 +1377,22 @@ class WringerFramework:
             best_tps_disp = f"{best_data.get('best_decode_tps', 'N/A')} t/s ({best_data.get('speed_model', 'N/A')[:10]})"
             
             print(f"{lvl:<10} | {curr_score:<10} | {best_score_disp:<18} | {curr_decode_tps:<11} | {curr_resp_time:>7.2f}s | {best_tps_disp:<18} | {curr_anomalies:<9} | {status}")
-            
+
+        print("\n=== Top 5 Leaderboards Per Level (Score % & Decode Speed) ===")
+        for lvl, data in model_results.items():
+            b_data = high_scores.get(lvl, {})
+            s_lb = b_data.get("top5_score_leaderboard", [])
+            v_lb = b_data.get("top5_speed_leaderboard", [])
+            s_str = ", ".join(f"#{e['rank']} {e['model'][:18]} ({e['percentage']:.1f}%)" for e in s_lb)
+            v_str = ", ".join(f"#{e['rank']} {e['model'][:18]} ({e['decode_tps']:.1f} t/s)" for e in v_lb)
+            print(f"  [{lvl}] Top 5 Score % : {s_str}")
+            print(f"  [{lvl}] Top 5 Speed   : {v_str}")
+
         if updated:
             try:
                 with open(scores_file, "w") as f:
                     json.dump(high_scores, f, indent=4)
-                print(f"[+] High scores updated in: {scores_file}")
+                print(f"[+] High scores & Top-5 leaderboards updated in: {scores_file}")
             except Exception as e:
                 print(f"[-] Warning: Failed to save high scores: {e}")
 

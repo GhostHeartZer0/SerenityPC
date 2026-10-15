@@ -369,12 +369,39 @@ class GemmaToolRegistry:
             return json.dumps(stats)
 
         def _is_sandboxed_path(target_p: str) -> bool:
-            """Ensure target path is within workspace root or designated data subdirectories."""
-            base_dir = os.path.abspath(getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd())
-            abs_p = os.path.abspath(target_p)
+            """
+            Enforces strict tool file sandboxing:
+            - Default (unauthenticated, locked, or profile < 72h old): strictly restricted to Users/ and Logs/.
+            - Password-protected, unlocked profile >= 72 hours old: allowed read access across the repository root.
+            - Sensitive cryptographic/credential files (.env, vault_state.json, *.encz, vault.db) are always blocked.
+            """
+            base_dir = os.path.realpath(getattr(self.app, "script_dir", os.getcwd()) if self.app else os.getcwd())
+            real_p = os.path.realpath(target_p)
+            fname_lower = os.path.basename(real_p).lower()
+            if fname_lower in {".env", "vault_state.json", "vault.db"} or fname_lower.endswith(".encz"):
+                return False
+
+            vm = getattr(self.app, "vault_manager", None) if self.app else None
+            full_repo_allowed = False
+            if self.app is None:
+                full_repo_allowed = True
+            elif vm is not None and hasattr(vm, "has_full_repo_read_access"):
+                try:
+                    full_repo_allowed = bool(vm.has_full_repo_read_access(min_age_hours=72.0))
+                except Exception:
+                    full_repo_allowed = False
+
             try:
-                # Must reside inside base workspace directory
-                return os.path.commonpath([base_dir, abs_p]) == base_dir
+                if full_repo_allowed:
+                    return os.path.commonpath([base_dir, real_p]) == base_dir
+                import tempfile
+                allowed_dirs = [
+                    os.path.realpath(os.path.join(base_dir, "Users")),
+                    os.path.realpath(os.path.join(base_dir, "Logs")),
+                    os.path.realpath(os.path.join(base_dir, ".tmp")),
+                    os.path.realpath(tempfile.gettempdir()),
+                ]
+                return any(os.path.commonpath([d, real_p]) == d for d in allowed_dirs)
             except Exception:
                 return False
 

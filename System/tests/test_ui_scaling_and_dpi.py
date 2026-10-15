@@ -67,7 +67,7 @@ class TestUIScalingAndDPI(unittest.TestCase):
         scale = tk.Scale(frame, from_=1, to=6, orient=tk.HORIZONTAL, length=110, showvalue=False)
         scale.pack(side=tk.LEFT, padx=(6, 2))
         
-        btn_name = tk.Button(frame, text="LVL 6: Serenity Prime", font=("Open Sans", 11, "bold"), padx=6, pady=2)
+        btn_name = tk.Button(frame, text="LVL 6: The Transcendent One", font=("Open Sans", 11, "bold"), padx=6, pady=2)
         btn_name.pack(side=tk.LEFT, padx=3)
         
         btn_add = tk.Button(frame, text="+", font=("Open Sans", 11, "bold"), padx=6, pady=2)
