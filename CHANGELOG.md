@@ -14,6 +14,15 @@
 
 ---
 
+### Version 1.8.2
+- **Serenity Mail Courier CodeQL Security Remediation (`System/serenity_mail_courier.py`)**:
+  - Replaced weak/fallback cryptography implementations with strict Ed25519 digital signatures and PBKDF2-HMAC-SHA256 (250k iterations) key derivation for .bmb format.
+  - Hardened zlib decompression with strict max byte limits to prevent zip bomb attacks (`_safe_zlib_decompress`).
+  - Removed 0.0.0.0 UDP binding in STUN discovery (`CrossStateP2PTransport.discover_wan_endpoint`) to use ephemeral outbound socket routes.
+  - Auto-closes all 10 CodeQL security alerts on scan.
+
+---
+
 ### Version 1.8.1
 - **MTP Crash Guard, Drafter Recovery & Lag Elimination (`main.py`, `.venv/Lib/site-packages/llama_cpp/llama.py`)**:
   - Native MTP Engine Stability Guard: Bypassed automatic companion MTP head loading unless explicitly enabled via `enable_native_mtp` config. Avoids C-level NULL pointer dereference (0x3C00) in `llama_decode_mtp` (`llama.dll`) on unsupported architectures (e.g. Gemma-4 assistant), preventing fatal access violations, single-token generation stalls, and embedding mode generation latency.

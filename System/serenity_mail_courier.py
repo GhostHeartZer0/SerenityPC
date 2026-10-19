@@ -1,4 +1,3 @@
-# System/serenity_mail_courier.py
 """
 Serenity P2P Messaging, Encrypted Mail (.smp / .bmb), Level 2 Courier Agent,
 and SerenityDev MCP Frontend Bridge for SerenityPC & SerenityPC Legacy.
@@ -369,34 +368,19 @@ class SerenityMailCrypto:
                 "ed25519_public_hex": ed_pub_bytes.hex(),
                 "fingerprint": fingerprint,
             }
-        # Stdlib fallback if cryptography is unavailable
-        seed = os.urandom(32)
-        pub = hashlib.sha256(seed + b"SERENITY_PUB").digest()
-        fp = hashlib.sha256(pub).hexdigest()[:24]
-        return {
-            "x25519_private_hex": seed.hex(),
-            "x25519_public_hex": pub.hex(),
-            "ed25519_private_hex": seed.hex(),
-            "ed25519_public_hex": pub.hex(),
-            "fingerprint": fp,
-        }
+        raise RuntimeError("cryptography library (X25519/Ed25519) is required to generate identity keys.")
 
     @classmethod
     def sign_envelope(cls, envelope: InterSerenityEnvelope, ed25519_priv_hex: str) -> str:
-        """Signs an InterSerenityEnvelope using Ed25519 (or HMAC-SHA256 fallback)."""
+        """Signs an InterSerenityEnvelope using Ed25519."""
         msg_bytes = envelope.canonical_signing_bytes()
         priv_bytes = bytes.fromhex(ed25519_priv_hex)
-        if CRYPTO_AVAILABLE and Ed25519PrivateKey is not None:
-            try:
-                priv_key = Ed25519PrivateKey.from_private_bytes(priv_bytes)
-                sig = priv_key.sign(msg_bytes)
-                envelope.signature_hex = sig.hex()
-                return envelope.signature_hex
-            except Exception:
-                pass
-        sig = hmac.new(priv_bytes, msg_bytes, hashlib.sha256).hexdigest()
-        envelope.signature_hex = sig
-        return sig
+        if not (CRYPTO_AVAILABLE and Ed25519PrivateKey is not None):
+            raise RuntimeError("cryptography library (Ed25519) is required to sign envelopes.")
+        priv_key = Ed25519PrivateKey.from_private_bytes(priv_bytes)
+        sig = priv_key.sign(msg_bytes)
+        envelope.signature_hex = sig.hex()
+        return envelope.signature_hex
 
     @classmethod
     def verify_envelope_signature(
@@ -415,7 +399,7 @@ class SerenityMailCrypto:
                 return True
             except Exception:
                 return False
-        return len(sig_bytes) == 32
+        return False
 
     @classmethod
     def derive_ecdh_shared_key(
@@ -476,17 +460,21 @@ class SerenityMailCrypto:
             kdf_mode = b"\x01"  # Mode 1: PBKDF2 Passphrase
 
         aad = cls.HEADER_MAGIC + kdf_mode + salt
-        if CRYPTO_AVAILABLE and AESGCM is not None:
-            ciphertext = AESGCM(key).encrypt(nonce, compressed, aad)
-        else:
-            # SHAKE-256 stream + HMAC-SHA256 tag fallback (matching SerenityDev PQC fallback)
-            keystream = hashlib.shake_256(key + nonce + salt).digest(len(compressed))
-            xored = bytes(a ^ b for a, b in zip(compressed, keystream))
-            tag = hmac.new(key, aad + nonce + xored, hashlib.sha256).digest()[:16]
-            ciphertext = xored + tag
+        if not (CRYPTO_AVAILABLE and AESGCM is not None):
+            raise RuntimeError("cryptography (AESGCM) is required for SMP encryption.")
+        ciphertext = AESGCM(key).encrypt(nonce, compressed, aad)
 
         binary_packet = cls.HEADER_MAGIC + kdf_mode + salt + nonce + ciphertext
         return base64.urlsafe_b64encode(binary_packet).decode("ascii")
+
+    @classmethod
+    def _safe_zlib_decompress(cls, compressed: bytes, max_bytes: int = 50 * 1024 * 1024) -> bytes:
+        """Decompresses zlib payload with a strict upper bound (default 50 MB) to prevent zip bombs."""
+        decomp = zlib.decompressobj()
+        out = decomp.decompress(compressed, max_bytes)
+        if decomp.unconsumed_tail:
+            raise ValueError("Compressed payload exceeds maximum safe decompression size.")
+        return out + decomp.flush()
 
     @classmethod
     def decrypt_smp(
@@ -527,20 +515,14 @@ class SerenityMailCrypto:
             key = cls.derive_passphrase_key(secret, salt)
 
         aad = cls.HEADER_MAGIC + kdf_mode + salt
-        if CRYPTO_AVAILABLE and AESGCM is not None:
-            compressed = AESGCM(key).decrypt(nonce, ciphertext, aad)
-        else:
-            if len(ciphertext) < 16:
-                raise ValueError("Truncated SMP ciphertext.")
-            xored, tag = ciphertext[:-16], ciphertext[-16:]
-            expected_tag = hmac.new(key, aad + nonce + xored, hashlib.sha256).digest()[:16]
-            if not hmac.compare_digest(tag, expected_tag):
-                raise PermissionError("SMP HMAC authentication tag verification failed.")
-            keystream = hashlib.shake_256(key + nonce + salt).digest(len(xored))
-            compressed = bytes(a ^ b for a, b in zip(xored, keystream))
+        if not (CRYPTO_AVAILABLE and AESGCM is not None):
+            raise RuntimeError("cryptography (AESGCM) is required for SMP decryption.")
+        compressed = AESGCM(key).decrypt(nonce, ciphertext, aad)
 
-        json_str = zlib.decompress(compressed).decode("utf-8")
+        json_str = cls._safe_zlib_decompress(compressed).decode("utf-8")
         return json.loads(json_str)
+
+    BMB_V2_MAGIC = b"BMB2"
 
     @classmethod
     def export_legacy_bmb(
@@ -550,7 +532,9 @@ class SerenityMailCrypto:
         device_name: str = "SerenityPC",
         passphrase: str = DEFAULT_BMB_PASSPHRASE,
     ) -> str:
-        """Exports dialogue turns in Project Brainuke (.bmb) format for Android SerenityDroid."""
+        """Exports dialogue turns in Project Brainuke (.bmb) format using PBKDF2-HMAC-SHA256 (250k iterations)."""
+        if not (CRYPTO_AVAILABLE and AESGCM is not None):
+            raise RuntimeError("cryptography (AESGCM) required for .bmb compatibility.")
         root_obj = {
             "type": "brainuke_messageboard_packet",
             "session_id": session_id,
@@ -560,27 +544,34 @@ class SerenityMailCrypto:
             "turns": turns,
         }
         plain_bytes = json.dumps(root_obj, ensure_ascii=False).encode("utf-8")
-        key = hashlib.sha256(passphrase.encode("utf-8")).digest()
-        iv = os.urandom(12)
-        if CRYPTO_AVAILABLE and AESGCM is not None:
-            ct = AESGCM(key).encrypt(iv, plain_bytes, None)
-        else:
-            raise RuntimeError("cryptography (AESGCM) required for .bmb compatibility.")
-        return base64.b64encode(iv + ct).decode("ascii")
+        salt = os.urandom(cls.SALT_SIZE)
+        iv = os.urandom(cls.NONCE_SIZE)
+        key = cls.derive_passphrase_key(passphrase, salt)
+        ct = AESGCM(key).encrypt(iv, plain_bytes, cls.BMB_V2_MAGIC + salt)
+        return base64.b64encode(cls.BMB_V2_MAGIC + salt + iv + ct).decode("ascii")
 
     @classmethod
     def decrypt_legacy_bmb(
         cls, encrypted_b64: str, passphrase: str = DEFAULT_BMB_PASSPHRASE
     ) -> Dict[str, Any]:
-        """Decrypts Project Brainuke (.bmb) AES-GCM packets from SerenityDroid or Brainuke Throne."""
-        raw = base64.b64decode(encrypted_b64.strip())
-        if len(raw) <= 12:
-            raise ValueError("Invalid .bmb payload size.")
-        iv, ct = raw[:12], raw[12:]
-        key = hashlib.sha256(passphrase.encode("utf-8")).digest()
+        """Decrypts Project Brainuke (.bmb) AES-GCM packets using PBKDF2-HMAC-SHA256 key derivation."""
         if not (CRYPTO_AVAILABLE and AESGCM is not None):
             raise RuntimeError("cryptography (AESGCM) required for .bmb decryption.")
-        plain_bytes = AESGCM(key).decrypt(iv, ct, None)
+        raw = base64.b64decode(encrypted_b64.strip())
+        if raw.startswith(cls.BMB_V2_MAGIC):
+            if len(raw) <= 4 + cls.SALT_SIZE + cls.NONCE_SIZE:
+                raise ValueError("Invalid .bmb payload size.")
+            salt = raw[4 : 4 + cls.SALT_SIZE]
+            iv = raw[4 + cls.SALT_SIZE : 4 + cls.SALT_SIZE + cls.NONCE_SIZE]
+            ct = raw[4 + cls.SALT_SIZE + cls.NONCE_SIZE :]
+            key = cls.derive_passphrase_key(passphrase, salt)
+            plain_bytes = AESGCM(key).decrypt(iv, ct, cls.BMB_V2_MAGIC + salt)
+        else:
+            if len(raw) <= 12:
+                raise ValueError("Invalid .bmb payload size.")
+            iv, ct = raw[:12], raw[12:]
+            key = cls.derive_passphrase_key(passphrase, b"SERENITY_BMB_V1_SALT")
+            plain_bytes = AESGCM(key).decrypt(iv, ct, None)
         return json.loads(plain_bytes.decode("utf-8"))
 
 
@@ -621,11 +612,8 @@ class CrossStateP2PTransport:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
                 sock.settimeout(timeout)
-                if local_port > 0:
-                    try:
-                        sock.bind(("0.0.0.0", local_port))
-                    except Exception:
-                        pass
+                # Outbound UDP sendto automatically assigns an ephemeral port on the route interface
+                # without binding to INADDR_ANY (0.0.0.0), resolving CodeQL #3 / #4.
                 sock.sendto(req_packet, (host, port))
                 data, _ = sock.recvfrom(2048)
                 if len(data) < 20:
@@ -707,7 +695,7 @@ class CrossStateP2PTransport:
         if raw.startswith("serenity-peer://"):
             raw = raw[len("serenity-peer://") :]
         compressed = base64.urlsafe_b64decode(raw)
-        card = json.loads(zlib.decompress(compressed).decode("utf-8"))
+        card = json.loads(SerenityMailCrypto._safe_zlib_decompress(compressed, max_bytes=1024 * 1024).decode("utf-8"))
         sig_hex = card.pop("sig", None)
         if not sig_hex:
             raise ValueError("Invite card is missing cryptographic signature.")
