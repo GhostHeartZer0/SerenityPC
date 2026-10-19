@@ -1,6 +1,6 @@
 {
     "username": "Default",
-    "main_window": "960x600+114+227",
+    "main_window": "1176x887+61+29",
     "model_paths": {
         "fast": "C:/Users/ccrg6/Documents/SerenityPC/Models/E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "search": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
@@ -16,7 +16,7 @@
         "vision_multimodal": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
         "vision_multimodal_projector": "C:/Users/ccrg6/Desktop/Desktop/Hub/SerenityPC/Models/gemma-4-12b/mmproj-F16.gguf",
         "mid": "S:/SerenityPC/Models/gemma-4-26B MoE/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-        "transcendent": "C:/Users/ccrg6/Documents/SerenityPC/Models/E4B/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+        "transcendent": "S:/Downloads/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-UD-IQ2_XXS.gguf"
     },
     "gpu_layer_config": {
         "fast": 99,
@@ -30,7 +30,7 @@
         "vision_video_deep": 14,
         "vision_multimodal": 99,
         "mid": 99,
-        "transcendent": 99
+        "transcendent": 5
     },
     "context_size_config": {
         "fast": 32768,
@@ -44,7 +44,7 @@
         "vision_video_deep": 4096,
         "vision_multimodal": 32768,
         "mid": 32768,
-        "transcendent": 32768
+        "transcendent": 8192
     },
     "temp_config": {
         "fast": 0.8,
@@ -58,7 +58,7 @@
         "vision_video_deep": 0.1,
         "vision_multimodal": 1.0,
         "mid": 0.8,
-        "transcendent": 0.8
+        "transcendent": 0.7
     },
     "top_p_config": {
         "fast": 0.95,
@@ -100,7 +100,7 @@
         "vision_video_deep": 1.0,
         "vision_multimodal": 1.0,
         "mid": 1.1,
-        "transcendent": 1.1
+        "transcendent": 1.0
     },
     "frequency_penalty_config": {
         "fast": 0.0,
@@ -168,13 +168,13 @@
         "vision_video_deep": 64,
         "vision_multimodal": 64,
         "mid": 64,
-        "transcendent": 64
+        "transcendent": 45
     },
-    "sash_pos": 481,
+    "sash_pos": 751,
     "deep_thought_behavior": "toggle",
     "virtual_vram": 6144,
-    "active_persona_level": 1,
-    "max_persona_level": 6.0,
+    "active_persona_level": 6,
+    "max_persona_level": 7.0,
     "synthesis_in_tactical_mode": false,
     "show_rgb_button": false,
     "sub_chunk_size": 8,
@@ -475,18 +475,18 @@
     },
     "streaming_mode": "Real-time",
     "max_token_ratio": 4,
-    "auto_vram_offload": false,
+    "auto_vram_offload": true,
     "speculative_drafting": false,
     "history_lookup_mode": "targeted",
-    "k_cache_type": "fp16",
-    "v_cache_type": "fp16",
+    "k_cache_type": "q4_0",
+    "v_cache_type": "q4_0",
     "hao_preset": "exps=CPU",
     "swa_kv_cache": "Auto",
     "media_rendering": 1,
     "history_usage": "all",
     "ghost_mode": true,
     "dynamic_params_enabled": false,
-    "startup_count": 2,
+    "startup_count": 0,
     "offline_mode": false,
     "theme": "yellow_blacket",
     "texture_style": "default",
@@ -544,9 +544,18 @@
     "halt_behavior_mode": "off",
     "history_mode": "Keyword",
     "status_bar_linger_sec": 5.0,
-    "settings_window_geometry": "860x950",
+    "settings_window_geometry": "860x950+104+104",
     "scroll_lock_enabled": false,
     "user_notes": "",
     "format_prompts_markdown": false,
-    "vault_modal_geometry": "480x380+354+337"
+    "vault_modal_geometry": "480x380+354+337",
+    "history_autosave_mode": "End",
+    "history_level_format": "All",
+    "deep_cook_cycles": "auto",
+    "deep_cook_agent_coop": "otl_per_step",
+    "deep_cook_formatting": "inline",
+    "normal_generation_formatting": "inline",
+    "show_cecilia_slider": true,
+    "marquee_text_enabled": false,
+    "deep_cook_enabled": false
 }

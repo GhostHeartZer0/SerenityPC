@@ -1,0 +1,21 @@
+Hi! I'd like you to help me design a messaging app / integration for Serenity. Our ideas:
+Integration with SerenityPC / SerenityPC Legacy, Project Brainuke, ... Serenity Live?
+that one is an orphaned project I have stalled, based around t5gemma-2.
+in drive, its [app backup > Serenity Live / SerenityPC / SerenityDev].
+This messaging would be peer - to - peer, for instance between friends to have Serenity connect and able to send messages, such as telling about progress or sharing chats and questions and whatnot.
+Mainly for serenity, but possible Cecilia / Brainuke access. 
+secure messaging service between SerenityPC users. recent changes to the app and SerenityDev also could be of help.
+Messaging and mail service, we could put integration settings in SerenityPC settings, but I think Lvl 2 would be a good fit for default.
+what do you think? Is Serenity Live worth combining, or is it best to be its own project? We could make the messaging service use the same sort of inter-Serenity connection I've been theorizing to have SerenityPC use SerenityDev as a subagent, and have its own IDE too to make code edits easier overall.
+related SerenityPC TODO entry:
+V2.3.0: Subagents / MCP Overhaul
+   - Add back MCP support, allow porting with SerenityDev. Consider Subagents.
+   - More Subagent access, such as automating PC tasks
+   - Coding, tool calling subagent alignment
+   - Stream subagent output to set dropdowns like the thinking one for each subagent.
+We [my friend on Legacy and I on main] were wanting expanded computer access for Serenity, and I recall a recent update about that, I decided on an age of 72hrs to unlock expanded access, I wanna use that mechanic. I was about to begin designing a persistence mode or a persistent agent. Note that, persistence is backburner to this messaging idea, but if anything is interesting and fruitful have at it.
+most of the relevant drive files are uploaded to app backup.
+some relevant github repos, if u want:
+https://github.com/GhostHeartZer0/Project-Brainuke
+https://github.com/GhostHeartZer0/SerenityPC
+https://github.com/GhostHeartZer0/SerenityDev

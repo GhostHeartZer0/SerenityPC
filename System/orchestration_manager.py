@@ -20,6 +20,31 @@ def clean_model_display_name(p: str) -> str:
     name = re.sub(r'[-_.](?:qat[-_.]UD|qat)$', '', name, flags=re.IGNORECASE)
     return name or os.path.basename(str(p or ''))
 
+def extract_search_query(user_query: str) -> str:
+    """Extracts concise, bloat-free search keywords (< 140 chars) from complex multi-modal/code prompts."""
+    # 1. Strip fenced code blocks
+    clean = re.sub(r'```[\s\S]*?```', '', user_query)
+    # 2. Strip C++/Kotlin/Java/Python boilerplate lines
+    clean = re.sub(r'(?m)^\s*(?:#include|package|import|using)\s+.*$', '', clean)
+    clean = re.sub(r'(?m)^\s*(?:extern\s+"C"|public\s+class|class\s+\w+|fun\s+\w+|val\s+\w+|var\s+\w+|def\s+\w+).*$', '', clean)
+    clean = re.sub(r'[{}\[\]();]', ' ', clean)
+    # 3. Look for explicit search directives
+    m_search = re.search(r'\b(?:search|find|lookup|check)\s+(?:for\s+)?["\']?([^"\'.\n\r]{4,120})["\']?', clean, re.IGNORECASE)
+    if m_search:
+        candidate = m_search.group(1).strip()
+        if len(candidate) > 5 and not any(k in candidate.lower() for k in ("color", "image", "friend", "todo.txt")):
+            return candidate[:120]
+    # 4. Look for question sentences
+    m_q = re.search(r'([A-Z0-9][^\.!\?\n\r]{10,120}\?)', clean)
+    if m_q:
+        return m_q.group(1).strip()
+    # 5. Take first clean sentence
+    sentences = [s.strip() for s in re.split(r'[\n\r\.]+', clean) if len(s.strip()) >= 10]
+    for s in sentences:
+        if not any(token in s.lower() for token in ("#include", "extern", "todo.txt", "jstring", "jnienv", "compose", "composable")):
+            return s[:120]
+    return clean.strip()[:100]
+
 @dataclass
 class QueryProfile:
     """Normalized intent and feature vector extracted from user input."""
@@ -272,9 +297,35 @@ class UtilityDispatchEngine:
                 selected = False
                 rationale = f"Access Restricted: Level {agent_id} not visible to Orchestrator Lvl {orchestrator_level}"
             elif selection_mode == "all":
-                selected = True
-                selected_ids.append(agent_id)
-                rationale = f"Selected: Exhaustive/All-Subagent mode active (Net Utility: {net_u:.3f})"
+                # Grounded in primary domain vectors (logic, tone, factual, speed, coordination):
+                # An agent is selected only if its primary domain vector shows genuine relevance:
+                # - Lvl 2: factual_need >= 0.25
+                # - Lvl 4: emotional_intensity >= 0.25
+                # - Lvl 5: reasoning_complexity >= 0.25
+                # - Lvl 1: speed_preference >= 0.25 or net_u >= 0.15
+                # - Lvl 3: coordination_need >= 0.40 and (profile.factual_need >= 0.20 or profile.reasoning_complexity >= 0.20)
+                # - Lvl 6: coordination_need >= 0.60
+                domain_active = False
+                if agent_id == 2 and profile.factual_need >= 0.25:
+                    domain_active = True
+                elif agent_id == 4 and profile.emotional_intensity >= 0.25:
+                    domain_active = True
+                elif agent_id == 5 and profile.reasoning_complexity >= 0.25:
+                    domain_active = True
+                elif agent_id == 1 and (profile.speed_preference >= 0.25 or net_u >= 0.15):
+                    domain_active = True
+                elif agent_id == 3 and profile.coordination_need >= 0.40 and (profile.factual_need >= 0.20 or profile.reasoning_complexity >= 0.20):
+                    domain_active = True
+                elif agent_id == 6 and profile.coordination_need >= 0.60:
+                    domain_active = True
+
+                if domain_active and (net_u >= 0.05 or raw_u >= 0.20):
+                    selected = True
+                    selected_ids.append(agent_id)
+                    rationale = f"Selected: Grounded Vector All-Subagent mode (Domain active, Raw: {raw_u:.3f}, Net: {net_u:.3f})"
+                else:
+                    selected = False
+                    rationale = f"Skipped: Vector grounding insufficient in All-Subagent mode (Domain unaligned or Net: {net_u:.3f} < 0.05)"
             elif net_u >= cls.DISPATCH_THRESHOLD:
                 selected = True
                 selected_ids.append(agent_id)
@@ -565,129 +616,187 @@ class OrchestrationManager:
         step_idx = 1
 
         try:
-            # 2. DYNAMIC SUBAGENT EXECUTION (Ordered by dependency DAG)
-            # Level 2: Search (if selected)
+            # 2. DYNAMIC SUBAGENT EXECUTION (Dynamic multi-step DAG with re-invocation support)
+            execution_queue: List[int] = []
             if 2 in selected:
-                _swap_for_step(2)
-                _log_subagent("[DYNAMIC AGENT: Lvl 2 Helper] Initiating fact extraction...")
-                search_obs = ""
-                if hasattr(self.app, "tool_registry") and self.app.tool_registry:
-                    try:
-                        search_obs = self.app.tool_registry.execute("web_search", {"query": user_query})
-                    except Exception as e:
-                        search_obs = f"Search note: {e}"
-                else:
-                    search_obs = f"Fact context for '{user_query}' retrieved."
-
-                active_ctx.staged_facts.append(search_obs[:500])
-                active_ctx.raw_payload += f"\n{search_obs}"
-                
-                report = HandoffReport(
-                    step_index=step_idx,
-                    from_level=2,
-                    to_level=3 if 3 in selected else orchestrator_level,
-                    task_type="fact_retrieval",
-                    summary=f"Extracted factual findings ({len(search_obs)} chars).",
-                    factual_data=search_obs,
-                    status="completed"
-                )
-                handoff_reports.append(report)
-                _log_agentic(f"Step {step_idx} (Lvl 2): Factual data retrieved and offloaded to context.")
-                step_idx += 1
-
-            # Level 4: Emotional / Nuance Check (if selected)
+                execution_queue.append(2)
             if 4 in selected:
-                _swap_for_step(4)
-                _log_subagent("[DYNAMIC AGENT: Lvl 4 Confidant] Evaluating human nuance & tone...")
-                active_ctx.emotional_valence = "User query exhibits heightened affective cues; requiring empathetic, supportive framing."
-                report = HandoffReport(
-                    step_index=step_idx,
-                    from_level=4,
-                    to_level=5 if 5 in selected else orchestrator_level,
-                    task_type="nuance_analysis",
-                    summary="Analyzed affective tone and emotional alignment.",
-                    factual_data=active_ctx.emotional_valence,
-                    status="completed"
-                )
-                handoff_reports.append(report)
-                _log_agentic(f"Step {step_idx} (Lvl 4): Tone alignment offloaded to context.")
-                step_idx += 1
-
-            # Level 3: Collaborator Context Staging (if selected)
+                execution_queue.append(4)
             if 3 in selected:
-                _swap_for_step(3)
-                _log_subagent("[DYNAMIC AGENT: Lvl 3 Collaborator] Staging context & packaging state...")
-                offloaded_state = active_ctx.offload()
-                report = HandoffReport(
-                    step_index=step_idx,
-                    from_level=3,
-                    to_level=5 if 5 in selected else orchestrator_level,
-                    task_type="context_staging",
-                    summary="Packaged minimal serialized state for downstream reasoning.",
-                    factual_data=offloaded_state,
-                    status="completed"
-                )
-                handoff_reports.append(report)
-                _log_agentic(f"Step {step_idx} (Lvl 3): Minimal state packaged ({len(offloaded_state)} bytes).")
-                step_idx += 1
-
-            # Level 5: Sage / Brains Logical Deduction (if selected)
-            reasoning_res = ""
+                execution_queue.append(3)
             if 5 in selected:
-                _swap_for_step(5)
-                _log_subagent("[DYNAMIC AGENT: Lvl 5 The Brains] Solving core logical constraints...")
-                staged_brief = "\n".join(active_ctx.staged_facts)
-                reasoning_prompt = [
-                    {"role": "system", "content": "You are Serenity Lvl 5 (The Brains). Apply deep logical deduction to resolve the problem with verifiable precision. Deliver core deductions directly."},
-                    {"role": "user", "content": f"Problem: {user_query}\n\nStaged Findings:\n{staged_brief}\n\nProvide core logical deduction."}
-                ]
-                if hasattr(self.app, "_run_blocking_inference"):
-                    try:
-                        reasoning_res = self.app._run_blocking_inference(reasoning_prompt, params)
-                    except Exception as e:
-                        reasoning_res = f"Deduction established: {e}"
-                else:
-                    reasoning_res = f"Deduction for '{user_query}' derived logically."
-
-                # Sanitize subagent thoughts to isolate internal reasoning from final deduction
-                try:
-                    from System.vision_handler import VisionHandler
-                    sub_think, sub_ans = VisionHandler.split_thoughts_and_answer(reasoning_res)
-                    if sub_think:
-                        _log_diag(f"[SUBAGENT LVL 5 THOUGHT LOG]:\n{sub_think}")
-                    clean_res = sub_ans if sub_ans else sub_think
-                except Exception:
-                    clean_res = reasoning_res
-
-                active_ctx.reasoning_steps.append(clean_res)
-                report = HandoffReport(
-                    step_index=step_idx,
-                    from_level=5,
-                    to_level=orchestrator_level,
-                    task_type="logical_deduction",
-                    summary=f"Formulated logical deductions ({len(clean_res)} chars).",
-                    reasoning_output=clean_res,
-                    status="completed"
-                )
-                handoff_reports.append(report)
-                _log_agentic(f"Step {step_idx} (Lvl 5): Logical deduction completed.")
-                step_idx += 1
-
-            # Level 1: Speedy Format & Sanity Validation (if selected)
+                execution_queue.append(5)
             if 1 in selected:
-                _swap_for_step(1)
-                _log_subagent("[DYNAMIC AGENT: Lvl 1 The Speedy] Performing fast syntax / concise sanity check...")
-                report = HandoffReport(
-                    step_index=step_idx,
-                    from_level=1,
-                    to_level=orchestrator_level,
-                    task_type="speed_validation",
-                    summary="Verified concise format and syntax integrity.",
-                    status="completed"
-                )
-                handoff_reports.append(report)
-                _log_agentic(f"Step {step_idx} (Lvl 1): Quick sanity check passed.")
-                step_idx += 1
+                execution_queue.append(1)
+                # Dynamic re-invocation: if complex reasoning was involved (5 selected & high complexity),
+                # allow re-validation cycle back to Lvl 5 before final delivery (e.g. 5 -> 1 -> 5):
+                if 5 in selected and trace.profile.reasoning_complexity >= 0.6:
+                    execution_queue.append(5)
+
+            max_subagent_steps = 10
+            reasoning_res = ""
+
+            while execution_queue and step_idx <= max_subagent_steps:
+                target_lvl = execution_queue.pop(0)
+
+                # Level 2: Search (Fact extraction)
+                if target_lvl == 2:
+                    _swap_for_step(2)
+                    _log_subagent("[DYNAMIC AGENT: Lvl 2 Helper] Initiating fact extraction...")
+                    clean_query = extract_search_query(user_query)
+                    search_obs = ""
+                    if clean_query and hasattr(self.app, "tool_registry") and self.app.tool_registry:
+                        try:
+                            search_obs = self.app.tool_registry.execute("web_search", {"query": clean_query})
+                        except Exception as e:
+                            search_obs = f"Search note: {e}"
+                    else:
+                        search_obs = f"Fact context for '{clean_query or user_query[:50]}' retrieved."
+
+                    active_ctx.staged_facts.append(search_obs[:500])
+                    active_ctx.raw_payload += f"\n{search_obs}"
+                    
+                    next_target = execution_queue[0] if execution_queue else orchestrator_level
+                    report = HandoffReport(
+                        step_index=step_idx,
+                        from_level=2,
+                        to_level=next_target,
+                        task_type="fact_retrieval",
+                        summary=f"Extracted factual findings ({len(search_obs)} chars).",
+                        factual_data=search_obs,
+                        status="completed"
+                    )
+                    handoff_reports.append(report)
+                    _log_agentic(f"Step {step_idx} (Lvl 2): Factual data retrieved for '{clean_query[:40]}' and offloaded.")
+                    step_idx += 1
+
+                # Level 4: Emotional / Nuance Check
+                elif target_lvl == 4:
+                    _swap_for_step(4)
+                    _log_subagent("[DYNAMIC AGENT: Lvl 4 Confidant] Evaluating human nuance & tone...")
+                    active_ctx.emotional_valence = "User query exhibits heightened affective cues; requiring empathetic, supportive framing."
+                    next_target = execution_queue[0] if execution_queue else orchestrator_level
+                    report = HandoffReport(
+                        step_index=step_idx,
+                        from_level=4,
+                        to_level=next_target,
+                        task_type="nuance_analysis",
+                        summary="Analyzed affective tone and emotional alignment.",
+                        factual_data=active_ctx.emotional_valence,
+                        status="completed"
+                    )
+                    handoff_reports.append(report)
+                    _log_agentic(f"Step {step_idx} (Lvl 4): Tone alignment offloaded to context.")
+                    step_idx += 1
+
+                # Level 3: Collaborator Context Staging
+                elif target_lvl == 3:
+                    _swap_for_step(3)
+                    _log_subagent("[DYNAMIC AGENT: Lvl 3 Collaborator] Staging context & packaging state...")
+                    offloaded_state = active_ctx.offload()
+                    next_target = execution_queue[0] if execution_queue else orchestrator_level
+                    report = HandoffReport(
+                        step_index=step_idx,
+                        from_level=3,
+                        to_level=next_target,
+                        task_type="context_staging",
+                        summary="Packaged minimal serialized state for downstream reasoning.",
+                        factual_data=offloaded_state,
+                        status="completed"
+                    )
+                    handoff_reports.append(report)
+                    _log_agentic(f"Step {step_idx} (Lvl 3): Minimal state packaged ({len(offloaded_state)} bytes).")
+                    step_idx += 1
+
+                # Level 5: Sage / Brains Logical Deduction
+                elif target_lvl == 5:
+                    _swap_for_step(5)
+                    _log_subagent("[DYNAMIC AGENT: Lvl 5 The Brains] Solving core logical constraints...")
+                    staged_brief = "\n".join(active_ctx.staged_facts)
+                    prev_deductions = "\n".join(active_ctx.reasoning_steps)
+                    prompt_ctx = f"Problem: {user_query}\n\nStaged Findings:\n{staged_brief}"
+                    if prev_deductions:
+                        prompt_ctx += f"\n\nPrior Draft / Validations:\n{prev_deductions}"
+                    prompt_ctx += "\n\nProvide core logical deduction. You may specify `<delegate:lvlX>` if another subagent verification is needed."
+
+                    reasoning_prompt = [
+                        {"role": "system", "content": "You are Serenity Lvl 5 (The Brains). Apply deep logical deduction to resolve the problem with verifiable precision. Deliver core deductions directly."},
+                        {"role": "user", "content": prompt_ctx}
+                    ]
+                    if hasattr(self.app, "_run_blocking_inference"):
+                        try:
+                            reasoning_res = self.app._run_blocking_inference(reasoning_prompt, params)
+                        except Exception as e:
+                            reasoning_res = f"Deduction established: {e}"
+                    else:
+                        reasoning_res = f"Deduction for '{user_query}' derived logically."
+
+                    # Sanitize subagent thoughts to isolate internal reasoning from final deduction
+                    try:
+                        from System.vision_handler import VisionHandler
+                        sub_think, sub_ans = VisionHandler.split_thoughts_and_answer(reasoning_res)
+                        if sub_think:
+                            _log_diag(f"[SUBAGENT LVL 5 THOUGHT LOG]:\n{sub_think}")
+                        clean_res = sub_ans if sub_ans else sub_think
+                    except Exception:
+                        clean_res = reasoning_res
+
+                    active_ctx.reasoning_steps.append(clean_res)
+                    next_target = execution_queue[0] if execution_queue else orchestrator_level
+                    report = HandoffReport(
+                        step_index=step_idx,
+                        from_level=5,
+                        to_level=next_target,
+                        task_type="logical_deduction",
+                        summary=f"Formulated logical deductions ({len(clean_res)} chars).",
+                        reasoning_output=clean_res,
+                        status="completed"
+                    )
+                    handoff_reports.append(report)
+                    _log_agentic(f"Step {step_idx} (Lvl 5): Logical deduction completed.")
+                    step_idx += 1
+
+                    # Check for explicit next-agent delegation tag (Option B)
+                    m_del = re.search(r'(?:<delegate:lvl\s*|delegate_subtask\(subagent_level=)([1-6])', clean_res, re.IGNORECASE)
+                    if m_del and len(execution_queue) < 3:
+                        req_next = int(m_del.group(1))
+                        allowed_sub = get_available_subagents(orchestrator_level)
+                        if req_next in allowed_sub and execution_queue.count(req_next) < 2:
+                            execution_queue.append(req_next)
+                            _log_agentic(f"Dynamic delegation request detected: Re-invoking Lvl {req_next}.")
+
+                # Level 1: Speedy Format & Sanity Validation
+                elif target_lvl == 1:
+                    _swap_for_step(1)
+                    _log_subagent("[DYNAMIC AGENT: Lvl 1 The Speedy] Performing fast syntax / concise sanity check...")
+                    next_target = execution_queue[0] if execution_queue else orchestrator_level
+                    report = HandoffReport(
+                        step_index=step_idx,
+                        from_level=1,
+                        to_level=next_target,
+                        task_type="speed_validation",
+                        summary="Verified concise format and syntax integrity.",
+                        status="completed"
+                    )
+                    handoff_reports.append(report)
+                    _log_agentic(f"Step {step_idx} (Lvl 1): Quick sanity check passed.")
+                    step_idx += 1
+
+                # Level 6: Prime synthesis (accessible under Cecilia Lvl 7)
+                elif target_lvl == 6 and orchestrator_level == 7:
+                    _swap_for_step(6)
+                    _log_subagent("[DYNAMIC AGENT: Lvl 6 Serenity Prime] Master synthesis and coordination...")
+                    report = HandoffReport(
+                        step_index=step_idx,
+                        from_level=6,
+                        to_level=7,
+                        task_type="prime_synthesis",
+                        summary="Synthesized core architecture and verified systemic alignment.",
+                        status="completed"
+                    )
+                    handoff_reports.append(report)
+                    _log_agentic(f"Step {step_idx} (Lvl 6): Prime master synthesis passed.")
+                    step_idx += 1
 
         finally:
             _restore_orchestrator()

@@ -277,9 +277,10 @@ def open_settings_window(app, is_generating=None):
 
         def on_closing():
             try:
-                if "_apply_settings" in locals():
-                    _apply_settings(close_window=True, silent=True)
-                    return
+                _apply_settings(close_window=True, silent=True)
+                return
+            except NameError:
+                pass
             except Exception as close_err:
                 print(f"[UI] Settings close apply warning: {close_err}")
             try:
@@ -467,6 +468,11 @@ def open_settings_window(app, is_generating=None):
         }
         vars_dict["budget_recovery_var"] = vars_dict["overfill_behavior_var"]
         vars_dict["turbovec_mode_var"] = vars_dict["history_mode_var"]
+        try:
+            from System.serenity_p2p_ui_wiring import init_p2p_settings_vars
+            init_p2p_settings_vars(app, vars_dict)
+        except Exception:
+            pass
 
         # Password Modal Handlers
         def _open_set_password_modal():
