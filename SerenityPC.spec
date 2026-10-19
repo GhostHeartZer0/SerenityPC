@@ -14,7 +14,7 @@ if os.path.exists(changelog_path):
     except Exception:
         pass
 
-exe_name = f"SerenityPC Legacy v{app_version}"
+exe_name = f"SerenityPC v{app_version}"
 
 datas = [
     ('System', 'System'),
@@ -71,8 +71,13 @@ a = Analysis(
         'tkinter.messagebox',
         'tkinter.scrolledtext',
         'tkinter.font',
-        'tkinter.simpledialog',
         'System',
+        'System.serenity_mail_courier',
+        'System.serenity_p2p_ui_wiring',
+        'System.tool_registry',
+        'sqlite3',
+        '_sqlite3',
+        '_cffi_backend',
         'System.serenity_utils',
         'System.kv_manager',
         'System.tool_registry',
@@ -105,16 +110,13 @@ icon_path = 'System/serenity.ico' if os.path.exists('System/serenity.ico') else 
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name=exe_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -122,4 +124,15 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=icon_path,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name=exe_name,
 )

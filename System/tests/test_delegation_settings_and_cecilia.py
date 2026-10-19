@@ -85,9 +85,11 @@ class TestDelegationSettingsAndCecilia(unittest.TestCase):
 
     def test_cecilia_subagent_density_selection_modes(self):
         """Verify subagent selection density: 'all' vs 'minimal'."""
-        # Selection mode 'all': selects all available subagents
+        # Grounded 'all' mode: grounds in vectors rather than blindly turning on all 6 levels
         trace_all = UtilityDispatchEngine.evaluate(7, "Analyze quantum paradox", selection_mode="all")
-        self.assertEqual(trace_all.selected_agent_ids, [1, 2, 3, 4, 5, 6])
+        self.assertIn(5, trace_all.selected_agent_ids, "Lvl 5 (Brains) should be selected for quantum paradox")
+        self.assertNotIn(4, trace_all.selected_agent_ids, "Lvl 4 (Tone) should be skipped when emotion vector is 0")
+        self.assertLess(len(trace_all.selected_agent_ids), 6, "All mode should not blindly select all 6 levels on ungrounded vectors")
 
         # Selection mode 'minimal': filters based on query profile
         trace_min = UtilityDispatchEngine.evaluate(7, "Quick 1+1 calculation", selection_mode="minimal")

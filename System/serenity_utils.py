@@ -2247,21 +2247,23 @@ def setup_marquee_label(lbl, text, app=None, limit=22, full_path=None, interval_
         marquee_on = bool(app.config.get("marquee_text_enabled", False))
 
     compact = cleaned if len(cleaned) <= limit else f"{cleaned[:limit - 3]}..."
+    padded = cleaned + "   •   "
+    lbl._marquee_padded = padded
+    lbl._marquee_compact = compact
 
     if len(cleaned) > limit and marquee_on:
-        padded = cleaned + "   •   "
         def _tick(idx=0):
             if not lbl.winfo_exists():
                 return
-            disp = (padded * 2)[idx:idx + limit]
+            p = getattr(lbl, "_marquee_padded", padded)
+            disp = (p * 2)[idx:idx + limit]
             lbl.config(text=disp)
-            next_idx = (idx + 1) % len(padded)
+            next_idx = (idx + 1) % len(p)
             lbl._marquee_job = lbl.after(interval_ms, lambda: _tick(next_idx))
         _tick(0)
     else:
         lbl.config(text=compact)
         if len(cleaned) > limit:
-            padded = cleaned + "   •   "
             def _on_hover_enter(event=None):
                 if getattr(lbl, "_hover_scrolling", False):
                     return
@@ -2269,9 +2271,10 @@ def setup_marquee_label(lbl, text, app=None, limit=22, full_path=None, interval_
                 def _hover_tick(idx=0):
                     if not lbl.winfo_exists() or not getattr(lbl, "_hover_scrolling", False):
                         return
-                    disp = (padded * 2)[idx:idx + limit]
+                    p = getattr(lbl, "_marquee_padded", padded)
+                    disp = (p * 2)[idx:idx + limit]
                     lbl.config(text=disp)
-                    next_idx = (idx + 1) % len(padded)
+                    next_idx = (idx + 1) % len(p)
                     lbl._marquee_job = lbl.after(interval_ms, lambda: _hover_tick(next_idx))
                 _hover_tick(0)
 
@@ -2285,7 +2288,7 @@ def setup_marquee_label(lbl, text, app=None, limit=22, full_path=None, interval_
                         pass
                     lbl._marquee_job = None
                 if lbl.winfo_exists():
-                    lbl.config(text=compact)
+                    lbl.config(text=getattr(lbl, "_marquee_compact", compact))
 
             if not getattr(lbl, "_marquee_hover_bound", False):
                 lbl._marquee_hover_bound = True

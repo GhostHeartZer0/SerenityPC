@@ -166,9 +166,11 @@ class TurboVecIndex:
             print("[TURBOVEC] Gracefully falling back to keyword indexing.")
             self.mode = "fallback"
 
-    def ingest_needed_files(self, active_model_path: Optional[str], active_level: Optional[int], lookup_mode: str):
+    def ingest_needed_files(self, active_model_path: Optional[str], active_level: Optional[int], lookup_mode: str, vault_manager: Any = None):
         if self.mode == "off":
             return
+        if vault_manager is not None:
+            self.vault_manager = vault_manager
 
         import glob
         import os
@@ -181,7 +183,14 @@ class TurboVecIndex:
             if active_model_path:
                 active_model_name = os.path.splitext(os.path.basename(active_model_path))[0].lower()
 
-            files = [os.path.join(self.history_dir, fname) for fname in os.listdir(self.history_dir) if fname.endswith(".history.jsonz") or fname.endswith(".history.encz")] if os.path.exists(self.history_dir) else []
+            files = []
+            if os.path.exists(self.history_dir):
+                excluded_dirs = {"backups", "backups_repair", "jsonz to txt", ".tmp"}
+                for root_dir, dirs, fnames in os.walk(self.history_dir):
+                    dirs[:] = [d for d in dirs if d not in excluded_dirs]
+                    for fname in fnames:
+                        if fname.endswith(".history.jsonz") or fname.endswith(".history.encz"):
+                            files.append(os.path.join(root_dir, fname))
             files_to_load = []
 
             for f in files:
@@ -216,8 +225,19 @@ class TurboVecIndex:
                 if f in self._ingested_files:
                     continue
                 try:
-                    if f.endswith(".encz") and getattr(self, "vault_manager", None) is not None:
-                        history = self.vault_manager.read_history_messages(f)
+                    if f.endswith(".encz"):
+                        vault = getattr(self, "vault_manager", None) or vault_manager
+                        if vault is not None and not getattr(vault, "is_locked", lambda: False)():
+                            try:
+                                history = vault.read_history_messages(f)
+                            except Exception:
+                                # Another user's encrypted file or unable to decrypt with current session key:
+                                # Silently ignore and mark ingested to prevent console spam
+                                self._ingested_files.add(f)
+                                continue
+                        else:
+                            # Vault locked or unavailable: silently skip encrypted archives
+                            continue
                     else:
                         with open(f, 'rb') as fp:
                             history = json.loads(zlib.decompress(fp.read()).decode('utf-8'))
@@ -247,19 +267,22 @@ class TurboVecIndex:
 
                     self._ingested_files.add(f)
                 except Exception as e:
-                    print(f"[TURBOVEC] Failed to parse history {f}: {e}")
+                    self._ingested_files.add(f)
+                    err_str = str(e).lower()
+                    if not any(k in err_str for k in ["permission", "locked", "decrypt", "tag", "key"]):
+                        print(f"[TURBOVEC] Failed to parse history {f}: {e}")
 
             if newly_ingested > 0:
                 print(f"[TURBOVEC] Ingested {newly_ingested} new chunks. Total indexed: {len(self.metadata)}")
 
-    def search(self, query: str, top_k: int = 3, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted"):
+    def search(self, query: str, top_k: int = 3, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted", vault_manager: Any = None):
         if self.mode == "off":
             return []
 
         import numpy as np
         
         with self.lock:
-            self.ingest_needed_files(active_model_path, active_level, lookup_mode)
+            self.ingest_needed_files(active_model_path, active_level, lookup_mode, vault_manager=vault_manager)
             
             if not self.metadata:
                 return []
@@ -325,7 +348,7 @@ class TurboVecIndex:
             return []
         if vault_manager is not None:
             self.vault_manager = vault_manager
-        raw_hits = self.search(query, top_k=top_k, active_model_path=active_model_path, active_level=active_level, lookup_mode=lookup_mode)
+        raw_hits = self.search(query, top_k=top_k, active_model_path=active_model_path, active_level=active_level, lookup_mode=lookup_mode, vault_manager=vault_manager)
         if not raw_hits:
             return []
         import re

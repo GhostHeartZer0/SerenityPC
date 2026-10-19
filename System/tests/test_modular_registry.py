@@ -127,7 +127,9 @@ class TestGemmaToolRegistry(unittest.TestCase):
         import os
         import tempfile
 
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False) as test_file:
+        tmp_dir = os.path.join(repo_root, ".tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, dir=tmp_dir) as test_file:
             test_file.write("one\ntwo\nthree\nfour\n")
             test_path = test_file.name
         try:

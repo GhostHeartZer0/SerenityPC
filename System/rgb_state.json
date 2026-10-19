@@ -1,10 +1,10 @@
 {
     "mode": "auto",
     "manual_color": [
+        75,
         0,
-        255,
-        204
+        130
     ],
-    "manual_style": "No animation",
+    "manual_style": "solid",
     "brightness": 100
 }

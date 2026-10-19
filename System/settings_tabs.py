@@ -41,27 +41,30 @@ def bind_radio_contrast(var, rb_list):
             setattr(rb, "_sync_radio_fn", _sync)
             if rb.winfo_exists():
                 is_active = (val == str(item_val).lower())
-                if is_active:
-                    rb.config(
-                        fg="#000000",
-                        bg=accent,
-                        selectcolor=accent,
-                        activebackground=accent,
-                        activeforeground="#000000",
-                        relief=tk.SUNKEN,
-                        bd=2,
-                        highlightthickness=1 if "highlightthickness" in rb.keys() else 0
-                    )
-                else:
-                    rb.config(
-                        fg=fg_norm,
-                        bg=bg_norm,
-                        selectcolor=accent,
-                        activebackground=accent,
-                        activeforeground="#000000",
-                        relief=tk.RAISED,
-                        bd=1
-                    )
+                try:
+                    if is_active:
+                        rb.config(
+                            fg="#000000",
+                            bg=accent,
+                            selectcolor=accent,
+                            activebackground=accent,
+                            activeforeground="#000000",
+                            relief=tk.SUNKEN,
+                            bd=2,
+                            highlightthickness=1 if "highlightthickness" in rb.keys() else 0
+                        )
+                    else:
+                        rb.config(
+                            fg=fg_norm,
+                            bg=bg_norm,
+                            selectcolor=accent,
+                            activebackground=accent,
+                            activeforeground="#000000",
+                            relief=tk.RAISED,
+                            bd=1
+                        )
+                except Exception:
+                    pass
     var.trace_add("write", _sync)
     _sync()
 
@@ -774,6 +777,12 @@ def build_agents_tab(parent, app, win, vars_dict):
         norm_fmt_rbs.append((rb, val))
     bind_radio_contrast(norm_fmt_var, norm_fmt_rbs)
 
+    try:
+        from System.serenity_p2p_ui_wiring import inject_agents_tab_p2p_controls
+        inject_agents_tab_p2p_controls(frame, app, win, vars_dict, bind_radio_contrast_fn=bind_radio_contrast)
+    except Exception as _p2p_err:
+        print(f"[SETTINGS] P2P Agents tab hook notice: {_p2p_err}")
+
     return frame
 
 
@@ -1468,6 +1477,12 @@ def build_users_tab(parent, app, win, vars_dict):
         btn = tk.Button(timer_row, text=p_lbl, command=lambda s=p_sec: vars_dict["auto_lock_var"].set(str(s)),
                         bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"], padx=3, pady=0)
         btn.pack(side=tk.LEFT, padx=2)
+
+    try:
+        from System.serenity_p2p_ui_wiring import inject_users_tab_p2p_controls
+        inject_users_tab_p2p_controls(frame, app, win, vars_dict, vault_lf=vault_lf)
+    except Exception as _p2p_err:
+        print(f"[SETTINGS] P2P Users tab hook notice: {_p2p_err}")
 
     return frame
 

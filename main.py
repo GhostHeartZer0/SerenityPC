@@ -677,6 +677,11 @@ class ChatbotApp:
             "error": lambda msg: self._handle_session_finished({"user_msg": self.last_user_message, "final_answer": msg.get("content", ""), "is_error": True}),
             "cleanup": lambda msg: self._run_hygiene_on_main_thread()
         }
+        try:
+            from System.serenity_p2p_ui_wiring import wire_serenity_app
+            wire_serenity_app(self)
+        except Exception as _p2p_e:
+            print(f"[P2P] Wiring notice: {_p2p_e}")
 
         self._setup_llama_log_capture()
         self.setup_ui()
@@ -698,18 +703,34 @@ class ChatbotApp:
     def get_active_username(self) -> str:
         if not hasattr(self, "config") or self.config is None:
             return "Default"
-        un = str(self.config.get("username", "Default")).strip()
-        return un if un else "Default"
+        try:
+            val = self.config.get("username", "Default")
+            if not isinstance(val, str) or "mock" in str(val).lower() or "mock" in type(val).__name__.lower():
+                return "Default"
+            un = val.strip()
+            return un if un else "Default"
+        except Exception:
+            return "Default"
 
     def get_user_history_dir(self, username: Optional[str] = None) -> str:
         un = username if username else self.get_active_username()
-        p = os.path.join(self.dirs["History"], un)
+        if not isinstance(un, str) or "mock" in str(un).lower() or "mock" in type(un).__name__.lower():
+            un = "Default"
+        clean_un = "".join(c for c in un.strip() if c.isalnum() or c in ("-", "_", " ")).strip()
+        if not clean_un or "mock" in clean_un.lower():
+            clean_un = "Default"
+        p = os.path.join(self.dirs["History"], clean_un)
         os.makedirs(p, exist_ok=True)
         return p
 
     def get_user_dir(self, username: Optional[str] = None) -> str:
         un = username if username else self.get_active_username()
-        p = os.path.join(self.dirs["Users"], un)
+        if not isinstance(un, str) or "mock" in str(un).lower() or "mock" in type(un).__name__.lower():
+            un = "Default"
+        clean_un = "".join(c for c in un.strip() if c.isalnum() or c in ("-", "_", " ")).strip()
+        if not clean_un or "mock" in clean_un.lower():
+            clean_un = "Default"
+        p = os.path.join(self.dirs["Users"], clean_un)
         os.makedirs(p, exist_ok=True)
         return p
 
@@ -719,21 +740,32 @@ class ChatbotApp:
         users = set()
         if show_def: users.add("Default")
         if show_pub: users.add("Public")
-        excluded = {"backups", "backups_repair", "jsonz to txt"}
-        if os.path.exists(self.dirs["Users"]):
-            for item in os.listdir(self.dirs["Users"]):
-                if os.path.isdir(os.path.join(self.dirs["Users"], item)) and item not in excluded:
-                    if (item == "Default" and not show_def) or (item == "Public" and not show_pub):
-                        continue
-                    users.add(item)
-        if os.path.exists(self.dirs["History"]):
-            for item in os.listdir(self.dirs["History"]):
-                if os.path.isdir(os.path.join(self.dirs["History"], item)) and item not in excluded:
-                    if (item == "Default" and not show_def) or (item == "Public" and not show_pub):
-                        continue
-                    users.add(item)
+        excluded = {"backups", "backups_repair", "jsonz to txt", ".tmp"}
+
+        def _is_valid_user(item: str) -> bool:
+            if not isinstance(item, str):
+                return False
+            il = item.lower()
+            return il not in excluded and "mock" not in il and not il.startswith("<")
+
+        for d_key in ("Users", "History"):
+            base_p = self.dirs.get(d_key)
+            if base_p and os.path.exists(base_p):
+                for item in os.listdir(base_p):
+                    item_p = os.path.join(base_p, item)
+                    if os.path.isdir(item_p):
+                        if "mock" in item.lower() or item.startswith("<"):
+                            try:
+                                shutil.rmtree(item_p, ignore_errors=True)
+                            except Exception:
+                                pass
+                            continue
+                        if _is_valid_user(item):
+                            if (item == "Default" and not show_def) or (item == "Public" and not show_pub):
+                                continue
+                            users.add(item)
         curr = self.get_active_username()
-        if curr and curr not in excluded: users.add(curr)
+        if curr and _is_valid_user(curr): users.add(curr)
         if not users: users.add("Default")
         return sorted(list(users))
 
@@ -855,6 +887,8 @@ class ChatbotApp:
         log_and_display = getattr(self, "_log_and_display", None)
         if callable(log_and_display):
             log_and_display(f"Switched user profile to: {clean_un}")
+        if hasattr(self, 'soft_reload_turbovec'):
+            self.soft_reload_turbovec()
         return True
 
     def delete_user_profile(self, username: str) -> Tuple[bool, str]:
@@ -2587,8 +2621,9 @@ class ChatbotApp:
                 self.past_history_view.insert(tk.END, header_text, ("ai_lead",))
             
             for m in msgs: 
-                who = "You" if m['role'] == 'user' else ("Cecilia" if (m.get('role') == 'cecilia' or m.get('persona') == 'Cecilia') else self._get_persona_label())
+                who = "You" if m['role'] == 'user' else self._get_message_persona_label(m, file_path=path)
                 tag = "user" if m['role'] == 'user' else "ai"
+
                 content = self._clean_latex_artifacts(m['content'])
                 entry = f"{who}: {content}\n{'-'*50}\n\n"
                 self.past_history_view.insert(tk.END, entry, (tag,))
@@ -2665,6 +2700,14 @@ class ChatbotApp:
         raw_text = history_view.get("1.0", tk.END).strip()
         if not raw_text: return
         
+        # Ground personas to file's native level to prevent cross-level corruption
+        fname = os.path.basename(path)
+        m_match = re.search(r"_lvls?([0-9_]+)", fname, re.IGNORECASE)
+        file_lvls = [int(x) for x in m_match.group(1).split("_") if x.isdigit()] if m_match else []
+        is_sub7_file = bool(file_lvls and all(l < 7 for l in file_lvls))
+        is_lvl7_file = bool(file_lvls and any(l >= 7 for l in file_lvls))
+        inferred_lvl = file_lvls[0] if file_lvls else None
+
         separator = "-" * 50
         chunks = raw_text.split(f"\n{separator}\n\n")
         
@@ -2674,15 +2717,18 @@ class ChatbotApp:
             if not chunk: continue
             
             role = "user"
+            persona = None
             content = chunk
             if chunk.startswith("You: "):
                 role = "user"
                 content = chunk[5:]
             elif chunk.startswith("Serenity: "):
                 role = "assistant"
+                persona = "Serenity"
                 content = chunk[10:]
             elif chunk.startswith("Cecilia: "):
                 role = "assistant"
+                persona = "Serenity" if is_sub7_file else "Cecilia"
                 content = chunk[9:]
             elif chunk.startswith("System: "):
                 role = "system"
@@ -2690,11 +2736,31 @@ class ChatbotApp:
             elif ": " in chunk[:20]:
                 parts = chunk.split(": ", 1)
                 content = parts[1]
-                if parts[0].lower() in ["you", "user"]: role = "user"
-                elif parts[0].lower() in ["serenity", "cecilia", "assistant", "ai"]: role = "assistant"
-                elif parts[0].lower() == "system": role = "system"
+                p0 = parts[0].lower()
+                if p0 in ["you", "user"]: role = "user"
+                elif p0 == "cecilia":
+                    role = "assistant"
+                    persona = "Serenity" if is_sub7_file else "Cecilia"
+                elif p0 in ["serenity", "assistant", "ai"]:
+                    role = "assistant"
+                    persona = "Serenity"
+                elif p0 == "system": role = "system"
                 
-            new_msgs.append({"role": role, "content": content.strip()})
+            entry = {"role": role, "content": content.strip()}
+            if role == "assistant":
+                if is_sub7_file:
+                    entry["persona"] = "Serenity"
+                    entry["level"] = inferred_lvl or 3
+                elif is_lvl7_file:
+                    entry["persona"] = "Cecilia"
+                    entry["level"] = inferred_lvl or 7
+                else:
+                    if persona: entry["persona"] = persona
+                    if inferred_lvl is not None: entry["level"] = inferred_lvl
+            elif persona:
+                entry["persona"] = persona
+            new_msgs.append(entry)
+
             
         if not new_msgs: return
         
@@ -4390,66 +4456,87 @@ class ChatbotApp:
                     pass
 
             if self.config.get("speculative_drafting", False) and not target_tier.startswith("vision_") and not chat_handler and not is_small_model:
-                mtp_mapping = self.config.get("mtp_mapping", {})
-                
-                # 1. Check persistent MTP mapping first
-                norm_main = os.path.normcase(os.path.abspath(self.model_path)) if self.model_path else ""
-                if self.model_path in mtp_mapping and os.path.exists(mtp_mapping[self.model_path]):
-                    cand = mtp_mapping[self.model_path]
-                    if norm_main and os.path.normcase(os.path.abspath(cand)) != norm_main:
-                        assistant_path = cand
-                    else:
-                        del mtp_mapping[self.model_path]
-                        self.config["mtp_mapping"] = mtp_mapping
-                        if hasattr(self, 'save_config'):
-                            self.save_config()
+                from System.mtp_combo_scanner import has_baked_in_mtp
+                if has_baked_in_mtp(self.model_path):
+                    msg = f"[MTP] Native Baked-in MTP layers sensed for {os.path.basename(self.model_path)}. Decoding natively without external drafter."
+                    print(f"[Core] {msg}")
+                    self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
+                    draft_model = None
                 else:
-                    # 2. Search for assistant model in same directory or parent directory (excluding main model itself)
-                    if self.model_path:
-                        candidate_dirs = [os.path.dirname(self.model_path), os.path.dirname(os.path.dirname(self.model_path))]
-                        for model_dir in candidate_dirs:
-                            if assistant_path: break
-                            if os.path.exists(model_dir):
-                                for f in os.listdir(model_dir):
-                                    cand_path = os.path.join(model_dir, f)
-                                    if (
-                                        f.lower().endswith(".gguf")
-                                        and norm_main
-                                        and os.path.normcase(os.path.abspath(cand_path)) != norm_main
-                                        and any(k in f.lower() for k in ["assistant", "mtp", "dflash", "drafter"])
-                                    ):
-                                        assistant_path = cand_path
-                                        break
+                    mtp_mapping = self.config.get("mtp_mapping", {})
                     
-                    # 3. Automatic detection fallback (no blocking UI dialogs from worker thread)
-                    if not assistant_path and self.model_path:
-                        print(f"[Core] No assistant drafter automatically found for {os.path.basename(self.model_path)}.")
-                
-                if assistant_path and os.path.exists(assistant_path) and os.path.normcase(os.path.abspath(assistant_path)) != norm_main:
-                    try:
-                        from System.gguf_draft_model import GgufDraftModel
-                        draft_model = GgufDraftModel(assistant_path, n_gpu_layers=0, n_ctx=min(n_ctx, 4096))
-                        msg = f"[MTP] Speculative GGUF assistant model loaded: {os.path.basename(assistant_path)}"
-                        print(f"[Core] {msg}")
-                        self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
-                        self.process_queue.put({"status": "log_update", "content": f"\n{msg}\n"})
-                    except Exception as draft_err:
-                        err_msg = f"[MTP] Failed to load GgufDraftModel ({draft_err}). Engaging catch-all fallback."
-                        print(f"[ENGINE] {err_msg}")
-                        self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {err_msg}"})
-                        draft_model = None
+                    # 1. Check persistent MTP mapping first
+                    norm_main = os.path.normcase(os.path.abspath(self.model_path)) if self.model_path else ""
+                    if self.model_path in mtp_mapping and os.path.exists(mtp_mapping[self.model_path]):
+                        cand = mtp_mapping[self.model_path]
+                        if norm_main and os.path.normcase(os.path.abspath(cand)) != norm_main:
+                            assistant_path = cand
+                        else:
+                            del mtp_mapping[self.model_path]
+                            self.config["mtp_mapping"] = mtp_mapping
+                            if hasattr(self, 'save_config'):
+                                self.save_config()
+                    else:
+                        # 2. Search for assistant model in same directory first, then parent directory (excluding main model itself)
+                        if self.model_path:
+                            candidate_dirs = [os.path.dirname(self.model_path), os.path.dirname(os.path.dirname(self.model_path))]
+                            for model_dir in candidate_dirs:
+                                if assistant_path: break
+                                if os.path.exists(model_dir):
+                                    for f in os.listdir(model_dir):
+                                        cand_path = os.path.join(model_dir, f)
+                                        if (
+                                            f.lower().endswith(".gguf")
+                                            and norm_main
+                                            and os.path.normcase(os.path.abspath(cand_path)) != norm_main
+                                            and any(k in f.lower() for k in ["assistant", "mtp", "dflash", "drafter"])
+                                        ):
+                                            assistant_path = cand_path
+                                            break
+                        
+                        # 3. Diagnostic notice if no companion drafter found
+                        if not assistant_path and self.model_path:
+                            print(f"[Core] No assistant drafter automatically found for {os.path.basename(self.model_path)}.")
+                    
+                    if assistant_path and os.path.exists(assistant_path) and os.path.normcase(os.path.abspath(assistant_path)) != norm_main:
+                        from System.mtp_combo_scanner import is_mtp_assistant
+                        if is_mtp_assistant(assistant_path):
+                            if self.config.get("enable_native_mtp", False):
+                                mtp_model_path = assistant_path
+                                draft_model = None
+                                msg = f"[MTP] Native companion MTP assistant detected: {os.path.basename(assistant_path)}"
+                                print(f"[Core] {msg}")
+                                self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
+                                self.process_queue.put({"status": "log_update", "content": f"\n{msg}\n"})
+                            else:
+                                print(f"[ENGINE] [MTP] Companion assistant '{os.path.basename(assistant_path)}' detected. Native MTP bypassed (engine stability guard; enable 'enable_native_mtp' to test).")
+                                mtp_model_path = None
+                                draft_model = None
+                        else:
+                            try:
+                                from System.gguf_draft_model import GgufDraftModel
+                                draft_model = GgufDraftModel(assistant_path, n_gpu_layers=0, n_ctx=min(n_ctx, 4096))
+                                msg = f"[MTP] Speculative GGUF assistant model loaded: {os.path.basename(assistant_path)}"
+                                print(f"[Core] {msg}")
+                                self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
+                                self.process_queue.put({"status": "log_update", "content": f"\n{msg}\n"})
+                            except Exception as draft_err:
+                                err_msg = f"[MTP] GgufDraftModel load failed ({draft_err}). Bypassing drafter."
+                                print(f"[ENGINE] {err_msg}")
+                                self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {err_msg}"})
+                                draft_model = None
 
-                # Catch-all Fallback: Prompt Lookup Decoding (0 extra RAM, instant acceleration)
-                if draft_model is None:
-                    try:
-                        from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
-                        draft_model = LlamaPromptLookupDecoding(max_ngram_size=2, num_pred_tokens=5)
-                        msg = "[MTP] Catch-all Fallback Active: Prompt Lookup Decoding engaged."
-                        print(f"[Core] {msg}")
-                        self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
-                    except Exception as pld_err:
-                        print(f"[ENGINE] Prompt lookup decoding fallback bypassed: {pld_err}")
-                        draft_model = None
+                    # Prompt Lookup Decoding: Only if explicitly enabled by user in config (never forced as buggy catch-all)
+                    if draft_model is None and mtp_model_path is None and self.config.get("prompt_lookup_decoding", False):
+                        try:
+                            from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
+                            draft_model = LlamaPromptLookupDecoding(max_ngram_size=2, num_pred_tokens=5)
+                            msg = "[MTP] Prompt Lookup Decoding engaged."
+                            print(f"[Core] {msg}")
+                            self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {msg}"})
+                        except Exception as pld_err:
+                            print(f"[ENGINE] Prompt lookup decoding fallback bypassed: {pld_err}")
+                            draft_model = None
 
             is_diffusion = "diffusion" in self.model_path.lower()
             try:
@@ -4488,11 +4575,18 @@ class ChatbotApp:
                             rpc_servers=None,
                             override_tensors=override_tensors,
                             draft_model=draft_model,      # Speculative GgufDraftModel or PromptLookup
+                            mtp_model_path=mtp_model_path,
                             **params
                         )
+                        if mtp_model_path and hasattr(model, "_model") and hasattr(model._model, "model"):
+                            import llama_cpp
+                            has_mtp = getattr(llama_cpp, "llama_model_has_mtp_assistant", lambda m: False)(model._model.model)
+                            mtp_msg = f"[MTP] Native Multi-Token Prediction online (Active: {has_mtp}) -> {os.path.basename(mtp_model_path)}"
+                            print(f"[Core] {mtp_msg}")
+                            self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {mtp_msg}"})
                     except Exception as init_err:
-                        if draft_model is not None:
-                            print(f"[ENGINE] Drafter initialization failed ({init_err}). Retrying without draft model...")
+                        if draft_model is not None or mtp_model_path is not None:
+                            print(f"[ENGINE] Speculative drafter/MTP initialization failed ({init_err}). Retrying without drafter/MTP...")
                             model = Llama(
                                 model_path=self.model_path, 
                                 n_gpu_layers=n_layers,
@@ -4514,6 +4608,7 @@ class ChatbotApp:
                                 rpc_servers=None,
                                 override_tensors=override_tensors,
                                 draft_model=None,
+                                mtp_model_path=None,
                                 **params
                             )
                         else:
@@ -5039,9 +5134,46 @@ class ChatbotApp:
             token_count = 0
 
             self._ensure_model_chat_format(self.model)
-            gen_iterator = self.model.create_chat_completion(messages=msgs, **params, stream=True)
-            for chunk in gen_iterator:
+            try:
+                gen_iterator = iter(self.model.create_chat_completion(messages=msgs, **params, stream=True))
+            except Exception as init_gen_err:
+                if getattr(self.model, "draft_model", None) is not None:
+                    print(f"[ENGINE] Drafter error ({init_gen_err}). Detaching draft model and retrying...")
+                    self.model.draft_model = None
+                    gen_iterator = iter(self.model.create_chat_completion(messages=msgs, **params, stream=True))
+                elif hasattr(self.model, "disable_mtp_decode"):
+                    print(f"[ENGINE] MTP error during init ({init_gen_err}). Disabling MTP decode and retrying...")
+                    self.model.disable_mtp_decode = True
+                    gen_iterator = iter(self.model.create_chat_completion(messages=msgs, **params, stream=True))
+                else:
+                    raise init_gen_err
+
+            while True:
                 if self.stop_process.is_set(): break
+                try:
+                    chunk = next(gen_iterator)
+                except StopIteration:
+                    break
+                except (RuntimeError, OSError, Exception) as decode_err:
+                    err_str = str(decode_err).lower()
+                    if ("llama_decode" in err_str or "access violation" in err_str or "exception:" in err_str) and (getattr(self.model, "draft_model", None) is not None or hasattr(self.model, "disable_mtp_decode")):
+                        err_msg = f"[APEX] Drafter/MTP failure ({decode_err}). Detaching drafter/MTP and recovering context..."
+                        print(err_msg)
+                        self.process_queue.put({"status": "diag_log_update", "content": err_msg})
+                        if getattr(self.model, "draft_model", None) is not None:
+                            self.model.draft_model = None
+                        if hasattr(self.model, "disable_mtp_decode"):
+                            self.model.disable_mtp_decode = True
+                        if not full_resp:
+                            try:
+                                gen_iterator = iter(self.model.create_chat_completion(messages=msgs, **params, stream=True))
+                                continue
+                            except Exception:
+                                break
+                        else:
+                            break
+                    else:
+                        raise decode_err
                 if "content" in chunk["choices"][0]["delta"]:
                     txt = chunk["choices"][0]["delta"]["content"]
                     full_resp += txt
@@ -5169,12 +5301,13 @@ class ChatbotApp:
 
             # Advanced Scout & Split
             closers_patterns = [
-                r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
+                r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\/\|thought\|>', r'<\|im_end\|>', r'<\|im_end>',
+                r'\[\/THOUGHT\]', r'\[\/thought\]', r'\[\/thinking\]', r'\[\/reasoning\]', r'\[\/DRAFT\]',
                 r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final', r'<\|channel\|>text', r'<\|channel\|>assistant',
-                r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
-                r'\[\/thinking\]', r'\[\/thought\]', r'\[\/reasoning\]',
+                r'<channel\|>', r'<\/channel\|>',
                 r'[\u27e7⟧]\s*<\/think>', r'[\u27e7⟧]',
                 r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
+                r'<｜end▁of▁sentence｜>', r'<\|end\|>',
                 r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
             ]
             all_splits = []
@@ -5183,7 +5316,7 @@ class ChatbotApp:
                     all_splits.append(m.end())
             
             if not all_splits and (
-                any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>", "<|channel|>analysis", "<|channel|>thought", "<|channel|>reasoning", "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]", "to=self", "<|start|>assistant to=self", "here's a thinking process", "here is a thinking process", "\u27e6", "⟦"])
+                any(t in final_answer.lower() for t in ["<think>", "<thought>", "<|think|>", "<|thought|>", "<|channel>thought", "<channel|thought>", "<|channel|>analysis", "<|channel|>thought", "<|channel|>reasoning", "<|im_start|>thought", "<|im_start>thought", "[draft]", "[thinking]", "[thought]", "[reasoning]", "[thought]", "to=self", "<|start|>assistant to=self", "here's a thinking process", "here is a thinking process", "\u27e6", "⟦", "<｜start▁of▁sentence｜>"])
                 or _is_thought_opening(final_answer)
             ):
                 all_splits.append(len(final_answer))
@@ -5193,7 +5326,7 @@ class ChatbotApp:
             if all_splits:
                 for split in all_splits:
                     remaining = final_answer[split:].strip()
-                    if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
+                    if re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|\[THOUGHT\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|thought\|>|<\|im_start\|?>thought|to=self|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', remaining, re.IGNORECASE):
                         continue
                     best_split = split
                     break
@@ -5204,7 +5337,7 @@ class ChatbotApp:
                 think_log = final_answer[:best_split].strip()
                 final_answer = final_answer[best_split:].strip()
             else:
-                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', final_answer, re.IGNORECASE))
+                has_thought_openers = bool(re.search(r'<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|\[THOUGHT\]|<\|channel>thought|<channel\s*\|?>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|think\|>|<\|thought\|>|<\|im_start\|?>thought|to=self|^thought\s+|here\'s a thinking process|here is a thinking process|[\u27e6⟦]', final_answer, re.IGNORECASE))
                 if has_thought_openers or _is_thought_opening(final_answer):
                     think_log = final_answer
                     final_answer = ""
@@ -5213,12 +5346,33 @@ class ChatbotApp:
                     think_log = ""
                     final_answer = full_resp.strip()
 
-            # Strip wrapper tags and residual tool markers
-            tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|channel\|?>final|<\|channel\|?>text|<\|channel\|?>assistant|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|message\|>|<\|start\|>|<\|end\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
+            # Strip wrapper tags and residual tool markers across all S:/LLM models
+            tag_clean_pattern = (
+                r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|\[THOUGHT\]|\[\/THOUGHT\]|'
+                r'<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|'
+                r'<\|channel\|?>final|<\|channel\|?>text|<\|channel\|?>assistant|<channel\s*\|?>|'
+                r'<\/think>|<\/thought>|<\/\|think\|>|<\/\|thought\|>|<\|think\|>|<\|thought\|>|<\/\|thought>|'
+                r'<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|'
+                r'<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|'
+                r'<\/?(?:tool_call|tool_response|tools|function_calls?|function|param(?:eter)?|arg_key|arg_value)[^>]*>|'
+                r'<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|'
+                r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|'
+                r'to=self<\|message\|>|to=user<\|message\|>|<\|message\|>|<\|start\|>|<\|end\|>|<\|eom\|>|<\|eot\|>|'
+                r'<｜(?:start|end)▁of▁sentence｜>|<\|(?:Bot|User|System|Tool)\|>[ \t]*|'
+                r'<\|(?:system|user|assistant|tool)\|>[ \t]*|'
+                r'\[TOOL_CALLS\]|'
+                r'[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
+            )
+            tool_block_clean = r'(?i)<(?:tool_call|function_calls?|tools|functions)[\s\S]*?(?:<\/(?:tool_call|function_calls?|tools|functions)>|$)|\[TOOL_CALLS\][\s\S]*?(?=\n\n|$)|<function=[\w_]+>[\s\S]*?(?:<\/function>|$)'
+            think_log = re.sub(tool_block_clean, '', think_log).strip()
+            final_answer = re.sub(tool_block_clean, '', final_answer).strip()
+
+
             think_log = re.sub(tag_clean_pattern, '', think_log).strip()
             think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
             final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
             final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
+
 
             if not thinking_enabled:
                 think_log = ""
@@ -5234,13 +5388,15 @@ class ChatbotApp:
 
             # Tool Execution Check in Standard Generation
             if tools and self.active_persona_level >= 2:
-                has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image)\s*\(.*?\)', final_answer, re.DOTALL | re.IGNORECASE)
+                has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image|send_peer_message)\s*\(.*?\)', final_answer, re.DOTALL | re.IGNORECASE)
                 has_tag_tool = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{', final_answer, re.DOTALL | re.IGNORECASE)
-                has_json_tool = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'](?:web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image)["\']', final_answer, re.IGNORECASE)
-                if has_py_tool or has_tag_tool or has_json_tool:
+                has_json_tool = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'](?:web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image|send_peer_message)["\']', final_answer, re.IGNORECASE)
+                has_xml_tool = bool(re.search(r'<(?:tool_call|function_calls?|function|function=)\b|\[TOOL_CALLS\]', final_answer, re.IGNORECASE))
+                if has_py_tool or has_tag_tool or has_json_tool or has_xml_tool:
                     self.process_queue.put({"status": "thinking_status", "content": "Executing tool..."})
                     final_answer = self._run_tool_loop(final_answer, msgs, params)
                     final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+
 
             if not final_answer and full_resp and not think_log:
                 final_answer = re.sub(tag_clean_pattern, '', full_resp).strip()
@@ -6153,6 +6309,47 @@ class ChatbotApp:
         is_cecilia = (lvl >= 7) or getattr(self, "is_cecilia_active", False)
         return "Cecilia" if is_cecilia else "Serenity"
 
+    def _get_message_persona_label(self, m: dict, file_path: Optional[str] = None) -> str:
+        """Returns grounded persona label for a specific history message to prevent level overwrite."""
+        if not isinstance(m, dict):
+            return self._get_persona_label()
+
+        # 1. Level priority: explicit turn level
+        lvl = m.get("level")
+        if lvl is not None:
+            try:
+                return "Cecilia" if int(lvl) >= 7 else "Serenity"
+            except (ValueError, TypeError):
+                pass
+
+        # 2. File path context priority: inspect filename for level to prevent cross-level corruption
+        target_path = file_path or getattr(self, "_active_session_history_path", None)
+        if not target_path and hasattr(self, "history_state"):
+            target_path = self.history_state.get("current_path")
+
+        if target_path:
+            fname = os.path.basename(target_path)
+            m_match = re.search(r"_lvls?([0-9_]+)", fname, re.IGNORECASE)
+            if m_match:
+                try:
+                    file_lvls = [int(x) for x in m_match.group(1).split("_") if x.isdigit()]
+                    if file_lvls:
+                        return "Cecilia" if any(l >= 7 for l in file_lvls) else "Serenity"
+                except Exception:
+                    pass
+
+        # 3. Explicit message persona (validated)
+        role = str(m.get("role", "")).lower()
+        persona = str(m.get("persona", "")).strip().capitalize()
+        if role == "cecilia":
+            return "Cecilia"
+        if persona in ("Cecilia", "Serenity"):
+            return persona
+
+        # 4. Fallback to active UI label
+        return self._get_persona_label()
+
+
     def _display_user_message(self, msg): 
         hist = self.chat_history
         if hist is None: return
@@ -6238,9 +6435,9 @@ class ChatbotApp:
             start_idx = self.state.get("response_start_idx")
             
         hist.config(state='normal')
-        if start_idx:
-            hist.delete(start_idx, tk.END)
         if text:
+            if start_idx:
+                hist.delete(start_idx, tk.END)
             hist.insert(tk.END, text, ("ai",))
         hist.config(state='disabled')
         if not scroll_locked and was_at_bottom:
@@ -6602,20 +6799,36 @@ class ChatbotApp:
         """
         Parses tool calls from model output (supporting Programmatic Tool Calling Python syntax
         and legacy tags), executes them, and recursively generates the final answer.
-        Max depth 3 to prevent runaway inference.
+        Configurable recursion limit (default 100, virtually unlimited).
         """
-        if depth > 3:
-            return f"{full_resp}\n\n[SYSTEM]: Tool recursion limit reached. Truncating response."
+        max_tool_depth = int(self.config.get("max_tool_recursion_depth", 100))
+        if depth >= max_tool_depth:
+            return f"{full_resp}\n\n[SYSTEM]: Tool recursion safety bound ({max_tool_depth}) reached. Returning current output."
 
         call_name = None
         args = {}
 
-        # 1. Programmatic Tool Calling (PTC) - Python syntax (e.g. web_search("..."), read_file(path="..."))
-        py_match = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image)\s*\((.*?)\)(?:\s*```)?', full_resp, re.DOTALL | re.IGNORECASE)
-        # 2. Legacy / Tag-based Tool Calls
-        call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
-        # 3. JSON Action Block (e.g. {"action": "generate_image", "action_input": ...} or {"name": "...", "arguments": ...})
-        json_match = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'][\w_]+["\']', full_resp, re.IGNORECASE)
+        # 0. Modular multi-format tool parser (supporting PTC, Nemotron, MiniCPM, Spark, Olmo, Mistral, JSON)
+        if hasattr(self, "tool_registry") and hasattr(self.tool_registry, "parse_tool_calls"):
+            try:
+                parsed_tools = self.tool_registry.parse_tool_calls(full_resp)
+                if parsed_tools:
+                    call_name, args = parsed_tools[0]
+            except Exception:
+                pass
+
+        py_match = None
+        call_match = None
+        json_match = None
+
+        if not call_name:
+            # 1. Programmatic Tool Calling (PTC) - Python syntax (e.g. web_search("..."), read_file(path="..."))
+            py_match = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image|send_peer_message)\s*\((.*?)\)(?:\s*```)?', full_resp, re.DOTALL | re.IGNORECASE)
+            # 2. Legacy / Tag-based Tool Calls
+            call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
+            # 3. JSON Action Block (e.g. {"action": "generate_image", "action_input": ...} or {"name": "...", "arguments": ...})
+            json_match = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'][\w_]+["\']', full_resp, re.IGNORECASE)
+
 
         if py_match:
             call_name = py_match.group(1).strip().lower()
@@ -6753,8 +6966,7 @@ class ChatbotApp:
         if not call_name:
             return full_resp
 
-        # Inform UI & clean tool invocation syntax from chat output
-        self.process_queue.put({"status": "streaming_replace", "content": ""})
+        # Inform UI & clean tool invocation syntax from chat output without wiping response text
         self.process_queue.put({"status": "thinking_status", "content": f"Executing tool: {call_name}..."})
         self.process_queue.put({"status": "tool_log_update", "content": f"\n[{time.strftime('%H:%M:%S')}] Executing: {call_name}\nArgs: {args}"})
         
@@ -6768,10 +6980,13 @@ class ChatbotApp:
 
             self.process_queue.put({"status": "tool_log_update", "content": f"Result: \n{str(observation)[:200]}..."})
             
-            # 2. CHAT SYNTHESIS
             clean_resp = full_resp
             clean_resp = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', clean_resp, flags=re.IGNORECASE)
+            clean_resp = re.sub(r'(?s)<thought>.*?(?:<\/thought>|$)', '', clean_resp, flags=re.IGNORECASE)
+            clean_resp = re.sub(r'(?s)<\|thought\|>.*?(?:<\/\|thought\|>|$)', '', clean_resp, flags=re.IGNORECASE)
+            clean_resp = re.sub(r'(?s)\[THOUGHT\].*?(?:\[\/THOUGHT\]|$)', '', clean_resp, flags=re.IGNORECASE)
             clean_resp = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', clean_resp, flags=re.IGNORECASE)
+
             
             forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search / tool results below (or using your existing knowledge if results are unavailable), provide a direct, helpful answer to the user's original query."
             if isinstance(prompt_str, list):
@@ -6844,8 +7059,11 @@ class ChatbotApp:
         # Default / "lazy" mode:
         # 1. Filter out code blocks and tool calls so repetitive code / tool queries don't trigger false positives
         cleaned = re.sub(r'```[\s\S]*?```', ' [CODE_BLOCK] ', text)
+        cleaned = re.sub(r'<(?:tool_call|function_calls?)[\s\S]*?(?:<\/(?:tool_call|function_calls?)>|$)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\[TOOL_CALLS\][\s\S]*?(?=\n\n|$)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)[\s\S]*?(?:<\/(?:execute_tool|executetool)>|\}|\n|$)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\b(?:web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image)\s*\([\s\S]*?\)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\b(?:web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image|send_peer_message)\s*\([\s\S]*?\)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
+
 
         recent = cleaned[-800:]
         n = len(recent)
@@ -7969,7 +8187,7 @@ class ChatbotApp:
             lookup_mode = self.config.get("history_lookup_mode", "targeted")
             threading.Thread(
                 target=self.turbo_vec.ingest_needed_files, 
-                args=(self.model_path, self.active_persona_level, lookup_mode),
+                args=(self.model_path, self.active_persona_level, lookup_mode, getattr(self, "vault_manager", None)),
                 daemon=True
             ).start()
         self.update_persona_display()
@@ -8514,11 +8732,14 @@ class ChatbotApp:
         try:
             if not error and user_msg and final_answer:
                 final_answer_history = final_answer.replace("<|file_separator|>", "").strip()
+                is_cecilia_turn = (getattr(self, "active_persona_level", 2) >= 7) or getattr(self, "is_cecilia_active", False)
                 ai_entry = {
                     "role": "assistant",
                     "content": str(final_answer_history),
-                    "level": getattr(self, "active_persona_level", 3)
+                    "level": getattr(self, "active_persona_level", 3),
+                    "persona": "Cecilia" if is_cecilia_turn else "Serenity"
                 }
+
                 if think_log and isinstance(think_log, str) and think_log.strip():
                     ai_entry["reasoning_content"] = str(think_log.strip())
                 self.messages.extend([
@@ -9137,7 +9358,7 @@ class ChatbotApp:
                     self._apply_markdown(s_idx, e_idx, ("user",))
             elif role == 'assistant':
                 s_idx = hist.index(tk.END + "-1c")
-                hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", ("ai_lead",))
+                hist.insert(tk.END, f"\n\n{self._get_message_persona_label(m, file_path=getattr(self, '_active_session_history_path', None))}: ", ("ai_lead",))
 
                 think_content = m.get('reasoning_content') or m.get('think_log')
                 if think_content and isinstance(think_content, str) and think_content.strip():
@@ -9225,8 +9446,9 @@ class ChatbotApp:
                 
                 self.past_history_view.config(state='normal')
                 for m in self.messages: 
-                    who = "You" if m['role'] == 'user' else self._get_persona_label()
+                    who = "You" if m['role'] == 'user' else self._get_message_persona_label(m, file_path=path)
                     tag = "user" if m['role'] == 'user' else "ai"
+
                     entry = f"{who}: {m['content']}\n{'-'*50}\n\n"
                     self.past_history_view.insert(tk.END, entry, (tag,))
                 
@@ -9582,17 +9804,10 @@ class ChatbotApp:
             u_cfg_p = os.path.join(user_dir, "config.json")
             if os.path.exists(u_cfg_p):
                 try:
-                    sys_mtime = os.path.getmtime(self.config_file) if os.path.exists(self.config_file) else 0
-                    usr_mtime = os.path.getmtime(u_cfg_p)
                     with open(u_cfg_p, 'r', encoding='utf-8') as f:
                         u_data = json.load(f)
                     if isinstance(u_data, dict):
-                        if usr_mtime >= sys_mtime - 1.0:
-                            self.config.update(u_data)
-                        else:
-                            for uk, uv in u_data.items():
-                                if uk not in self.config:
-                                    self.config[uk] = uv
+                        self.config.update(u_data)
                 except Exception as e:
                     print(f"[USER] Could not merge user config: {e}")
 
@@ -10479,6 +10694,9 @@ class ChatbotApp:
                 else:
                     lbl.config(text=os.path.basename(p))
             self.save_config()
+            if hasattr(self, '_revert_status_label'):
+                try: self._revert_status_label()
+                except Exception: pass
         if window: window.lift()
 
     def _fill_auto(self, win, ents):
@@ -10628,12 +10846,13 @@ class ChatbotApp:
         try:
             cfg = getattr(self, "config", {}) or {}
             mode = cfg.get("turbovec_mode", "fallback")
-            self.turbo_vec = TurboVecIndex(self.dirs["History"], mode=mode)
+            user_hist = self.get_user_history_dir() if hasattr(self, 'get_user_history_dir') else self.dirs["History"]
+            self.turbo_vec = TurboVecIndex(user_hist, mode=mode)
             if mode != "off":
                 lookup_mode = cfg.get("history_lookup_mode", "targeted")
                 model_p = getattr(self, "model_path", None)
                 lvl = getattr(self, "active_persona_level", 1)
-                self.turbo_vec.ingest_needed_files(model_p, lvl, lookup_mode)
+                self.turbo_vec.ingest_needed_files(model_p, lvl, lookup_mode, vault_manager=getattr(self, "vault_manager", None))
             print(f"[TURBOVEC] Background initialization complete (Mode: {mode.upper()}).")
         except ImportError as e:
             print(f"[TURBOVEC] Optional module not installed: {e}")
@@ -10647,12 +10866,13 @@ class ChatbotApp:
         def _reload():
             try:
                 print(f"[TURBOVEC] Soft reloading TurboVec subsystem (Target Mode: {mode.upper()})...")
-                self.turbo_vec = TurboVecIndex(self.dirs["History"], mode=mode)
+                user_hist = self.get_user_history_dir() if hasattr(self, 'get_user_history_dir') else self.dirs["History"]
+                self.turbo_vec = TurboVecIndex(user_hist, mode=mode)
                 if mode != "off":
                     lookup_mode = cfg.get("history_lookup_mode", "targeted")
                     model_p = getattr(self, "model_path", None)
                     lvl = getattr(self, "active_persona_level", 1)
-                    self.turbo_vec.ingest_needed_files(model_p, lvl, lookup_mode)
+                    self.turbo_vec.ingest_needed_files(model_p, lvl, lookup_mode, vault_manager=getattr(self, "vault_manager", None))
                 print(f"[TURBOVEC] Soft reload complete.")
             except Exception as e:
                 print(f"[TURBOVEC] Soft reload error: {e}")

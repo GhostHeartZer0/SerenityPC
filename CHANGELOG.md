@@ -12,13 +12,56 @@
 ### Version 1.9.0
 - Cleared most TODO Verifications (Completed Logs).
 
-### Version 1.8.0
-- Cleared TODO list for v1.8.0.
-- Deep Cook Cycles Verified.
-
 ---
 
-## Current Version:
+### Version 1.8.1
+- **MTP Crash Guard, Drafter Recovery & Lag Elimination (`main.py`, `.venv/Lib/site-packages/llama_cpp/llama.py`)**:
+  - Native MTP Engine Stability Guard: Bypassed automatic companion MTP head loading unless explicitly enabled via `enable_native_mtp` config. Avoids C-level NULL pointer dereference (0x3C00) in `llama_decode_mtp` (`llama.dll`) on unsupported architectures (e.g. Gemma-4 assistant), preventing fatal access violations, single-token generation stalls, and embedding mode generation latency.
+  - Generation Stream Hardening: Expanded decode exception handling in `main.py` to catch `RuntimeError`, `OSError`, and C-extension faults on `gen_iterator`, dynamically detaching drafters, setting `disable_mtp_decode = True`, and recovering context so generation finishes cleanly without crashing the process.
+  - Subsystem Fallback: Added `nextn_draft` context synchronization and `disable_mtp_decode` fault capture in `llama_cpp/llama.py`.
+- **MagicMock User Directory Prevention & Auto-Pruning (`main.py`, `System/tests/test_user_profiles_and_statusbar.py`)**:
+  - Profile Method Hardening: Validated `username` and `config["username"]` in `get_active_username()`, `get_user_dir()`, and `get_user_history_dir()` against `MagicMock` instances and mock string representations, safely defaulting to `"Default"`.
+  - Directory Pruning: Enhanced `list_user_profiles()` to automatically identify and prune any mock directory artifacts from `Users/` and `History/` on disk, preventing them from appearing in profile dropdowns.
+  - Verified with new unit test `test_magicmock_folder_prevention_and_pruning`.
+- **Settings UI Radio Contrast Exception Guard (`System/settings_tabs.py`)**:
+  - Wrapped `rb.config` in `bind_radio_contrast` with safe exception handling, preventing `_tkinter.TclError` crashes during dynamic theme switches.
+- **Native MTP Assistant Loading, Drafter Debloating & TurboVec Ingestion (`main.py`, `System/mtp_combo_scanner.py`, `System/gguf_draft_model.py`, `System/kv_manager.py`, `System/tests/test_mtp_combo_scanner.py`)**:
+  - Native MTP Assistant Integration: Added `is_mtp_assistant` recognizing dedicated MTP auxiliary models (`gemma4-assistant`, `gemma4_assistant`, `*_assistant`, `*_mtp`). Routed auxiliary MTP models directly to `Llama(..., mtp_model_path=...)` instead of failing with `GgufDraftModel` / `llama_init_from_model`.
+  - Drafter Debloating: Stripped header tampering and `patch_gguf_architecture` file-mutating fallback from `GgufDraftModel`, simplifying drafter initialization.
+  - Scanner MTP Head Pairing: Added priority MTP head pairing in `find_acceptable_combos` and updated treeview badge to `⚡ MTP Head (Native)`.
+  - TurboVec User Directory Scoping & Locked Profile Safety: Scoped `TurboVecIndex` to the active user's history directory (`get_user_history_dir()`) and dynamically reloaded on profile switch. Pruned backup/temp directories and silently caught permission/key mismatch exceptions from other locked user vaults, eliminating all console error spam.
+- **Multi-Model Tool Calling & Non-Standard Reasoning Separation for S:/LLM (`System/tool_registry.py`, `main.py`, `System/tests/test_thought_isolation.py`, `System/tests/test_needs_fixing_deep_verify.py`)**:
+  - Multi-Format Tool Invocations: Expanded `GemmaToolRegistry.parse_tool_calls` across all model families in `S:/LLM`: Python AST PTC, NVIDIA Nemotron XML (`<function=...><parameter=...>`), MiniCPM XML (`<function name=...><param name=...>` / CDATA), Spark-X2.5 XML (`<tool_call>name<arg_key>...<arg_value>`), Olmo-3 JSON (`<function_calls>`), Mistral (`[TOOL_CALLS]`), and legacy tags (`<ctrl42>call:`).
+  - Thought/Tool Isolation & Tag Sanitization: Added `tool_block_clean` and hardened `closers_patterns` / `tag_clean_pattern` in `main.py` and `test_thought_isolation.py` ensuring complete zero-leakage reasoning and tool isolation for Olmo-3, Phi-4, Spark-X2.5, MiniCPM5, and Mistral.
+- **Persona Prefix Message-Level Grounding & History Archive Repair (`main.py`, `Tools/repair_history.py`, `System/tests/test_needs_fixing_deep_verify.py`, `System/tests/test_repair_history.py`)**:
+  - Level-Grounded Prefix Resolution: Added `_get_message_persona_label` inspecting each turn's stored `level` and `persona` attributes, as well as file path `_lvlX` context, preventing Level 7 (Cecilia) from overwriting "Serenity:" on past turns (Lvls 1-6) when viewing or saving adjacent history files.
+  - Immutably tagged `ai_entry` in `_finalize_message` with `"persona": "Cecilia" if is_cecilia else "Serenity"` and grounded history archive rendering and history edit saving.
+  - History Archive Repair Utility (`Tools/repair_history.py`): Standalone, transaction-safe CLI and programmatic repair tool that scans `History/` and `Users/`, creates automated timestamped backups in `History/backups/`, decrypts `.encz` files via `VaultManager` (with password prompt), heals missing `level`/`persona` attributes, restores false Cecilia tags on sub-7 files back to Serenity, and strips accidental duplicate prepended text prefixes (`Serenity: `, `Cecilia: `, `You: `).
+- **Settings Saving, Marquee Hover Stale Closure & Path Status Synchronization (`System/serenity_utils.py`, `System/settings_ui.py`, `main.py`)**:
+  - Marquee State Fix: Stored dynamic text states `lbl._marquee_padded` and `lbl._marquee_compact` directly on widget attributes in `setup_marquee_label`, preventing mouse hover `<Leave>` callbacks from reverting immediately to previous filenames.
+  - Settings UI Apply Hook: Updated `on_closing()` in `settings_ui.py` to invoke `_apply_settings(close_window=True, silent=True)` directly.
+  - Disk Timestamp Lock Removal: Removed blocking `usr_mtime` check in `load_config()`.
+- **Keyword / History Lookups in Thought Log & Encrypted Vault Ingestion (`System/kv_manager.py`, `main.py`)**:
+  - Recursive Profile Ingestion: Upgraded `TurboVecIndex.ingest_needed_files` to `os.walk(self.history_dir)` to ingest files across all user profile subdirectories.
+  - Encrypted Vault Decryption: Added `vault_manager` integration into `TurboVecIndex` to decrypt and index `.encz` archives without failing on raw zlib decompress.
+- **Speculative MTP Native Sensing, Companion Discovery, 2-Row Scanner UI & Prompt Lookup Fallback Protection (`System/mtp_combo_scanner.py`, `main.py`, `System/tests/test_mtp_combo_scanner.py`)**:
+  - Baked-in MTP Sensing: Added `has_baked_in_mtp` scanning GGUF `*.nextn_predict_layers` metadata and Q8MTP tags, flagging native models with `⚡ Baked-in MTP (Native)` and bypassing external drafter requirement.
+  - Prioritized Active Directory: Placed `os.path.dirname(app.model_path)` first in companion model search paths.
+  - Interactive Scanner Modal: Added `📂 Manual Pair Drafter...` file browser, `📁 Scan Folder...` directory browser, and reorganized action buttons into 2 clean rows.
+  - Prompt Lookup Guard & Drafter Recovery: Gated Prompt Lookup Decoding strictly behind explicit configuration and added drafter recovery catching `llama_decode returned -1`.
+- **Subagent Vector Grounding, Dynamic Re-invocation & Non-Destructive Tool Calling (`System/orchestration_manager.py`, `System/tool_registry.py`, `main.py`, `System/tests/test_dynamic_dispatch.py`, `System/tests/test_delegation_settings_and_cecilia.py`)**:
+  - Vector Grounded 'All' Selection: Replaced blind all-level activation with primary domain vector grounding (factual, reasoning, emotional, speed, coordination), ensuring subagents execute only when relevant to the user query while preserving low-overhead single-agent fallback for greetings.
+  - Multi-Turn Execution Queue & Dynamic Re-invocation: Implemented dynamic DAG execution queue supporting loop sequences (e.g. `6 -> 5 -> 1 -> 5 -> 6`) and parsed `<delegate:lvlX>` directives directly from subagent thought/deduction streams.
+  - Search Query Extraction & Sanitizer: Added `extract_search_query` stripping code blocks, JNI/Compose syntax, and stack traces into concise (<120 chars) search phrases; sanitized query lengths in `tool_registry.py` and neutralized empty search error notices to prevent model derailment.
+  - Non-Destructive Streaming Preservation: Removed destructive `streaming_replace("")` calls in `_run_tool_loop` and guarded `_replace_ai_message` against blank response wipes, preventing chat springbacks and repeated response redo loops.
+  - Virtually Unlimited Tool Recursion: Heightened tool calling recursion depth limit from 3 to 100 (`max_tool_recursion_depth`) with safe configurable bound.
+- **Serenity P2P Messaging, Encrypted Mail (.smp), Level 2 Courier & V2.3.0 Subagent/MCP Architecture (`System/serenity_mail_courier.py`, `System/tool_registry.py`, `System/serenity_p2p_ui_wiring.py`, `System/settings_tabs.py`, `System/settings_ui.py`, `SerenityPC.spec`, `build_exe.bat`, `System/tests/test_mail_and_courier.py`)**:
+  - Unified Inter-Serenity Envelope & Crypto: Built `InterSerenityEnvelope v1.1` and `SerenityMailCrypto` implementing X25519 ECDH key exchange, Ed25519 cryptographic signing, and AES-256-GCM authenticated encryption with zlib compression for `.smp` mail containers, maintaining seamless backward compatibility with legacy Project Brainuke `.bmb` packets.
+  - Cross-State P2P Transport & DeadDrop: Implemented pure-Python RFC 5389 STUN WAN endpoint discovery, signed `serenity-peer://` base64 pairing cards, direct HTTPS/MCP delivery, and offline DeadDrop folder sync with automated SQLite outbox retry and ingestion.
+  - Level 2 Courier & Contextual Quarantine Sandbox: Set Level 2 ("The Helper") as default message courier; inbound peer messages undergo injection and risk screening (`risk_score < 0.4` auto-admit for veteran profiles; held in quarantine otherwise). Bounded external peer influence weight (`0.25`) to protect Cecilia (Level 7) and prevent affective manipulation.
+  - 72-Hour Profile Age Trust Gate: Generalizes `VaultManager.has_full_repo_read_access(72.0)` across local file reads, AST PTC multi-line tool parsing, and mutating SerenityDev MCP commands (`/execute`, `/agent`).
+  - SerenityDev MCP Frontend Bridge & Subagent Streaming: Embedded client for port 8002/8443 MCP execution with OTL ContextSnapshot dispatch, graceful offline fallback, and collapsible subagent dropdown queue events (`subagent_spawn`, `subagent_stream`, `subagent_done`).
+  - Settings UI & Distribution Hardening: Added P2P & MCP controls in Settings Tab 3 (`Agents & Deep Cook`), dynamic 72h status badge, Peer Pairing modal, and Mailbox/Quarantine inspector in Tab 5 (`Users & Security`). Hardened `SerenityEnvResolver` and `build_exe.bat` for PyInstaller `--onedir` (`_internal`) execution.
 
 ### Version 1.8.0
 - **Wringer Max Guard, Top-5 Leaderboards, History Deduplication & Thought Log Snippets (`benchmarks/wringer/Wringer.py`, `benchmarks/wringer/analyze.py`, `System/kv_manager.py`, `System/vault_manager.py`, `System/tool_registry.py`, `System/orchestration_manager.py`, `main.py`, `System/tests/test_security_hardening.py`)**:
