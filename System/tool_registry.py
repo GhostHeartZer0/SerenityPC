@@ -306,7 +306,15 @@ class GemmaToolRegistry:
             if not query:
                 return "Notice: Search query was empty. Proceeding to answer using baseline knowledge."
 
-            # Sanitize long queries to prevent HTTP 414 / empty engine matches
+            # Keyword-actuated lookup extraction to filter bloat (V2.9.0)
+            if len(query) > 90 or "\n" in query or "```" in query:
+                try:
+                    from System.orchestration_manager import extract_search_query
+                    extracted = extract_search_query(query)
+                    if extracted and len(extracted) >= 4:
+                        query = extracted
+                except Exception:
+                    pass
             if len(query) > 160:
                 query = query[:160].rsplit(' ', 1)[0].strip()
 
@@ -459,8 +467,17 @@ class GemmaToolRegistry:
             def spawn_viewer():
                 try:
                     base_dir = SerenityEnvResolver.get_writable_root(self.app)
+                    bundle_dir = SerenityEnvResolver.get_bundle_root(self.app)
                     viewer_script = os.path.join(base_dir, "System", "hud_viewer.py")
-                    subprocess.Popen([sys.executable, viewer_script, req_type, clean_prompt])
+                    if not os.path.isfile(viewer_script):
+                        viewer_script = os.path.join(bundle_dir, "System", "hud_viewer.py")
+                    tmp_dir = os.path.join(base_dir, ".tmp")
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    payload_path = os.path.join(tmp_dir, f"hud_payload_{int(time.time() * 1000)}.json")
+                    with open(payload_path, "w", encoding="utf-8") as fp:
+                        json.dump({"req_type": req_type, "content": clean_prompt}, fp, ensure_ascii=False)
+                    py_bin = SerenityEnvResolver.find_python_interpreter(self.app) or sys.executable
+                    subprocess.Popen([py_bin, viewer_script, payload_path])
                 except Exception as e:
                     print(f"[TOOL] Image viewer error: {e}")
 

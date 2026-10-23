@@ -164,6 +164,36 @@ def wire_serenity_app(app: Any) -> bool:
         except Exception:
             pass
 
+    # 4. Wire History File Titles Marquee on app._render_history_menu (V1.9.0)
+    if hasattr(app, "_render_history_menu") and not getattr(app, "_marquee_history_wrapped", False):
+        orig_render_hist = app._render_history_menu
+
+        def _wrapped_render_history_menu(*args, **kwargs):
+            res = orig_render_hist(*args, **kwargs)
+            try:
+                try:
+                    from System.serenity_utils import setup_marquee_label as _real_marquee
+                except ImportError:
+                    from serenity_utils import setup_marquee_label as _real_marquee
+                scroll_f = getattr(app, "history_scroll_frame", None)
+                if scroll_f is not None and hasattr(scroll_f, "winfo_exists") and scroll_f.winfo_exists():
+                    for card in scroll_f.winfo_children():
+                        for hdr in card.winfo_children():
+                            children = hdr.winfo_children() if hasattr(hdr, "winfo_children") else []
+                            # In _render_history_menu: badge (left), meta_lbl (right), name_lbl (left expand)
+                            if len(children) >= 3:
+                                name_lbl = children[2]
+                                if hasattr(name_lbl, "cget") and name_lbl.winfo_class() == "Label":
+                                    raw_title = getattr(name_lbl, "_full_history_title", None) or str(name_lbl.cget("text"))
+                                    name_lbl._full_history_title = raw_title
+                                    _real_marquee(name_lbl, raw_title, app=app, limit=28, full_path=raw_title)
+            except Exception:
+                pass
+            return res
+
+        app._render_history_menu = _wrapped_render_history_menu
+        app._marquee_history_wrapped = True
+
     app._p2p_wired = True
     return True
 

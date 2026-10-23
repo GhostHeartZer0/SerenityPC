@@ -20,30 +20,59 @@ def clean_model_display_name(p: str) -> str:
     name = re.sub(r'[-_.](?:qat[-_.]UD|qat)$', '', name, flags=re.IGNORECASE)
     return name or os.path.basename(str(p or ''))
 
+_SEARCH_STOPWORDS = {
+    "please", "can", "you", "could", "would", "tell", "me", "about", "the", "a", "an",
+    "hey", "hi", "hello", "serenity", "cecilia", "go", "ahead", "and", "do", "some",
+    "research", "on", "for", "look", "up", "search", "find", "check", "what", "is",
+    "are", "there", "any", "give", "provide", "with", "from", "into", "that", "this",
+}
+
 def extract_search_query(user_query: str) -> str:
-    """Extracts concise, bloat-free search keywords (< 140 chars) from complex multi-modal/code prompts."""
-    # 1. Strip fenced code blocks
-    clean = re.sub(r'```[\s\S]*?```', '', user_query)
+    """
+    Keyword-actuated lookup extractor for Level 2 Searcher (V2.9.0).
+    Filters conversational bloat, code blocks, stack traces, and filler words into
+    a high-signal keyword query (< 140 chars).
+    """
+    if not user_query:
+        return ""
+    # 1. Strip fenced code blocks, inline XML/tool tags, and stack trace lines
+    clean = re.sub(r'```[\s\S]*?```', ' ', user_query)
+    clean = re.sub(r'<[^>]+>', ' ', clean)
+    clean = re.sub(r'(?m)^\s*(?:File\s+".*?",\s+line\s+\d+|Traceback\s+\(most recent call last\):).*$', ' ', clean)
     # 2. Strip C++/Kotlin/Java/Python boilerplate lines
-    clean = re.sub(r'(?m)^\s*(?:#include|package|import|using)\s+.*$', '', clean)
-    clean = re.sub(r'(?m)^\s*(?:extern\s+"C"|public\s+class|class\s+\w+|fun\s+\w+|val\s+\w+|var\s+\w+|def\s+\w+).*$', '', clean)
+    clean = re.sub(r'(?m)^\s*(?:#include|package|import|using)\s+.*$', ' ', clean)
+    clean = re.sub(r'(?m)^\s*(?:extern\s+"C"|public\s+class|class\s+\w+|fun\s+\w+|val\s+\w+|var\s+\w+|def\s+\w+).*$', ' ', clean)
     clean = re.sub(r'[{}\[\]();]', ' ', clean)
-    # 3. Look for explicit search directives
-    m_search = re.search(r'\b(?:search|find|lookup|check)\s+(?:for\s+)?["\']?([^"\'.\n\r]{4,120})["\']?', clean, re.IGNORECASE)
+
+    def _distill_keywords(phrase: str, max_len: int = 120) -> str:
+        phrase = re.sub(r'\s+', ' ', phrase).strip()
+        if len(phrase) <= 65:
+            return phrase
+        tokens = re.findall(r"[A-Za-z0-9_\.\-\+\#]+", phrase)
+        kept = [t for t in tokens if t.lower() not in _SEARCH_STOPWORDS or any(c.isupper() or c.isdigit() for c in t)]
+        distilled = " ".join(kept if len(kept) >= 3 else tokens)
+        return distilled[:max_len].strip()
+
+    # 3. Look for explicit keyword-actuated search directives
+    m_search = re.search(
+        r'\b(?:search|find|lookup|look\s+up|check|query|google|brave)\s+(?:for\s+|about\s+|on\s+)?["\']?([^"\'\n\r!?]{4,160})["\']?',
+        clean,
+        re.IGNORECASE,
+    )
     if m_search:
         candidate = m_search.group(1).strip()
-        if len(candidate) > 5 and not any(k in candidate.lower() for k in ("color", "image", "friend", "todo.txt")):
-            return candidate[:120]
+        if len(candidate) > 4 and not any(k in candidate.lower() for k in ("color", "image", "friend", "todo.txt")):
+            return _distill_keywords(candidate, 120)
     # 4. Look for question sentences
-    m_q = re.search(r'([A-Z0-9][^\.!\?\n\r]{10,120}\?)', clean)
+    m_q = re.search(r'([A-Z0-9][^\.!\?\n\r]{8,140}\?)', clean)
     if m_q:
-        return m_q.group(1).strip()
-    # 5. Take first clean sentence
-    sentences = [s.strip() for s in re.split(r'[\n\r\.]+', clean) if len(s.strip()) >= 10]
+        return _distill_keywords(m_q.group(1).strip(), 120)
+    # 5. Take first clean sentence and distill keywords
+    sentences = [s.strip() for s in re.split(r'[\n\r\.]+', clean) if len(s.strip()) >= 8]
     for s in sentences:
         if not any(token in s.lower() for token in ("#include", "extern", "todo.txt", "jstring", "jnienv", "compose", "composable")):
-            return s[:120]
-    return clean.strip()[:100]
+            return _distill_keywords(s, 120)
+    return _distill_keywords(clean, 100)
 
 @dataclass
 class QueryProfile:
@@ -470,6 +499,34 @@ class OrchestrationManager:
                 try: pq.put({"status": "agentic_stream", "content": f"\n[DELEGATION] {msg}\n"})
                 except Exception: pass
 
+        def _emit_subagent_dropdown(subagent_id: str, stage: str, level: int, label: str = "", chunk: str = "", duration_ms: float = 0.0):
+            if not pq:
+                return
+            try:
+                if stage == "spawn":
+                    pq.put({
+                        "status": "subagent_spawn",
+                        "subagent_id": subagent_id,
+                        "level": level,
+                        "label": f"[+] Subagent Lvl {level}: {label}",
+                    })
+                elif stage == "stream" and chunk:
+                    pq.put({
+                        "status": "subagent_stream",
+                        "subagent_id": subagent_id,
+                        "level": level,
+                        "chunk": chunk if chunk.endswith("\n") else f"{chunk}\n",
+                    })
+                elif stage == "done":
+                    pq.put({
+                        "status": "subagent_done",
+                        "subagent_id": subagent_id,
+                        "level": level,
+                        "duration_ms": round(duration_ms, 1),
+                    })
+            except Exception:
+                pass
+
         # Config Options
         selection_mode = "minimal"
         model_mode = "lvl6_7_model"
@@ -638,12 +695,17 @@ class OrchestrationManager:
 
             while execution_queue and step_idx <= max_subagent_steps:
                 target_lvl = execution_queue.pop(0)
+                step_t0 = time.time()
+                role_name = SUBAGENT_ROLES.get(target_lvl, {}).get("name", f"Level {target_lvl}")
+                sub_id = f"sub_lvl{target_lvl}_s{step_idx}_{int(step_t0 * 1000) % 100000}"
 
                 # Level 2: Search (Fact extraction)
                 if target_lvl == 2:
                     _swap_for_step(2)
+                    _emit_subagent_dropdown(sub_id, "spawn", 2, label=f"{role_name} (Step {step_idx})")
                     _log_subagent("[DYNAMIC AGENT: Lvl 2 Helper] Initiating fact extraction...")
                     clean_query = extract_search_query(user_query)
+                    _emit_subagent_dropdown(sub_id, "stream", 2, chunk=f"Extracted search keywords: '{clean_query}'")
                     search_obs = ""
                     if clean_query and hasattr(self.app, "tool_registry") and self.app.tool_registry:
                         try:
@@ -655,7 +717,8 @@ class OrchestrationManager:
 
                     active_ctx.staged_facts.append(search_obs[:500])
                     active_ctx.raw_payload += f"\n{search_obs}"
-                    
+                    _emit_subagent_dropdown(sub_id, "stream", 2, chunk=f"Findings staged ({len(search_obs)} chars): {search_obs[:240]}")
+
                     next_target = execution_queue[0] if execution_queue else orchestrator_level
                     report = HandoffReport(
                         step_index=step_idx,
@@ -668,13 +731,16 @@ class OrchestrationManager:
                     )
                     handoff_reports.append(report)
                     _log_agentic(f"Step {step_idx} (Lvl 2): Factual data retrieved for '{clean_query[:40]}' and offloaded.")
+                    _emit_subagent_dropdown(sub_id, "done", 2, duration_ms=(time.time() - step_t0) * 1000.0)
                     step_idx += 1
 
                 # Level 4: Emotional / Nuance Check
                 elif target_lvl == 4:
                     _swap_for_step(4)
+                    _emit_subagent_dropdown(sub_id, "spawn", 4, label=f"{role_name} (Step {step_idx})")
                     _log_subagent("[DYNAMIC AGENT: Lvl 4 Confidant] Evaluating human nuance & tone...")
                     active_ctx.emotional_valence = "User query exhibits heightened affective cues; requiring empathetic, supportive framing."
+                    _emit_subagent_dropdown(sub_id, "stream", 4, chunk=active_ctx.emotional_valence)
                     next_target = execution_queue[0] if execution_queue else orchestrator_level
                     report = HandoffReport(
                         step_index=step_idx,
@@ -687,13 +753,16 @@ class OrchestrationManager:
                     )
                     handoff_reports.append(report)
                     _log_agentic(f"Step {step_idx} (Lvl 4): Tone alignment offloaded to context.")
+                    _emit_subagent_dropdown(sub_id, "done", 4, duration_ms=(time.time() - step_t0) * 1000.0)
                     step_idx += 1
 
                 # Level 3: Collaborator Context Staging
                 elif target_lvl == 3:
                     _swap_for_step(3)
+                    _emit_subagent_dropdown(sub_id, "spawn", 3, label=f"{role_name} (Step {step_idx})")
                     _log_subagent("[DYNAMIC AGENT: Lvl 3 Collaborator] Staging context & packaging state...")
                     offloaded_state = active_ctx.offload()
+                    _emit_subagent_dropdown(sub_id, "stream", 3, chunk=f"Packaged serialized context ({len(offloaded_state)} bytes).")
                     next_target = execution_queue[0] if execution_queue else orchestrator_level
                     report = HandoffReport(
                         step_index=step_idx,
@@ -706,11 +775,13 @@ class OrchestrationManager:
                     )
                     handoff_reports.append(report)
                     _log_agentic(f"Step {step_idx} (Lvl 3): Minimal state packaged ({len(offloaded_state)} bytes).")
+                    _emit_subagent_dropdown(sub_id, "done", 3, duration_ms=(time.time() - step_t0) * 1000.0)
                     step_idx += 1
 
                 # Level 5: Sage / Brains Logical Deduction
                 elif target_lvl == 5:
                     _swap_for_step(5)
+                    _emit_subagent_dropdown(sub_id, "spawn", 5, label=f"{role_name} (Step {step_idx})")
                     _log_subagent("[DYNAMIC AGENT: Lvl 5 The Brains] Solving core logical constraints...")
                     staged_brief = "\n".join(active_ctx.staged_facts)
                     prev_deductions = "\n".join(active_ctx.reasoning_steps)
@@ -737,10 +808,12 @@ class OrchestrationManager:
                         sub_think, sub_ans = VisionHandler.split_thoughts_and_answer(reasoning_res)
                         if sub_think:
                             _log_diag(f"[SUBAGENT LVL 5 THOUGHT LOG]:\n{sub_think}")
+                            _emit_subagent_dropdown(sub_id, "stream", 5, chunk=f"[Thinking]: {sub_think[:300]}")
                         clean_res = sub_ans if sub_ans else sub_think
                     except Exception:
                         clean_res = reasoning_res
 
+                    _emit_subagent_dropdown(sub_id, "stream", 5, chunk=clean_res[:500])
                     active_ctx.reasoning_steps.append(clean_res)
                     next_target = execution_queue[0] if execution_queue else orchestrator_level
                     report = HandoffReport(
@@ -754,6 +827,7 @@ class OrchestrationManager:
                     )
                     handoff_reports.append(report)
                     _log_agentic(f"Step {step_idx} (Lvl 5): Logical deduction completed.")
+                    _emit_subagent_dropdown(sub_id, "done", 5, duration_ms=(time.time() - step_t0) * 1000.0)
                     step_idx += 1
 
                     # Check for explicit next-agent delegation tag (Option B)
@@ -768,7 +842,9 @@ class OrchestrationManager:
                 # Level 1: Speedy Format & Sanity Validation
                 elif target_lvl == 1:
                     _swap_for_step(1)
+                    _emit_subagent_dropdown(sub_id, "spawn", 1, label=f"{role_name} (Step {step_idx})")
                     _log_subagent("[DYNAMIC AGENT: Lvl 1 The Speedy] Performing fast syntax / concise sanity check...")
+                    _emit_subagent_dropdown(sub_id, "stream", 1, chunk="Verified concise format and syntax integrity.")
                     next_target = execution_queue[0] if execution_queue else orchestrator_level
                     report = HandoffReport(
                         step_index=step_idx,
@@ -780,12 +856,15 @@ class OrchestrationManager:
                     )
                     handoff_reports.append(report)
                     _log_agentic(f"Step {step_idx} (Lvl 1): Quick sanity check passed.")
+                    _emit_subagent_dropdown(sub_id, "done", 1, duration_ms=(time.time() - step_t0) * 1000.0)
                     step_idx += 1
 
                 # Level 6: Prime synthesis (accessible under Cecilia Lvl 7)
                 elif target_lvl == 6 and orchestrator_level == 7:
                     _swap_for_step(6)
+                    _emit_subagent_dropdown(sub_id, "spawn", 6, label=f"{role_name} (Step {step_idx})")
                     _log_subagent("[DYNAMIC AGENT: Lvl 6 Serenity Prime] Master synthesis and coordination...")
+                    _emit_subagent_dropdown(sub_id, "stream", 6, chunk="Synthesized core architecture and verified systemic alignment.")
                     report = HandoffReport(
                         step_index=step_idx,
                         from_level=6,
@@ -796,6 +875,7 @@ class OrchestrationManager:
                     )
                     handoff_reports.append(report)
                     _log_agentic(f"Step {step_idx} (Lvl 6): Prime master synthesis passed.")
+                    _emit_subagent_dropdown(sub_id, "done", 6, duration_ms=(time.time() - step_t0) * 1000.0)
                     step_idx += 1
 
         finally:

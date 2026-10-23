@@ -5364,6 +5364,7 @@ class ChatbotApp:
                 r'[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
             )
             tool_block_clean = r'(?i)<(?:tool_call|function_calls?|tools|functions)[\s\S]*?(?:<\/(?:tool_call|function_calls?|tools|functions)>|$)|\[TOOL_CALLS\][\s\S]*?(?=\n\n|$)|<function=[\w_]+>[\s\S]*?(?:<\/function>|$)'
+            self._log_cleaned_tags(f"{think_log}\n{final_answer}", tag_clean_pattern, tool_block_clean)
             think_log = re.sub(tool_block_clean, '', think_log).strip()
             final_answer = re.sub(tool_block_clean, '', final_answer).strip()
 
@@ -6349,6 +6350,29 @@ class ChatbotApp:
         # 4. Fallback to active UI label
         return self._get_persona_label()
 
+    def _log_cleaned_tags(self, raw_text: str, tag_clean_pattern: str, tool_block_clean: Optional[str] = None) -> List[str]:
+        """Extracts all stripped tags/blocks and logs them to the diagnostic/error log (Backburner TODO)."""
+        if not raw_text:
+            return []
+        found: List[str] = []
+        if tool_block_clean:
+            for m in re.finditer(tool_block_clean, raw_text):
+                blk = m.group(0).strip().replace("\n", " ")[:80]
+                if blk and blk not in found:
+                    found.append(blk)
+        for m in re.finditer(tag_clean_pattern, raw_text):
+            t = m.group(0).strip()
+            if t and t not in found:
+                found.append(t)
+        if found:
+            msg = f"[CLEANED TAGS ({len(found)})]: {', '.join(found)}"
+            pq = getattr(self, "process_queue", None)
+            if pq:
+                try:
+                    pq.put({"status": "diag_log_update", "content": f"\n{msg}"})
+                except Exception:
+                    pass
+        return found
 
     def _display_user_message(self, msg): 
         hist = self.chat_history

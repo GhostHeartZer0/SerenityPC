@@ -8,8 +8,14 @@ import glob
 import math
 import tempfile
 import numpy as np
-import psutil
-from llama_cpp import Llama
+try:
+    import psutil
+except ImportError:
+    psutil = None
+try:
+    from llama_cpp import Llama
+except ImportError:
+    Llama = None
 
 # NVDEC Acceleration Attempt
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "video_codec;h264_cuvid|video_codec;hevc_cuvid"
@@ -711,7 +717,37 @@ class VisionHandler:
                 think_log = ""
                 final_answer = raw_output.strip()
 
-        tag_clean_pattern = r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|channel\|?>final|<\|channel\|?>text|<\|channel\|?>assistant|<channel\s*\|?>|<\/think>|<\/thought>|<\/\|think\|>|<\|think\|>|<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|to=self<\|message\|>|to=user<\|message\|>|<\|message\|>|<\|start\|>|<\|end\|>|<\|eom\|>|<\|eot\|>|[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
+        tag_clean_pattern = (
+            r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|\[THOUGHT\]|\[\/THOUGHT\]|'
+            r'<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|'
+            r'<\|channel\|?>final|<\|channel\|?>text|<\|channel\|?>assistant|<channel\s*\|?>|'
+            r'<\/think>|<\/thought>|<\/\|think\|>|<\/\|thought\|>|<\|think\|>|<\|thought\|>|<\/\|thought>|'
+            r'<\|im_start\|?>thought|<\|im_end\|?>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|'
+            r'<\|channel>text|<\|channel>assistant|<channel\|>|<\/channel\|>|'
+            r'<\/?(?:tool_call|tool_response|tools|function_calls?|function|param(?:eter)?|arg_key|arg_value)[^>]*>|'
+            r'<\|tool_call>|<tool_call\|>|<\|tool_response>|<tool_response\|>|<\|tool>|<tool\|>|<ctrl42>|<\/ctrl42>|<\|?turn\|?>|'
+            r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|start\|>assistant\s+to=self(?:<\|message\|>)?|'
+            r'to=self<\|message\|>|to=user<\|message\|>|<\|message\|>|<\|start\|>|<\|end\|>|<\|eom\|>|<\|eot\|>|'
+            r'<｜(?:start|end)▁of▁sentence｜>|<\|(?:Bot|User|System|Tool)\|>[ \t]*|'
+            r'<\|(?:system|user|assistant|tool)\|>[ \t]*|'
+            r'\[TOOL_CALLS\]|'
+            r'[\u27e6\u27e7⟦⟧]|here\'s a thinking process:?|here is a thinking process:?'
+        )
+        tool_block_clean = r'(?i)<(?:tool_call|function_calls?|tools|functions)[\s\S]*?(?:<\/(?:tool_call|function_calls?|tools|functions)>|$)|\[TOOL_CALLS\][\s\S]*?(?=\n\n|$)|<function=[\w_]+>[\s\S]*?(?:<\/function>|$)'
+
+        cleaned_matches = []
+        for m in re.finditer(tool_block_clean, f"{think_log}\n{final_answer}"):
+            snippet = m.group(0).strip().replace("\n", " ")[:80]
+            if snippet and snippet not in cleaned_matches:
+                cleaned_matches.append(snippet)
+        for m in re.finditer(tag_clean_pattern, f"{think_log}\n{final_answer}"):
+            tok = m.group(0).strip()
+            if tok and tok not in cleaned_matches:
+                cleaned_matches.append(tok)
+        VisionHandler.LAST_CLEANED_TAGS = cleaned_matches
+
+        think_log = re.sub(tool_block_clean, '', think_log).strip()
+        final_answer = re.sub(tool_block_clean, '', final_answer).strip()
         think_log = re.sub(tag_clean_pattern, '', think_log).strip()
         think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
         final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()

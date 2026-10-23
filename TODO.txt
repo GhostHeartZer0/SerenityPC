@@ -1,9 +1,21 @@
 # SerenityPC TODO List
 
 Needs Fixing:
-- (None currently pending)
+- (None currently pending - all 10 CodeQL alerts #3-#12 resolved)
 
 Completed Log: (Verify)
+- CodeQL Security Hardening & Redundant Folder Pruning (`System/serenity_mail_courier.py`, `System/tests/test_mail_and_courier.py`):
+   - Resolved CodeQL #5-#12 (`py/weak-sensitive-data-hashing`): Removed unkeyed `hashlib.shake_256` stream-cipher fallback in `encrypt_smp` / `decrypt_smp` (enforcing `AESGCM`), and upgraded `.bmb` legacy packet key derivation (`export_legacy_bmb` / `decrypt_legacy_bmb`) from single-pass `hashlib.sha256` to 250,000-iteration `PBKDF2-HMAC-SHA256` (`derive_passphrase_key`).
+   - Resolved CodeQL #3-#4 (`py/bind-socket-all-network-interfaces`): Removed `sock.bind(("0.0.0.0", local_port))` in `CrossStateP2PTransport.discover_wan_endpoint` so outbound UDP STUN requests use OS-assigned ephemeral ports on the route interface; pruned duplicate nested `System/SerenityMail/` directory.
+   - Hardened `verify_envelope_signature` and bounded `zlib` decompression (`_safe_zlib_decompress`, 50 MB cap).
+- Per-Subagent Collapsible Output Dropdowns (`System/orchestration_manager.py`, `System/serenity_p2p_ui_wiring.py`):
+   - Wired `_emit_subagent_dropdown` (`subagent_spawn`, `subagent_stream`, `subagent_done`) across all Level 1-6 subagent steps in `OrchestrationManager.execute_delegation_chain` so each subagent streams its live thoughts and deductions into its own collapsible dropdown block in chat.
+- Level 2 Keyword-Actuated Search Lookup Extraction (`System/orchestration_manager.py`, `System/tool_registry.py`):
+   - Enhanced `extract_search_query` with stopword/bloat distillation and dotted technical identifier preservation (e.g. `llama.cpp`, `v1.8.1`), and wired automatic extraction into `handle_web_search` for long or multi-line queries.
+- History Archive Title Marquee & Tooltips (`main.py`, `System/serenity_p2p_ui_wiring.py`):
+   - Bound `setup_marquee_label` (with full filename tooltip) to history archive card title labels in `_render_history_menu` and added a runtime wrapper in `wire_serenity_app` for `--onedir` builds.
+- Cleaned Special & Tool Tags in Error/Diagnostic Log (`main.py`, `System/vision_handler.py`):
+   - Implemented `_log_cleaned_tags` and `VisionHandler.LAST_CLEANED_TAGS` to capture all stripped reasoning/control/tool tags before removal and emit `[CLEANED TAGS]` entries to `diag_log_update`.
 - Multi-Model Tool Calling & Non-Standard Reasoning Separation for S:/LLM (`System/tool_registry.py`, `main.py`, `System/tests/test_thought_isolation.py`, `System/tests/test_needs_fixing_deep_verify.py`):
    - Expanded `parse_tool_calls` in `GemmaToolRegistry` to parse across all model families in `S:/LLM`: Python AST PTC, NVIDIA Nemotron XML (`<function=...><parameter=...>`), MiniCPM XML (`<function name=...><param name=...>` / CDATA), Spark-X2.5 XML (`<tool_call>name<arg_key>...<arg_value>`), Olmo-3 JSON (`<function_calls>`), Mistral (`[TOOL_CALLS]`), and legacy tag formats (`<ctrl42>call:`).
    - Added `tool_block_clean` and enhanced `closers_patterns` / `tag_clean_pattern` in `main.py` and `test_thought_isolation.py` ensuring complete thought/tool isolation and 0% reasoning leakage into response streams.

@@ -15,11 +15,19 @@
 ---
 
 ### Version 1.8.2
-- **Serenity Mail Courier CodeQL Security Remediation (`System/serenity_mail_courier.py`)**:
+- **Serenity Mail Courier CodeQL Security Remediation & Redundant Directory Pruning (`System/serenity_mail_courier.py`, `System/SerenityMail/`)**:
   - Replaced weak/fallback cryptography implementations with strict Ed25519 digital signatures and PBKDF2-HMAC-SHA256 (250k iterations) key derivation for .bmb format.
   - Hardened zlib decompression with strict max byte limits to prevent zip bomb attacks (`_safe_zlib_decompress`).
   - Removed 0.0.0.0 UDP binding in STUN discovery (`CrossStateP2PTransport.discover_wan_endpoint`) to use ephemeral outbound socket routes.
-  - Auto-closes all 10 CodeQL security alerts on scan.
+  - Pruned redundant nested `System/SerenityMail/` duplicate directory to close all 10 CodeQL security alerts.
+- **Per-Subagent Collapsible Output Dropdowns (`System/orchestration_manager.py`)**:
+  - Wired `_emit_subagent_dropdown` (`subagent_spawn`, `subagent_stream`, `subagent_done`) across all Level 1-6 subagent steps in `OrchestrationManager.execute_delegation_chain`.
+- **Level 2 Keyword-Actuated Search Lookup Extraction (`System/orchestration_manager.py`, `System/tool_registry.py`)**:
+  - Distills high-signal search keywords by filtering stopwords, code blocks, stack traces, and boilerplate before dispatching web searches.
+  - Added temporary payload file passing for HUD image viewer execution.
+- **History Archive Title Marquee & Diagnostic Tag Logging (`System/serenity_p2p_ui_wiring.py`, `main.py`, `System/vision_handler.py`)**:
+  - Bound marquee scrolling and full-title tooltip inspection to history menu archive cards.
+  - Implemented `_log_cleaned_tags` and `VisionHandler.LAST_CLEANED_TAGS` emitting stripped control/reasoning/tool tags to diagnostic log update.
 
 ---
 
