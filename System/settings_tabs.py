@@ -41,27 +41,30 @@ def bind_radio_contrast(var, rb_list):
             setattr(rb, "_sync_radio_fn", _sync)
             if rb.winfo_exists():
                 is_active = (val == str(item_val).lower())
-                if is_active:
-                    rb.config(
-                        fg="#000000",
-                        bg=accent,
-                        selectcolor=accent,
-                        activebackground=accent,
-                        activeforeground="#000000",
-                        relief=tk.SUNKEN,
-                        bd=2,
-                        highlightthickness=1 if "highlightthickness" in rb.keys() else 0
-                    )
-                else:
-                    rb.config(
-                        fg=fg_norm,
-                        bg=bg_norm,
-                        selectcolor=accent,
-                        activebackground=accent,
-                        activeforeground="#000000",
-                        relief=tk.RAISED,
-                        bd=1
-                    )
+                try:
+                    if is_active:
+                        rb.config(
+                            fg="#000000",
+                            bg=accent,
+                            selectcolor=accent,
+                            activebackground=accent,
+                            activeforeground="#000000",
+                            relief=tk.SUNKEN,
+                            bd=2,
+                            highlightthickness=1 if "highlightthickness" in rb.keys() else 0
+                        )
+                    else:
+                        rb.config(
+                            fg=fg_norm,
+                            bg=bg_norm,
+                            selectcolor=accent,
+                            activebackground=accent,
+                            activeforeground="#000000",
+                            relief=tk.RAISED,
+                            bd=1
+                        )
+                except Exception:
+                    pass
     var.trace_add("write", _sync)
     _sync()
 
@@ -291,6 +294,16 @@ def build_models_tab(parent, app, win, vars_dict, generation_sensitive_widgets):
         r, c = divmod(i, 2)
         _create_tier_block(v_grid, vt, r, c, True)
 
+    # 2b. Synthesis Cores (Image & Video/GIF Generation)
+    tk.Label(frame, text="Synthesis Cores (Image & Video / GIF Generation):", bg=THEME["bg_color"],
+             fg=THEME["electric_blue"], font=app.fonts["bold"]).pack(anchor="w", padx=6, pady=(10, 2))
+    s_grid = tk.Frame(frame, bg=THEME["bg_color"])
+    s_grid.pack(fill=tk.X, padx=4, pady=2)
+    s_grid.grid_columnconfigure(0, weight=1, uniform="model_col")
+    s_grid.grid_columnconfigure(1, weight=1, uniform="model_col")
+    for i, st_tier in enumerate(["synth_image", "synth_video"]):
+        _create_tier_block(s_grid, st_tier, 0, i, False)
+
     # 3. Dynamic Param Auto-Tune (Moved from Inference)
     auto_tune_f = tk.Frame(frame, bg=THEME["bg_color"])
     auto_tune_f.pack(fill=tk.X, padx=8, pady=(8, 4))
@@ -505,6 +518,20 @@ def build_inference_tab(parent, app, win, vars_dict):
         vars_dict["overfill_behavior_var"] = overfill_var
     _make_push_radios(col1, "Overfill Behavior (Token Limit):", "Action taken when token context budget limit is reached naturally.", overfill_var, ["off", "respond", "wrapup", "autocont"], width=9)
 
+    # 5b. Context Auto-Scaling (KV Cache Window Overflow Behavior)
+    ctx_scale_var = vars_dict.get("ctx_auto_scale_var")
+    if ctx_scale_var is None:
+        ctx_scale_var = tk.StringVar(value=getattr(app, "config", {}).get("ctx_auto_scale_mode", "step_up"))
+        vars_dict["ctx_auto_scale_var"] = ctx_scale_var
+    _make_push_radios(
+        col1,
+        "KV / Context Auto-Scaling:",
+        "Dynamic KV cache / context window scaling when prompt or history exceeds loaded n_ctx (session-only runtime scaling).",
+        ctx_scale_var,
+        [("step_up", "Auto (Step-Up)"), ("2x", "Auto (2x)"), ("fit", "Auto (Fit)"), ("ask", "Ask First"), ("off", "Off / Manual")],
+        width=11
+    )
+
     # 6. Halt Options (Clicking Halt button behavior)
     halt_var = vars_dict.get("halt_behavior_var")
     if halt_var is None:
@@ -537,11 +564,35 @@ def build_inference_tab(parent, app, win, vars_dict):
     # 1. SWA Offload
     _make_push_radios(col2, "SWA Offload:", "Sliding Window Attention KV cache offloading.", vars_dict["swa_var"], ["Auto", "CPU Only"], width=10)
 
-    # 2. K Cache Format
-    _make_push_radios(col2, "K Cache Format:", "Quantized Key cache format for VRAM savings.", vars_dict["k_cache_var"], ["q8_0", "q5_1", "q4_0", "fp16"], width=8)
+    # 2 & 3. K/V Cache Format with Extended / Experimental Selector (Backburner #100)
+    if "show_extended_kv_var" not in vars_dict:
+        vars_dict["show_extended_kv_var"] = tk.BooleanVar(value=getattr(app, "config", {}).get("show_extended_kv_types", False))
 
-    # 3. V Cache Format
-    _make_push_radios(col2, "V Cache Format:", "Quantized Value cache format for VRAM savings.", vars_dict["v_cache_var"], ["q8_0", "q5_1", "q4_0", "fp16"], width=8)
+    _make_push_radios(col2, "K Cache Format (Standard):", "Quantized Key cache format for VRAM savings.", vars_dict["k_cache_var"], ["q8_0", "q5_1", "q4_0", "fp16"], width=8)
+    k_ext_frame = tk.Frame(col2, bg=THEME["bg_color"])
+    _make_push_radios(k_ext_frame, "K Cache (Extended / TCQ):", "Extended & experimental Key cache quantizations.", vars_dict["k_cache_var"], ["q6_0", "q5_0", "iq4_nl", "turbo3_tcq", "turbo2_tcq"], width=9)
+
+    _make_push_radios(col2, "V Cache Format (Standard):", "Quantized Value cache format for VRAM savings.", vars_dict["v_cache_var"], ["q8_0", "q5_1", "q4_0", "fp16"], width=8)
+    v_ext_frame = tk.Frame(col2, bg=THEME["bg_color"])
+    _make_push_radios(v_ext_frame, "V Cache (Extended / TCQ):", "Extended & experimental Value cache quantizations.", vars_dict["v_cache_var"], ["q6_0", "q5_0", "iq4_nl", "turbo3_tcq", "turbo2_tcq"], width=9)
+
+    def _sync_ext_kv(*_a):
+        if vars_dict["show_extended_kv_var"].get():
+            k_ext_frame.pack(anchor="w", pady=(0, 2))
+            v_ext_frame.pack(anchor="w", pady=(0, 2))
+        else:
+            k_ext_frame.pack_forget()
+            v_ext_frame.pack_forget()
+
+    cb_ext_kv = tk.Checkbutton(
+        col2, text="Show Extended / Experimental KV Types (q6_0, turbo2/3_tcq)",
+        variable=vars_dict["show_extended_kv_var"], command=_sync_ext_kv,
+        bg=THEME["bg_color"], fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"],
+        font=app.fonts["ui_small"]
+    )
+    cb_ext_kv.pack(anchor="w", pady=(2, 4))
+    ToolTip(cb_ext_kv, "Reveal or hide extended KV cache types including q6_0, iq4_nl, turbo3_tcq, and turbo2_tcq.", app=app)
+    _sync_ext_kv()
 
     # 4. History Mode
     hist_var = vars_dict.get("history_mode_var", vars_dict.get("turbovec_mode_var"))
@@ -774,6 +825,12 @@ def build_agents_tab(parent, app, win, vars_dict):
         norm_fmt_rbs.append((rb, val))
     bind_radio_contrast(norm_fmt_var, norm_fmt_rbs)
 
+    try:
+        from System.serenity_p2p_ui_wiring import inject_agents_tab_p2p_controls
+        inject_agents_tab_p2p_controls(frame, app, win, vars_dict, bind_radio_contrast_fn=bind_radio_contrast)
+    except Exception as _p2p_err:
+        print(f"[SETTINGS] P2P Agents tab hook notice: {_p2p_err}")
+
     return frame
 
 
@@ -799,6 +856,8 @@ def build_additional_tab(parent, app, win, vars_dict):
 
     defaults = {
         "offline_mode_var": tk.BooleanVar(value=app.config.get("offline_mode", False)),
+        "kiwix_search_enabled_var": tk.BooleanVar(value=app.config.get("kiwix_search_enabled", True)),
+        "kiwix_zim_dir_var": tk.StringVar(value=app.config.get("kiwix_zim_dir", "")),
         "auto_vram_var": tk.BooleanVar(value=app.config.get("auto_vram_offload", False)),
         "spec_draft_var": tk.BooleanVar(value=app.config.get("speculative_drafting", False)),
         "ghost_var": tk.BooleanVar(value=app.config.get("ghost_mode", False)),
@@ -809,8 +868,9 @@ def build_additional_tab(parent, app, win, vars_dict):
         "monitor_graph_var": tk.BooleanVar(value=app.config.get("monitor_graph_mode", False)),
         "scroll_lock_var": tk.BooleanVar(value=app.config.get("scroll_lock_enabled", False)),
         "show_tooltips_var": tk.BooleanVar(value=app.config.get("show_tooltips", True)),
+        "show_terminal_drawer_var": tk.BooleanVar(value=app.config.get("show_terminal_drawer", True)),
         "resp_len_var": tk.StringVar(value=app.config.get("response_length", "natural")),
-        "media_var": tk.IntVar(value=app.config.get("media_rendering", 1)),
+        "media_var": tk.IntVar(value=app.config.get("media_rendering", 2)),
         "dev_names": ["Default Input Device"],
         "stt_dev_var": tk.StringVar(value="Default Input Device"),
         "stt_lang_var": tk.StringVar(value=app.config.get("stt_language", "en-US")),
@@ -822,6 +882,14 @@ def build_additional_tab(parent, app, win, vars_dict):
         "sb_dmn_var": tk.BooleanVar(value=app.config.get("status_bar_dmn_idle", True)),
         "sb_fallback_var": tk.BooleanVar(value=app.config.get("status_bar_fallback_info", True)),
         "sb_linger_var": tk.DoubleVar(value=float(app.config.get("status_bar_linger_sec", 5.0))),
+        "wait_on_tool_calls_var": tk.BooleanVar(value=app.config.get("wait_on_tool_calls", False)),
+        "expanded_file_access_var": tk.BooleanVar(value=app.config.get("expanded_file_access", False)),
+        "media_gen_mode_var": tk.StringVar(value=app.config.get("media_gen_mode", "off")),
+        "media_gen_backend_var": tk.StringVar(value=app.config.get("media_gen_backend", "sd_cpp")),
+        "media_gen_res_var": tk.StringVar(value=app.config.get("media_gen_resolution", "768x768")),
+        "video_gen_frames_var": tk.IntVar(value=int(app.config.get("video_gen_frames", 16))),
+        "video_gen_fps_var": tk.IntVar(value=int(app.config.get("video_gen_fps", 8))),
+        "media_gen_evacuate_var": tk.BooleanVar(value=app.config.get("media_gen_evacuate_vram", True)),
     }
     for k, v in defaults.items():
         if k not in vars_dict or vars_dict[k] is None:
@@ -829,6 +897,7 @@ def build_additional_tab(parent, app, win, vars_dict):
 
     toggles_list = [
         ("Offline Mode (Block Net)", vars_dict["offline_mode_var"], "Blocks all outbound internet traffic while allowing local loopback."),
+        ("Include Kiwix ZIM Articles in Search", vars_dict["kiwix_search_enabled_var"], "Includes local Kiwix .zim archive extracts in Lvl 2 and web_search tool lookups (also works in Offline Mode)."),
         ("Dynamic Auto-Offload", vars_dict["auto_vram_var"], "Automatically flushes inactive model layers from VRAM to prevent memory exhaustion."),
         ("Speculative MTP Drafting (>= 4GB Models)", vars_dict["spec_draft_var"], "Accelerates token generation using assistant drafter speculative decoding (automatically bypassed for models < 4GB)."),
         ("Ghost Mode", vars_dict["ghost_var"], "Disables chat history persistence to disk for private sessions."),
@@ -838,7 +907,10 @@ def build_additional_tab(parent, app, win, vars_dict):
         ("Format Prompts Markdown", vars_dict["format_prompts_var"], "Applies markdown formatting to user prompt messages (disabled by default to preserve raw math like 3*3*5*5)."),
         ("Monitor Graph vs Line", vars_dict["monitor_graph_var"], "Switches hardware telemetry display between graphs and text lines."),
         ("Scroll Lock to Lines of Text", vars_dict["scroll_lock_var"], "Locks chat viewport in place during generation to prevent forced autoscrolling when reviewing backlog."),
-        ("Enable Hover Tooltips / Help", vars_dict["show_tooltips_var"], "Displays helpful linger-hover information boxes across UI controls.")
+        ("Enable Hover Tooltips / Help", vars_dict["show_tooltips_var"], "Displays helpful linger-hover information boxes across UI controls."),
+        ("Show Bottom Terminal Drawer", vars_dict["show_terminal_drawer_var"], "Shows or hides the collapsible bottom terminal drawer under the chat area."),
+        ("Wait on Tool Calls", vars_dict["wait_on_tool_calls_var"], "Wait synchronously for external tool subprocesses and media synthesis to finish before resuming LLM generation."),
+        ("Expanded File Access (Read/Write/Move for Cecilia & Power Users)", vars_dict["expanded_file_access_var"], "Allows read_file, write_file, list_directory, and organize_files across user/workspace folders (sensitive .env/keys/OS dirs remain blocked).")
     ]
 
     for idx, (txt, var, tip) in enumerate(toggles_list):
@@ -848,6 +920,22 @@ def build_additional_tab(parent, app, win, vars_dict):
                             selectcolor=THEME["widget_bg_color"], font=app.fonts["ui_small"])
         cb.grid(row=r, column=c, sticky="w", padx=6, pady=2)
         ToolTip(cb, tip, app=app)
+
+    # Kiwix ZIM Folder selector
+    zim_row = tk.Frame(frame, bg=THEME["bg_color"])
+    zim_row.pack(fill="x", pady=(4, 4))
+    tk.Label(zim_row, text="Kiwix ZIM Folder:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side="left", padx=(0, 6))
+    tk.Entry(zim_row, textvariable=vars_dict["kiwix_zim_dir_var"], bg=THEME["widget_bg_color"], fg=THEME["fg_color"], insertbackground=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+    def _browse_zim_dir():
+        from tkinter import filedialog
+        d = filedialog.askdirectory(parent=win, initialdir=vars_dict["kiwix_zim_dir_var"].get() or getattr(app, "script_dir", os.getcwd()))
+        if d:
+            vars_dict["kiwix_zim_dir_var"].set(d)
+
+    btn_zim = tk.Button(zim_row, text="Browse...", command=_browse_zim_dir, bg=THEME["widget_bg_color"], fg=THEME["electric_blue"], font=app.fonts["ui_small"], padx=8, pady=1)
+    btn_zim.pack(side="left")
+    ToolTip(zim_row, "Folder containing local .zim archives searched by Lvl 2 / web_search.", app=app)
 
     # MTP & Speculative Drafter Combos Scanner
     def _open_mtp_scanner():
@@ -957,6 +1045,80 @@ def build_additional_tab(parent, app, win, vars_dict):
     ToolTip(sc_scale, "Adjust frame batch size for multimodal video analysis.", app=app)
     tk.Button(r_chunk, text="Reset", command=lambda: vars_dict["sc_val"].set(8),
               bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"]).pack(side=tk.LEFT, padx=4)
+
+    # --- Section 2b: Image, Video & GIF Synthesis Settings ---
+    mg_lf = tk.LabelFrame(frame, text="🎬 Image, GIF & Video Synthesis", bg=THEME["bg_color"],
+                          fg=THEME["electric_blue"], font=app.fonts["bold"], padx=8, pady=6)
+    mg_lf.pack(fill=tk.X, pady=(8, 4))
+
+    r_mg1 = tk.Frame(mg_lf, bg=THEME["bg_color"])
+    r_mg1.pack(fill=tk.X, pady=2)
+    tk.Label(r_mg1, text="Active Gen Mode:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 6))
+    for m_val, m_txt in [("off", "Off"), ("image", "Image (.png)"), ("gif", "Animated GIF (.gif)"), ("video", "Video (.mp4)")]:
+        rb = tk.Radiobutton(r_mg1, text=m_txt, variable=vars_dict["media_gen_mode_var"], value=m_val,
+                            bg=THEME["bg_color"], fg=THEME["fg_color"], selectcolor=THEME["widget_bg_color"], font=app.fonts["ui_small"])
+        rb.pack(side=tk.LEFT, padx=3)
+        ToolTip(rb, f"Set bottom-left media generator mode to {m_txt}.", app=app)
+
+    r_mg2 = tk.Frame(mg_lf, bg=THEME["bg_color"])
+    r_mg2.pack(fill=tk.X, pady=2)
+    tk.Label(r_mg2, text="Backend:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 4))
+    mg_back_combo = ttk.Combobox(r_mg2, textvariable=vars_dict["media_gen_backend_var"],
+                                 values=["sd_cpp", "diffusers", "procedural"], state="readonly", width=12)
+    mg_back_combo.pack(side=tk.LEFT, padx=(0, 10))
+    ToolTip(mg_back_combo, "Select synthesis engine: sd_cpp (Tools/sd-cli.exe), diffusers, or procedural.", app=app)
+
+    tk.Label(r_mg2, text="Resolution:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 4))
+    mg_res_combo = ttk.Combobox(r_mg2, textvariable=vars_dict["media_gen_res_var"],
+                                values=["512x512", "768x768", "1024x1024", "832x480"], state="readonly", width=10)
+    mg_res_combo.pack(side=tk.LEFT, padx=(0, 10))
+    ToolTip(mg_res_combo, "Target synthesis resolution (768x768 for SDXL/Flux, 832x480 for Wan2.1 1.3B).", app=app)
+
+    tk.Label(r_mg2, text="Frames:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 4))
+    mg_frm_combo = ttk.Combobox(r_mg2, textvariable=vars_dict["video_gen_frames_var"],
+                                values=[8, 16, 24, 33], state="readonly", width=5)
+    mg_frm_combo.pack(side=tk.LEFT, padx=(0, 8))
+
+    tk.Label(r_mg2, text="FPS:", bg=THEME["bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_label"]).pack(side=tk.LEFT, padx=(0, 4))
+    mg_fps_combo = ttk.Combobox(r_mg2, textvariable=vars_dict["video_gen_fps_var"],
+                                values=[6, 8, 12, 16, 24], state="readonly", width=4)
+    mg_fps_combo.pack(side=tk.LEFT)
+
+    cb_evac = tk.Checkbutton(mg_lf, text="Evacuate LLM from VRAM Before Synthesis (Recommended for 6GB GPUs)",
+                             variable=vars_dict["media_gen_evacuate_var"], bg=THEME["bg_color"],
+                             fg=THEME["electric_blue"], selectcolor=THEME["widget_bg_color"], font=app.fonts["ui_small"])
+    cb_evac.pack(anchor="w", pady=(2, 0))
+    ToolTip(cb_evac, "Automatically flushes active LLM weights before running heavy image/video synthesis to avoid shared VRAM spill.", app=app)
+
+    # --- Section 2c: Quick Settings Popup Configuration ---
+    qs_lf = tk.LabelFrame(frame, text="⚡ Quick Settings Popup", bg=THEME["bg_color"],
+                          fg=THEME["electric_blue"], font=app.fonts["bold"], padx=8, pady=6)
+    qs_lf.pack(fill=tk.X, pady=(8, 4))
+
+    default_qs = ["reasoning_strength", "response_length", "kv_cache", "headroom"]
+    active_qs = app.config.get("quick_settings_items", default_qs)
+    if not isinstance(active_qs, list) or not active_qs:
+        active_qs = list(default_qs)
+    qs_specs = [
+        ("qs_reasoning_var", "reasoning_strength", "Reasoning Strength"),
+        ("qs_length_var", "response_length", "Response Length"),
+        ("qs_kv_var", "kv_cache", "KV Cache Format"),
+        ("qs_headroom_var", "headroom", "Response Headroom"),
+        ("qs_history_var", "history_mode", "History Mode"),
+        ("qs_media_var", "media_gen_mode", "Media Gen Mode"),
+    ]
+    qs_grid = tk.Frame(qs_lf, bg=THEME["bg_color"])
+    qs_grid.pack(fill=tk.X, pady=2)
+    for idx, (vkey, item_id, label_txt) in enumerate(qs_specs):
+        if vkey not in vars_dict:
+            vars_dict[vkey] = tk.BooleanVar(value=(item_id in active_qs))
+        cb_qs = tk.Checkbutton(
+            qs_grid, text=label_txt, variable=vars_dict[vkey],
+            bg=THEME["bg_color"], fg=THEME["fg_color"],
+            selectcolor=THEME["widget_bg_color"], font=app.fonts["ui_small"]
+        )
+        cb_qs.grid(row=idx // 3, column=idx % 3, sticky="w", padx=(0, 12), pady=1)
+        ToolTip(cb_qs, f"Show {label_txt} in the top-bar Quick Settings popup.", app=app)
 
     # --- Section 3: Status Bar & Loading Area ---
     sb_lf = tk.LabelFrame(frame, text="⏳ Loading Bar & Status Area", bg=THEME["bg_color"],
@@ -1293,8 +1455,29 @@ def build_users_tab(parent, app, win, vars_dict):
             messagebox.showwarning("Protected Profile", f"Profile '{target}' is a system profile and cannot be deleted.", parent=win)
             return
 
-        # Verification for locked/admin profiles
-        if hasattr(app, 'vault_manager') and app.vault_manager and app.vault_manager.is_lock_enabled() and app.vault_manager.is_locked():
+        # Verification for locked/admin profiles (check target profile vault state first)
+        pwd = None
+        target_locked = False
+        try:
+            if hasattr(app, "dirs") and "Users" in app.dirs:
+                u_dir = os.path.join(app.dirs["Users"], target)
+                h_dir = os.path.join(app.dirs.get("History", ""), target) if "History" in app.dirs else ""
+                u_vault = os.path.join(u_dir, "vault_state.json")
+                if os.path.isfile(u_vault):
+                    from System.vault_manager import VaultManager
+                    target_vm = VaultManager(history_dir=h_dir, state_dir=u_dir)
+                    if target_vm.is_lock_enabled():
+                        target_locked = True
+                        pwd = simpledialog.askstring("Admin Verification", f"Master password required to delete locked profile '{target}'.\nEnter master password:", show="*", parent=win)
+                        if not pwd:
+                            return
+                        if not target_vm.verify_password(pwd):
+                            messagebox.showerror("Authentication Failed", "Incorrect master password. Deletion cancelled.", parent=win)
+                            return
+        except Exception:
+            pass
+
+        if not target_locked and hasattr(app, 'vault_manager') and app.vault_manager and app.vault_manager.is_lock_enabled() and app.vault_manager.is_locked():
             pwd = simpledialog.askstring("Admin Verification", f"Admin verification required to delete profile '{target}'.\nEnter master password:", show="*", parent=win)
             if not pwd:
                 return
@@ -1306,7 +1489,7 @@ def build_users_tab(parent, app, win, vars_dict):
             return
 
         if hasattr(app, "delete_user_profile"):
-            success, msg = app.delete_user_profile(target)
+            success, msg = app.delete_user_profile(target, password=pwd)
         else:
             success = False
             deleted_any = False
@@ -1469,6 +1652,12 @@ def build_users_tab(parent, app, win, vars_dict):
                         bg=THEME["widget_bg_color"], fg=THEME["fg_color"], font=app.fonts["ui_small"], padx=3, pady=0)
         btn.pack(side=tk.LEFT, padx=2)
 
+    try:
+        from System.serenity_p2p_ui_wiring import inject_users_tab_p2p_controls
+        inject_users_tab_p2p_controls(frame, app, win, vars_dict, vault_lf=vault_lf)
+    except Exception as _p2p_err:
+        print(f"[SETTINGS] P2P Users tab hook notice: {_p2p_err}")
+
     return frame
 
 
@@ -1536,9 +1725,17 @@ def build_personalize_tab(parent, app, win, vars_dict):
     if "mono_font_var" not in vars_dict:
         vars_dict["mono_font_var"] = tk.StringVar(value=getattr(app, "config", {}).get("mono_font", "Consolas"))
     if "UI_FONT_OPTIONS" not in vars_dict:
-        vars_dict["UI_FONT_OPTIONS"] = ["Segoe UI", "Verdana", "Arial"]
+        try:
+            from serenity_resources import DEFAULT_UI_FONTS
+            vars_dict["UI_FONT_OPTIONS"] = list(DEFAULT_UI_FONTS)
+        except Exception:
+            vars_dict["UI_FONT_OPTIONS"] = ["Segoe UI", "Segoe UI Variable", "Verdana", "Arial", "Modern Antiqua", "Comfortaa"]
     if "MONO_FONT_OPTIONS" not in vars_dict:
-        vars_dict["MONO_FONT_OPTIONS"] = ["Consolas", "Courier New"]
+        try:
+            from serenity_resources import DEFAULT_MONO_FONTS
+            vars_dict["MONO_FONT_OPTIONS"] = list(DEFAULT_MONO_FONTS)
+        except Exception:
+            vars_dict["MONO_FONT_OPTIONS"] = ["Consolas", "Cascadia Mono", "JetBrains Mono", "Courier New", "Palatino Linotype"]
 
     f_left = tk.Frame(font_row, bg=THEME["bg_color"])
     f_left.grid(row=0, column=0, sticky="w", padx=(0, 10))

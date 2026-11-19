@@ -3,12 +3,13 @@ import os
 import re
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
-app_version = "1.7.0"
+app_version = "1.9.0"
 changelog_path = os.path.join(os.path.dirname(os.path.abspath(SPEC)), "CHANGELOG.md") if 'SPEC' in globals() and SPEC else "CHANGELOG.md"
 if os.path.exists(changelog_path):
     try:
         with open(changelog_path, "r", encoding="utf-8") as f:
-            match = re.search(r"## Current Version:\s*\n+### Version\s+([^\s\n]+)", f.read())
+            _cl_text = f.read()
+            match = re.search(r"## Current Version:\s*\n+### Version\s+([^\s\n]+)", _cl_text) or re.search(r"^### Version\s+([^\s\n]+)\s*\(Release\)", _cl_text, re.MULTILINE)
             if match:
                 app_version = match.group(1).strip()
     except Exception:
@@ -81,6 +82,21 @@ a = Analysis(
         'tkinter.font',
         'tkinter.simpledialog',
         'System',
+        'System.serenity_mail_courier',
+        'System.serenity_p2p_ui_wiring',
+        'System.orchestration_manager',
+        'System.mtp_combo_scanner',
+        'System.affect_engine',
+        'System.semantic_vault',
+        'System.thought_isolation',
+        'System.agentic_monitor',
+        'System.gamerenity_router',
+        'System.kiwix_search',
+        'System.media_generator',
+        'System.skills_registry',
+        'sqlite3',
+        '_sqlite3',
+        '_cffi_backend',
         'System.serenity_utils',
         'System.kv_manager',
         'System.tool_registry',

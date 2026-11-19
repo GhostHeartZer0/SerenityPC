@@ -3,6 +3,7 @@
 
 import sys
 import os
+from typing import Any, Dict, List, Optional, Tuple
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if base_dir not in sys.path:
     sys.path.insert(0, base_dir)
@@ -28,6 +29,16 @@ with warnings.catch_warnings():
 from PIL import Image, ImageTk
 from serenity_resources import ANIMATION_SEQUENCE, MEDIA_DIR, THEME
 import struct
+import zlib
+
+
+def safe_zlib_decompress(compressed: bytes, max_bytes: int = 50 * 1024 * 1024) -> bytes:
+    """Decompresses zlib payload with a strict output size limit to prevent zip bombs."""
+    decomp = zlib.decompressobj()
+    out = decomp.decompress(compressed, max_bytes)
+    if decomp.unconsumed_tail:
+        raise ValueError("Compressed payload exceeds maximum safe decompression size.")
+    return out + decomp.flush()
 
 def bind_entry_limit(entry_widget: tk.Entry, max_len: int = 64):
     """
@@ -335,6 +346,84 @@ def patch_gguf_architecture(model_path: str, new_arch: str = "llama", default_ar
         return False
 
 
+def patch_llama_chat_template_kwargs():
+    """
+    Ensures llama_cpp.Llama.create_chat_completion forwards chat_template_kwargs
+    and enable_thinking to Jinja chat templates and active self.chat_handler instances.
+    Safe fallback for unpatched llama-cpp-python wheels in Legacy; no-op if natively supported.
+    """
+    try:
+        import inspect
+        import llama_cpp
+        orig = getattr(llama_cpp.Llama, "create_chat_completion", None)
+        if not orig or getattr(orig, "_chat_template_kwargs_patched", False):
+            return
+
+        sig = inspect.signature(orig)
+        if "chat_template_kwargs" in sig.parameters:
+            return
+
+        from llama_cpp import llama_chat_format
+
+        def _filter_kwargs_for_handler(handler, tpl_kwargs):
+            try:
+                hsig = inspect.signature(handler)
+                if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in hsig.parameters.values()):
+                    return tpl_kwargs
+                return {k: v for k, v in tpl_kwargs.items() if k in hsig.parameters}
+            except Exception:
+                return tpl_kwargs
+
+        def wrapped_create_chat_completion(self, *args, chat_template_kwargs=None, **kwargs):
+            template_kwargs = dict(chat_template_kwargs or {})
+            if "enable_thinking" in kwargs:
+                template_kwargs.setdefault("enable_thinking", kwargs.pop("enable_thinking"))
+
+            if template_kwargs:
+                active_ch = getattr(self, "chat_handler", None)
+                if active_ch is not None:
+                    filtered = _filter_kwargs_for_handler(active_ch, template_kwargs)
+                    if filtered:
+                        def injected_active_handler(**h_kwargs):
+                            h_kwargs.update(filtered)
+                            return active_ch(**h_kwargs)
+                        self.chat_handler = injected_active_handler
+                        try:
+                            return orig(self, *args, **kwargs)
+                        finally:
+                            self.chat_handler = active_ch
+                    return orig(self, *args, **kwargs)
+
+                fmt = getattr(self, "chat_format", None) or "chat_template.default"
+                handlers = getattr(self, "_chat_handlers", {})
+                h = handlers.get(fmt) or llama_chat_format.get_chat_completion_handler(fmt)
+                if h:
+                    filtered = _filter_kwargs_for_handler(h, template_kwargs)
+                    if filtered:
+                        def injected_handler(**h_kwargs):
+                            h_kwargs.update(filtered)
+                            return h(**h_kwargs)
+                        orig_h = handlers.get(fmt)
+                        handlers[fmt] = injected_handler
+                        try:
+                            return orig(self, *args, **kwargs)
+                        finally:
+                            if orig_h is not None:
+                                handlers[fmt] = orig_h
+                            else:
+                                handlers.pop(fmt, None)
+            return orig(self, *args, **kwargs)
+
+        wrapped_create_chat_completion._chat_template_kwargs_patched = True
+        llama_cpp.Llama.create_chat_completion = wrapped_create_chat_completion
+    except Exception as e:
+        print(f"[THOUGHT HOOK] Notice: create_chat_completion template wrapper skipped: {e}")
+
+
+# Run once on import
+patch_llama_chat_template_kwargs()
+
+
 def awaken_live_agent(agent_path):
     """Launches the Live Agent as an independent background process and returns the handle."""
     if not os.path.exists(agent_path):
@@ -364,26 +453,62 @@ SPAM_PATTERNS = [
     "load_tensors: loading",
     "loaded:",
     "Llama.generate:",
-    "chat template"
 ]
 
 class WidgetLogger:
     """A class to redirect stdout/stderr to a tkinter Text widget."""
-    def __init__(self, widget, tag="stdout"):
+    def __init__(self, widget, tag="stdout", chat_template_handler=None):
         self.widget = widget
         self.tag = tag
+        self.chat_template_handler = chat_template_handler
+        self._in_chat_template = False
+        self._last_ct_ts = 0.0
         self.original_stream = sys.__stdout__ if tag == "stdout" else sys.__stderr__
 
+    def _is_chat_template_chunk(self, text):
+        low = text.lower()
+        if "chat_template" in low or "chat template" in low:
+            self._in_chat_template = True
+            self._last_ct_ts = time.time()
+            return True
+        if self._in_chat_template and (time.time() - self._last_ct_ts) < 2.0:
+            stripped = text.strip()
+            if not stripped or any(tok in text for tok in ("{%", "%}", "{{", "}}", "add_generation_prompt", "bos_token", "eos_token", "messages")) or text.startswith((" ", "\t")):
+                self._last_ct_ts = time.time()
+                return True
+            self._in_chat_template = False
+        if len(text) > 200 and "{%" in text and "{{" in text:
+            self._in_chat_template = True
+            self._last_ct_ts = time.time()
+            return True
+        return False
+
     def write(self, text):
-        # Filtering spam patterns
-        if any(p in text for p in SPAM_PATTERNS):
+        # Filtering spam patterns (preserve chat template dumps for collapsible error log)
+        is_ct = self._is_chat_template_chunk(text)
+        if not is_ct and any(p in text for p in SPAM_PATTERNS):
             return
+
+        if self.tag == "stdout" and any(k in text for k in ("Traceback (most recent call last):", "[INTERNAL ERROR]", "[APEX ERROR]", "[ERROR]")):
+            if sys.stderr is not self and sys.stderr is not None:
+                try:
+                    sys.stderr.write(text)
+                    return
+                except Exception:
+                    pass
 
         if not tk._default_root or not self.widget or not hasattr(self.widget, 'winfo_exists') or not self.widget.winfo_exists():
             try: self.original_stream.write(text)
             except: pass
             return
-            
+
+        if is_ct and callable(self.chat_template_handler):
+            try:
+                self.widget.after_idle(self.chat_template_handler, text)
+                return
+            except tk.TclError:
+                pass
+
         try: self.widget.after_idle(self._write_to_widget, text)
         except tk.TclError:
             try: self.original_stream.write(text)
@@ -413,8 +538,8 @@ class WidgetLogger:
 
 class FileAndWidgetLogger:
     """Redirects stdout/stderr to both a widget and a file."""
-    def __init__(self, widget, log_file, tag="stderr"):
-        self.widget_logger = WidgetLogger(widget, tag)
+    def __init__(self, widget, log_file, tag="stderr", chat_template_handler=None):
+        self.widget_logger = WidgetLogger(widget, tag, chat_template_handler=chat_template_handler)
         self.log_file = log_file
         self.original_stream = sys.__stderr__
         try:
@@ -426,8 +551,10 @@ class FileAndWidgetLogger:
             self.original_stream.write(f"FATAL: Failed to initialize log file {self.log_file}: {e}\n")
 
     def write(self, text):
-        # Filtering spam patterns
-        if any(p in text for p in SPAM_PATTERNS):
+        # Filtering spam patterns (preserve chat template chunks)
+        low = text.lower()
+        is_ct_hint = ("chat_template" in low or "chat template" in low or self.widget_logger._in_chat_template)
+        if not is_ct_hint and any(p in text for p in SPAM_PATTERNS):
             return
 
         self.widget_logger.write(text)
@@ -2019,7 +2146,7 @@ class TutorialOverlay:
                 if w and hasattr(w, "winfo_exists") and w.winfo_exists():
                     widgets.append(w)
         elif key == "console":
-            for attr in ["input_control_frame", "user_input", "attachment_frame", "mic_button", "ghost_button", "history_usage_button", "send_button", "deep_thought_button", "hurry_button", "rgb_button", "footer_control_frame"]:
+            for attr in ["input_control_frame", "user_input", "attachment_frame", "mic_button", "ghost_button", "history_usage_button", "history_autosave_button", "media_gen_button", "send_button", "deep_thought_button", "hurry_button", "rgb_button", "footer_control_frame"]:
                 w = getattr(app, attr, None)
                 if w and hasattr(w, "winfo_exists") and w.winfo_exists():
                     widgets.append(w)
@@ -2247,21 +2374,23 @@ def setup_marquee_label(lbl, text, app=None, limit=22, full_path=None, interval_
         marquee_on = bool(app.config.get("marquee_text_enabled", False))
 
     compact = cleaned if len(cleaned) <= limit else f"{cleaned[:limit - 3]}..."
+    padded = cleaned + "   •   "
+    lbl._marquee_padded = padded
+    lbl._marquee_compact = compact
 
     if len(cleaned) > limit and marquee_on:
-        padded = cleaned + "   •   "
         def _tick(idx=0):
             if not lbl.winfo_exists():
                 return
-            disp = (padded * 2)[idx:idx + limit]
+            p = getattr(lbl, "_marquee_padded", padded)
+            disp = (p * 2)[idx:idx + limit]
             lbl.config(text=disp)
-            next_idx = (idx + 1) % len(padded)
+            next_idx = (idx + 1) % len(p)
             lbl._marquee_job = lbl.after(interval_ms, lambda: _tick(next_idx))
         _tick(0)
     else:
         lbl.config(text=compact)
         if len(cleaned) > limit:
-            padded = cleaned + "   •   "
             def _on_hover_enter(event=None):
                 if getattr(lbl, "_hover_scrolling", False):
                     return
@@ -2269,9 +2398,10 @@ def setup_marquee_label(lbl, text, app=None, limit=22, full_path=None, interval_
                 def _hover_tick(idx=0):
                     if not lbl.winfo_exists() or not getattr(lbl, "_hover_scrolling", False):
                         return
-                    disp = (padded * 2)[idx:idx + limit]
+                    p = getattr(lbl, "_marquee_padded", padded)
+                    disp = (p * 2)[idx:idx + limit]
                     lbl.config(text=disp)
-                    next_idx = (idx + 1) % len(padded)
+                    next_idx = (idx + 1) % len(p)
                     lbl._marquee_job = lbl.after(interval_ms, lambda: _hover_tick(next_idx))
                 _hover_tick(0)
 
@@ -2285,7 +2415,7 @@ def setup_marquee_label(lbl, text, app=None, limit=22, full_path=None, interval_
                         pass
                     lbl._marquee_job = None
                 if lbl.winfo_exists():
-                    lbl.config(text=compact)
+                    lbl.config(text=getattr(lbl, "_marquee_compact", compact))
 
             if not getattr(lbl, "_marquee_hover_bound", False):
                 lbl._marquee_hover_bound = True
@@ -2309,4 +2439,3 @@ def setup_marquee_label(lbl, text, app=None, limit=22, full_path=None, interval_
         setup_marquee_label(lbl, new_text, app=app, limit=limit, full_path=new_path, interval_ms=interval_ms)
 
     lbl.set_marquee_text = set_text
-

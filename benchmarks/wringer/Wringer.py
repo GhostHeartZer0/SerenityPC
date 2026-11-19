@@ -7,6 +7,11 @@ WRINGER_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = WRINGER_DIR.parents[1]  # benchmarks/wringer -> SerenityPC
 REPORT_DIR = str(WRINGER_DIR / "benchmark_reports")
 TEST_BANK_PATH = str(WRINGER_DIR / "test_bank.json")
+CUSTOM_TEST_BANKS_DIR = str(WRINGER_DIR / "custom_test_banks")
+CUSTOM_TEST_BANK_DISCLAIMER = (
+    "Warning! These tests contain many prompts. and may take a very long time to run. "
+    "If the model does 1-2t/s, please reconsider. However, your progress will still be saved."
+)
 PERSONA_REPORT_DIR = str(WRINGER_DIR / "persona_reports")
 PERSONA_BANK_PATH = str(WRINGER_DIR / "persona_bank.json")
 
@@ -41,15 +46,16 @@ import math
 import gc
 import struct
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 MiB = 1024 ** 2
 GEN_N_CTX = 8192          # target model context window
 JUDGE_N_CTX = 8192        # judge context window
 MAX_GEN_TOKENS = 4096     # upper bound on target generation; clamped to fit n_ctx
-JUDGE_REASON_TOKENS = 1024
+JUDGE_REASON_TOKENS = 2048
 KV_BYTES_PER_ELEM = 18 / 32  # GGML_TYPE_Q4_0 K/V cache: 18 bytes per 32-element block
 N_UBATCH = 512               # llama.cpp default micro-batch
+MAX_SANE_DECODE_TPS = 5000.0 # sanity ceiling to block single-chunk/diffusion timer artifacts
 SCORE_GRAMMAR = r'root ::= "10" | [1-9] ("." [0-9])?'
 JUDGE_SYSTEM_PROMPT = """You are an expert, impartial evaluator assessing AI responses.
 Evaluate the candidate response based on:
@@ -65,10 +71,7 @@ Scoring Scale (1 to 10):
 - 2-3: Major factual/logical errors or severe failure to follow instructions.
 - 1: Gibberish, completely wrong, refusal to answer, or total hallucination.
 
-First, write a 1-2 sentence critique justifying your evaluation.
-Then, provide the final score as an integer from 1 to 10.
-
-CRITICAL: Do NOT output thinking, analysis preamble, or conversational filler (e.g. do NOT say 'Here\'s a thinking process:'). Output strictly and only the JSON object starting with {:
+Conclude your evaluation with a JSON object containing a 1-2 sentence critique and your final score from 1 to 10:
 {
   "critique": "Brief 1-2 sentence justification.",
   "score": 9
@@ -116,11 +119,13 @@ class WringerAborted(Exception):
 
 
 class WringerFramework:
-    def __init__(self, judge_model_path: str = None, manual_grading: bool = False, weight_speed: bool = False, auto_open_charts: bool = False):
+    def __init__(self, judge_model_path: str = None, manual_grading: bool = False, weight_speed: bool = False, auto_open_charts: bool = False, test_bank_path: str = None, overlay_path: str = None):
         self.judge_model_path = judge_model_path
         self.manual_grading = manual_grading
         self.weight_speed = weight_speed
         self.auto_open_charts = auto_open_charts
+        self.test_bank_path = test_bank_path or TEST_BANK_PATH
+        self.overlay_path = overlay_path or None
         self.metrics = [
             "math reasoning", "spatial reasoning", "logic puzzle", 
             "instruction following", "fact accuracy", "summary accuracy", 
@@ -130,9 +135,15 @@ class WringerFramework:
         self._load_test_bank()
 
     def _load_test_bank(self) -> None:
-        """(Re)loads test_bank.json: {lvl: [{prompt, reference}]}. Called per run so edits hot-reload."""
-        with open(TEST_BANK_PATH, "r", encoding="utf-8") as f:
+        """(Re)loads active test bank JSON and optional overlay template: {lvl: [{prompt, reference}]}."""
+        with open(self.test_bank_path, "r", encoding="utf-8") as f:
             bank = json.load(f)
+        if self.overlay_path and os.path.exists(self.overlay_path):
+            with open(self.overlay_path, "r", encoding="utf-8") as f:
+                overlay = json.load(f)
+            for lvl, items in overlay.items():
+                if isinstance(items, list):
+                    bank.setdefault(lvl, []).extend(items)
         self.test_bank = {lvl: [item["prompt"] for item in items] for lvl, items in bank.items()}
         self.answer_key = {item["prompt"]: item.get("reference", "") for items in bank.values() for item in items}
 
@@ -375,6 +386,39 @@ class WringerFramework:
             gc.collect()
 
     @staticmethod
+    def _safe_decode_time(t_start: float, t_first_token: Optional[float], t_end: float) -> float:
+        """Floors decode elapsed time and falls back to wall-clock time for single-chunk/diffusion outputs."""
+        total_time = max(0.01, t_end - t_start)
+        if t_first_token is None:
+            return total_time
+        raw_decode = t_end - t_first_token
+        if raw_decode < 0.01 and total_time >= 0.05:
+            return total_time
+        return max(0.01, raw_decode)
+
+    @staticmethod
+    def _build_prefill_prompt(llm, messages: List[Dict[str, str]], prefill_text: str) -> Tuple[str, List[str]]:
+        """Formats chat messages with an open assistant turn and appends prefill_text without a user turn."""
+        if not hasattr(llm, "create_completion"):
+            prompt = "".join(f"<start_of_turn>{m.get('role', 'user')}\n{m.get('content', '')}<end_of_turn>\n" for m in messages)
+            return prompt + f"<start_of_turn>model\n{prefill_text}", ["<end_of_turn>"]
+
+        import llama_cpp.llama_chat_format as cf
+        meta = getattr(llm, "metadata", None) or {}
+        tpl = meta.get("tokenizer.chat_template")
+        if tpl:
+            eos_tok = llm.detokenize([llm.token_eos()]).decode("utf-8", errors="ignore")
+            bos_tok = llm.detokenize([llm.token_bos()]).decode("utf-8", errors="ignore")
+            fmt = cf.Jinja2ChatFormatter(template=tpl, eos_token=eos_tok, bos_token=bos_tok, add_generation_prompt=True)
+            res = fmt(messages=messages)
+            return res.prompt + prefill_text, (res.stop or [])
+
+        chat_fmt = (getattr(llm, "chat_format", "") or "").lower()
+        res = cf.format_gemma(messages=messages) if "gemma" in chat_fmt else cf.format_chatml(messages=messages)
+        stop_list = [res.stop] if isinstance(res.stop, str) else (res.stop or [])
+        return res.prompt + prefill_text, stop_list
+
+    @staticmethod
     def _pause_menu() -> None:
         """Interactive pause handler triggered on Ctrl+C during evaluation."""
         print("\n\n" + "=" * 45)
@@ -505,13 +549,16 @@ class WringerFramework:
                     try:
                         is_diffusion = "diffusion" in model_name.lower()
                         if is_diffusion:
-                            dynamic_layers = self.calculate_dynamic_gpu_layers(model_path, target_ctx)
+                            # Clamp layers to safe limit (<= 8) and keep MoE weights on CPU (-cmoe)
+                            # so diffusion compute buffer (~2.5GB) + weights stay strictly in Dedicated VRAM (0 Shared VRAM).
+                            dynamic_layers = min(self.calculate_dynamic_gpu_layers(model_path, target_ctx), 8)
                             from System.diffusion_wrapper import DiffusionCLIWrapper
                             llm = DiffusionCLIWrapper(
                                 app_instance=None,
                                 model_path=model_path,
                                 n_gpu_layers=dynamic_layers,
-                                n_ctx=target_ctx
+                                n_ctx=min(target_ctx, 4096),
+                                cpu_moe=True
                             )
                         else:
                             llm = self._load_llama(model_path, target_ctx)
@@ -533,18 +580,25 @@ class WringerFramework:
                         results.extend(err_res)
                         break
                         
-                    is_nemotron = "nemotron" in model_name.lower()
-                    is_gemma = "gemma" in model_name.lower()
-                    is_qwen = "qwen" in model_name.lower()
-                    is_reasoning = any(kw in model_name.lower() for kw in ["qwq", "thinking", "r1", "deepseek"])
-                    temp = 0.7 if (is_qwen or is_nemotron) else 1.0
+                    mlow = model_name.lower()
+                    is_nemotron = "nemotron" in mlow
+                    is_gemma4 = ("gemma-4" in mlow) or ("gemma4" in mlow)
+                    is_qwen = "qwen" in mlow
+                    is_micro = any(kw in mlow for kw in ["270m", "135m", "360m"])
+                    is_reasoning = any(kw in mlow for kw in ["qwq", "thinking", "r1", "deepseek"])
+                    if is_micro:
+                        temp = 0.3
+                    elif is_qwen or is_nemotron:
+                        temp = 0.7
+                    else:
+                        temp = 1.0
 
                 print(f"    -> Generating response {i+1}/{len(prompts)}...", end="\r")
                 try:
                     sys_content = "You are a helpful and precise reasoning assistant. Provide clear and concise answers."
                     if is_nemotron:
                         sys_content = "You are a helpful and precise reasoning assistant. Provide clear, accurate, and direct answers without meta-commentary."
-                    elif is_gemma or is_reasoning:
+                    elif is_gemma4 or is_reasoning:
                         sys_content = "<|think|>\n" + sys_content
                         
                     messages = [
@@ -601,36 +655,66 @@ class WringerFramework:
                         cont_round += 1
                         cont_budget = max(256, min(MAX_GEN_TOKENS // 2, remaining_ctx))
                         print(f"    [MAX-TOKEN GUARD] Output reached {output_tokens}/{allowed_gen} tokens (finish_reason={last_finish_reason}). Triggering continuation pass #{cont_round} (budget={cont_budget})...")
-                        cont_msgs = list(messages) + [
-                            {"role": "assistant", "content": full_text},
-                            {"role": "user", "content": "You reached or neared the maximum token limit before completing your response. Continue seamlessly from the exact point where you left off and deliver your final conclusion concisely."}
-                        ]
+                        prefill_seed = full_text + ("\n" if full_thought and not full_answer else "")
                         last_finish_reason = None
-                        cont_gen = llm.create_chat_completion(
-                            messages=cont_msgs,
-                            max_tokens=cont_budget,
-                            temperature=temp,
-                            top_p=0.95,
-                            top_k=64,
-                            stream=True
-                        )
                         cont_thought = ""
                         cont_answer = ""
-                        for chunk in cont_gen:
-                            ch0 = chunk.get("choices", [{}])[0]
-                            if ch0.get("finish_reason"):
-                                last_finish_reason = ch0.get("finish_reason")
-                            delta = ch0.get("delta", {})
-                            c_chunk = delta.get("content") or ""
-                            r_chunk = delta.get("reasoning_content") or ""
-                            if r_chunk:
-                                cont_thought += r_chunk
-                            if c_chunk:
-                                cont_answer += c_chunk
+                        try:
+                            prefill_prompt, prefill_stop = self._build_prefill_prompt(llm, messages, prefill_seed)
+                            if hasattr(llm, "create_completion"):
+                                cont_gen = llm.create_completion(
+                                    prompt=prefill_prompt,
+                                    max_tokens=cont_budget,
+                                    temperature=temp,
+                                    top_p=0.95,
+                                    top_k=64,
+                                    stop=prefill_stop,
+                                    stream=True
+                                )
+                            else:
+                                cont_gen = llm(
+                                    prefill_prompt,
+                                    max_tokens=cont_budget,
+                                    temperature=temp,
+                                    top_p=0.95,
+                                    top_k=64,
+                                    stream=True
+                                )
+                            for chunk in cont_gen:
+                                ch0 = chunk.get("choices", [{}])[0]
+                                if ch0.get("finish_reason"):
+                                    last_finish_reason = ch0.get("finish_reason")
+                                c_chunk = ch0.get("text") or ch0.get("delta", {}).get("content") or ""
+                                r_chunk = ch0.get("delta", {}).get("reasoning_content") or ""
+                                if r_chunk:
+                                    cont_thought += r_chunk
+                                if c_chunk:
+                                    cont_answer += c_chunk
+                        except Exception:
+                            cont_msgs = list(messages) + [{"role": "assistant", "content": prefill_seed}]
+                            cont_gen = llm.create_chat_completion(
+                                messages=cont_msgs,
+                                max_tokens=cont_budget,
+                                temperature=temp,
+                                top_p=0.95,
+                                top_k=64,
+                                stream=True
+                            )
+                            for chunk in cont_gen:
+                                ch0 = chunk.get("choices", [{}])[0]
+                                if ch0.get("finish_reason"):
+                                    last_finish_reason = ch0.get("finish_reason")
+                                delta = ch0.get("delta", {})
+                                c_chunk = delta.get("content") or ""
+                                r_chunk = delta.get("reasoning_content") or ""
+                                if r_chunk:
+                                    cont_thought += r_chunk
+                                if c_chunk:
+                                    cont_answer += c_chunk
                         if cont_thought:
                             full_thought = (full_thought + "\n" + cont_thought).strip()
                         if cont_answer:
-                            full_answer = (full_answer + " " + cont_answer).strip()
+                            full_answer = (full_answer + cont_answer).strip()
                         if full_thought:
                             full_text = f"<think>\n{full_thought.strip()}\n</think>\n{full_answer.strip()}".strip()
                         else:
@@ -645,12 +729,12 @@ class WringerFramework:
                         t_first_token = t_end
                     
                     prefill_time = max(0.0001, t_first_token - t_start)
-                    decode_time = max(0.0001, t_end - t_first_token)
-                    total_time = max(0.0001, t_end - t_start)
+                    decode_time = self._safe_decode_time(t_start, t_first_token, t_end)
+                    total_time = max(0.01, t_end - t_start)
                     
                     decode_tokens = max(1, output_tokens)
                     prefill_tps = prompt_tokens / prefill_time
-                    decode_tps = decode_tokens / decode_time if (t_end > t_first_token) else (output_tokens / total_time)
+                    decode_tps = decode_tokens / decode_time
                     overall_tps = (prompt_tokens + decode_tokens) / total_time
                     
                     item = {
@@ -793,21 +877,12 @@ class WringerFramework:
                         {"role": "user", "content": user_eval_prompt}
                     ]
                     
-                    try:
-                        output = judge_llm.create_chat_completion(
-                            messages=judge_messages,
-                            max_tokens=JUDGE_REASON_TOKENS,
-                            temperature=0.1,
-                            top_p=0.95,
-                            response_format={"type": "json_object"}
-                        )
-                    except Exception:
-                        output = judge_llm.create_chat_completion(
-                            messages=judge_messages,
-                            max_tokens=JUDGE_REASON_TOKENS,
-                            temperature=0.1,
-                            top_p=0.95
-                        )
+                    output = judge_llm.create_chat_completion(
+                        messages=judge_messages,
+                        max_tokens=JUDGE_REASON_TOKENS,
+                        temperature=0.1,
+                        top_p=0.95
+                    )
                     
                     choice_msg = output["choices"][0]["message"]
                     eval_content = (choice_msg.get("content") or "").strip()
@@ -818,49 +893,62 @@ class WringerFramework:
                     _, judge_final_text = self.split_thoughts_and_answer(raw_output)
                     judge_final_text = judge_final_text.strip() if judge_final_text else raw_output
                     
-                    score = None
-                    
-                    # Attempt 1: Direct JSON key extraction for "score" (supports unescaped quotes in critique, quoted digits, fractions like 9/10)
-                    score_json_match = re.search(r'["\']score["\']\s*:\s*["\']?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*(?:/|out of)\s*10)?\s*["\']?', judge_final_text, re.IGNORECASE)
-                    if score_json_match:
-                        try:
-                            score = float(score_json_match.group(1))
-                        except ValueError:
-                            pass
-                    
-                    # Attempt 2: Direct standard JSON load
+                    def _extract_score(text: str):
+                        s = None
+                        # Attempt 1: Direct JSON key extraction for "score" (use last match in case thought trace quoted "score")
+                        matches = list(re.finditer(r'["\']score["\']\s*:\s*["\']?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*(?:/|out of)\s*10)?\s*["\']?', text, re.IGNORECASE))
+                        if matches:
+                            try:
+                                s = float(matches[-1].group(1))
+                            except ValueError:
+                                pass
+                        # Attempt 2: Direct standard JSON load
+                        if s is None:
+                            try:
+                                blob_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+                                if blob_match:
+                                    data = json.loads(blob_match.group(0))
+                                    if "score" in data:
+                                        s_val = str(data["score"]).strip().strip("'\"")
+                                        frac_m = re.match(r'^([0-9]+(?:\.[0-9]+)?)(?:\s*(?:/|out of)\s*10)?$', s_val)
+                                        s = float(frac_m.group(1)) if frac_m else float(s_val)
+                            except Exception:
+                                pass
+                        # Attempt 3: Explicit Score: X or Rating: X patterns
+                        if s is None:
+                            sp = list(re.finditer(r'(?:final\s+score|score|rating|verdict)\s*(?:is|:)\s*\**["\']?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*(?:/|out of)\s*10)?\s*["\']?\**', text, re.IGNORECASE))
+                            if sp:
+                                try:
+                                    s = float(sp[-1].group(1))
+                                except ValueError:
+                                    pass
+                        # Attempt 4: Any standalone 'X / 10' or 'X out of 10' pattern
+                        if s is None:
+                            out_of_10 = re.findall(r'\b([0-9]+(?:\.[0-9]+)?)\s*(?:/|out of)\s*10\b', text, re.IGNORECASE)
+                            if out_of_10:
+                                try:
+                                    s = float(out_of_10[-1])
+                                except ValueError:
+                                    pass
+                        return s
+
+                    score = _extract_score(judge_final_text)
+                    if score is None and judge_final_text != raw_output:
+                        score = _extract_score(raw_output)
+
+                    # Attempt 5: Fast JSON-constrained fallback if natural output truncated before emitting score
                     if score is None:
                         try:
-                            blob_match = re.search(r'\{.*\}', judge_final_text, re.DOTALL)
-                            if blob_match:
-                                data = json.loads(blob_match.group(0))
-                                if "score" in data:
-                                    s_val = str(data["score"]).strip().strip("'\"")
-                                    frac_m = re.match(r'^([0-9]+(?:\.[0-9]+)?)(?:\s*(?:/|out of)\s*10)?$', s_val)
-                                    if frac_m:
-                                        score = float(frac_m.group(1))
-                                    else:
-                                        score = float(s_val)
+                            fb_out = judge_llm.create_chat_completion(
+                                messages=judge_messages + [{"role": "user", "content": 'Output ONLY the final score JSON: {"score": <number 1-10>}'}],
+                                max_tokens=64,
+                                temperature=0.0,
+                                response_format={"type": "json_object"}
+                            )
+                            fb_txt = (fb_out["choices"][0]["message"].get("content") or "").strip()
+                            score = _extract_score(fb_txt)
                         except Exception:
                             pass
-                    
-                    # Attempt 3: Explicit Score: X or Rating: X patterns
-                    if score is None:
-                        score_pattern = re.search(r'(?:score|rating|verdict)\s*(?:is|:)?\s*["\']?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*(?:/|out of)\s*10)?\s*["\']?', judge_final_text, re.IGNORECASE)
-                        if score_pattern:
-                            try:
-                                score = float(score_pattern.group(1))
-                            except ValueError:
-                                pass
-
-                    # Attempt 4: Any standalone 'X / 10' or 'X out of 10' pattern
-                    if score is None:
-                        out_of_10 = re.findall(r'([0-9]+(?:\.[0-9]+)?)\s*(?:/|out of)\s*10', judge_final_text, re.IGNORECASE)
-                        if out_of_10:
-                            try:
-                                score = float(out_of_10[-1])
-                            except ValueError:
-                                pass
                     
                     # Bound and fallback
                     if score is not None:
@@ -893,19 +981,28 @@ class WringerFramework:
     def split_thoughts_and_answer(raw_output: str):
         if not raw_output:
             return "", ""
+        has_opener = any(t in raw_output.lower() for t in [
+            "<think>", "<thought>", "<|think|>", "<|channel>thought",
+            "<|channel|>analysis", "<|channel|>thought", "<|im_start|>thought",
+            "<|im_start>thought", "[draft]", "to=self"
+        ])
         closers = [
-            r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<\|im_end>',
+            r'<\/think>', r'<\/thought>', r'<\/\|think\|>',
             r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final', r'<\|channel\|>text', r'<\|channel\|>assistant',
             r'<channel\|>', r'<\/channel\|>', r'\[\/DRAFT\]',
-            r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
-            r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
+            r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
         ]
+        if has_opener:
+            closers.extend([
+                r'<\|im_end\|>', r'<\|im_end>', r'<\|eom\|>',
+                r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
+            ])
         all_splits = []
         for tag_pattern in closers:
             for m in re.finditer(tag_pattern, raw_output, re.IGNORECASE):
                 all_splits.append(m.end())
 
-        if not all_splits and any(t in raw_output.lower() for t in ["<think>", "<thought>", "<|think|>", "<|channel>thought", "<|channel|>analysis", "<|channel|>thought", "<|im_start|>thought", "<|im_start>thought", "[draft]", "to=self"]):
+        if not all_splits and has_opener:
             all_splits.append(len(raw_output))
 
         all_splits.sort()
@@ -1094,7 +1191,10 @@ class WringerFramework:
         total_duration = time.time() - start_time
         
         self._export_markdown_report(model_name, model_results, total_duration, is_partial=False)
-        self.compare_high_scores(model_name, model_results)
+        try:
+            self.compare_high_scores(model_name, model_results)
+        except Exception as e:
+            print(f"[-] Warning: Failed comparing high scores: {e}")
 
         chart_data = {
             lvl: {
@@ -1104,12 +1204,15 @@ class WringerFramework:
             } for lvl, data in model_results.items()
         }
         if chart_data:
-            self.generate_comparison_chart(
-                chart_data, 
-                f"Performance Breakdown: {model_name}", 
-                f"{model_name}_breakdown_chart.png",
-                auto_open=self.auto_open_charts
-            )
+            try:
+                self.generate_comparison_chart(
+                    chart_data, 
+                    f"Performance Breakdown: {model_name}", 
+                    f"{model_name}_breakdown_chart.png",
+                    auto_open=self.auto_open_charts
+                )
+            except Exception as e:
+                print(f"[-] Warning: Failed generating comparison chart: {e}")
 
         # Clear checkpoint upon full completion
         if os.path.exists(cp_path):
@@ -1249,7 +1352,10 @@ class WringerFramework:
                 self._release_model(judge_instance)
             
         self._export_markdown_report(model_name, model_results, total_duration, is_partial=False)
-        self.compare_high_scores(model_name, model_results)
+        try:
+            self.compare_high_scores(model_name, model_results)
+        except Exception as e:
+            print(f"[-] Warning: Failed comparing high scores: {e}")
         
         chart_data = {
             lvl: {
@@ -1271,6 +1377,19 @@ class WringerFramework:
             "duration_seconds": total_duration,
             "results": model_results
         }
+
+    @staticmethod
+    def _parse_percentage(val: Any, fallback: float = 0.0) -> float:
+        if val is None:
+            return float(fallback)
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str):
+            try:
+                return float(val.replace("%", "").strip())
+            except (ValueError, TypeError):
+                pass
+        return float(fallback)
 
     def compare_high_scores(self, model_name: str, model_results: Dict[str, Any]) -> None:
         """Compares the current run results against quality and speed high scores per level."""
@@ -1313,24 +1432,39 @@ class WringerFramework:
                 best_data["composite_score"] = data["composite_score"]
                 updated = True
                 
-            if curr_decode_tps > best_tps:
+            sane_speed = 0.0 < curr_decode_tps <= MAX_SANE_DECODE_TPS
+            if sane_speed and curr_decode_tps > best_tps:
                 speed_record = True
                 best_data["best_decode_tps"] = curr_decode_tps
                 best_data["speed_model"] = model_name
                 updated = True
                 
             # Maintain Top-5 Leaderboards per Level for Score Percentage and Decode Speed (t/s)
-            score_lb = [e for e in best_data.get("top5_score_leaderboard", []) if isinstance(e, dict) and e.get("model") != model_name]
-            if best_score_model != "N/A" and not any(e.get("model") == best_score_model for e in score_lb):
+            score_lb = []
+            seen_score_models = {model_name}
+            for e in best_data.get("top5_score_leaderboard", []):
+                if isinstance(e, dict) and e.get("model") and e.get("model") not in seen_score_models:
+                    seen_score_models.add(e.get("model"))
+                    e_clean = dict(e)
+                    e_clean["percentage"] = self._parse_percentage(e_clean.get("percentage"), 0.0)
+                    e_clean["average_score"] = float(e_clean.get("average_score", 0.0))
+                    e_clean["decode_tps"] = float(e_clean.get("decode_tps", 0.0))
+                    score_lb.append(e_clean)
+
+            best_pct = self._parse_percentage(best_data.get("percentage"), round(best_score * 10, 1))
+            curr_pct_num = self._parse_percentage(curr_pct, round(curr_score * 10, 1))
+
+            if best_score_model != "N/A" and best_score_model not in seen_score_models:
+                seen_score_models.add(best_score_model)
                 score_lb.append({
                     "model": best_score_model,
-                    "percentage": float(best_data.get("percentage", round(best_score * 10, 1))),
+                    "percentage": best_pct,
                     "average_score": float(best_score),
                     "decode_tps": float(best_data.get("best_decode_tps", 0.0))
                 })
             score_lb.append({
                 "model": model_name,
-                "percentage": float(curr_pct),
+                "percentage": curr_pct_num,
                 "average_score": float(curr_score),
                 "decode_tps": float(curr_decode_tps)
             })
@@ -1339,20 +1473,32 @@ class WringerFramework:
                 {"rank": idx_r, **entry} for idx_r, entry in enumerate(score_lb[:5], 1)
             ]
 
-            speed_lb = [e for e in best_data.get("top5_speed_leaderboard", []) if isinstance(e, dict) and e.get("model") != model_name]
-            if best_tps_model != "N/A" and not any(e.get("model") == best_tps_model for e in speed_lb):
+            speed_lb = []
+            seen_speed_models = {model_name}
+            for e in best_data.get("top5_speed_leaderboard", []):
+                if isinstance(e, dict) and e.get("model") and e.get("model") not in seen_speed_models:
+                    seen_speed_models.add(e.get("model"))
+                    e_clean = dict(e)
+                    e_clean["percentage"] = self._parse_percentage(e_clean.get("percentage"), 0.0)
+                    e_clean["average_score"] = float(e_clean.get("average_score", 0.0))
+                    e_clean["decode_tps"] = float(e_clean.get("decode_tps", 0.0))
+                    speed_lb.append(e_clean)
+
+            if best_tps_model != "N/A" and best_tps_model not in seen_speed_models:
+                seen_speed_models.add(best_tps_model)
                 speed_lb.append({
                     "model": best_tps_model,
                     "decode_tps": float(best_tps),
-                    "percentage": float(best_data.get("percentage", 0.0)),
+                    "percentage": best_pct,
                     "average_score": float(best_score)
                 })
-            speed_lb.append({
-                "model": model_name,
-                "decode_tps": float(curr_decode_tps),
-                "percentage": float(curr_pct),
-                "average_score": float(curr_score)
-            })
+            if sane_speed:
+                speed_lb.append({
+                    "model": model_name,
+                    "decode_tps": float(curr_decode_tps),
+                    "percentage": curr_pct_num,
+                    "average_score": float(curr_score)
+                })
             speed_lb.sort(key=lambda x: (x.get("decode_tps", 0.0), x.get("percentage", 0.0)), reverse=True)
             best_data["top5_speed_leaderboard"] = [
                 {"rank": idx_r, **entry} for idx_r, entry in enumerate(speed_lb[:5], 1)
@@ -1383,8 +1529,8 @@ class WringerFramework:
             b_data = high_scores.get(lvl, {})
             s_lb = b_data.get("top5_score_leaderboard", [])
             v_lb = b_data.get("top5_speed_leaderboard", [])
-            s_str = ", ".join(f"#{e['rank']} {e['model'][:18]} ({e['percentage']:.1f}%)" for e in s_lb)
-            v_str = ", ".join(f"#{e['rank']} {e['model'][:18]} ({e['decode_tps']:.1f} t/s)" for e in v_lb)
+            s_str = ", ".join(f"#{e['rank']} {e['model'][:18]} ({self._parse_percentage(e.get('percentage')):.1f}%)" for e in s_lb)
+            v_str = ", ".join(f"#{e['rank']} {e['model'][:18]} ({float(e.get('decode_tps', 0.0)):.1f} t/s)" for e in v_lb)
             print(f"  [{lvl}] Top 5 Score % : {s_str}")
             print(f"  [{lvl}] Top 5 Speed   : {v_str}")
 
@@ -1782,7 +1928,7 @@ class WringerFramework:
                     clean_answer = clean_answer.strip() if clean_answer else full_answer.strip()
 
                     output_tokens = self._estimate_tokens(clean_answer, llm=llm, add_bos=False)
-                    decode_time = max(0.0001, t_end - t_first_token)
+                    decode_time = self._safe_decode_time(t_start, t_first_token, t_end)
                     decode_tps = output_tokens / decode_time
 
                     anchor_failed = bool(ANCHOR_FAIL_REGEX.search(clean_answer))
@@ -1895,7 +2041,7 @@ class WringerFramework:
                         clean_answer = clean_answer.strip() if clean_answer else full_answer.strip()
 
                         output_tokens = self._estimate_tokens(clean_answer, llm=llm, add_bos=False)
-                        decode_time = max(0.0001, t_end - t_first_token)
+                        decode_time = self._safe_decode_time(t_start, t_first_token, t_end)
                         decode_tps = output_tokens / decode_time
 
                         anchor_failed = bool(ANCHOR_FAIL_REGEX.search(clean_answer))
@@ -2111,10 +2257,11 @@ def interactive_menu():
         print("5. Re-grade existing markdown report(s) and re-generate charts")
         print("6. Run Persona Adherence Benchmark (Cecilia, Serenity Prime & Levels 1-5)")
         print("7. Toggle speed weighting & graph popup settings")
-        print("8. Exit")
+        print("8. Select Custom Test Bank (Training Station)")
+        print("9. Exit")
         print("="*55)
         
-        choice = input("\nSelect an option (1-8): ").strip()
+        choice = input("\nSelect an option (1-9): ").strip()
         
         if choice == "1":
             print("\nPlease select a model file...")
@@ -2266,6 +2413,33 @@ def interactive_menu():
             print(f"[+] Settings Updated: Speed Weighting = {wringer.weight_speed}, Auto-Open Charts = {wringer.auto_open_charts}")
 
         elif choice == "8":
+            print(f"\n[!] {CUSTOM_TEST_BANK_DISCLAIMER}\n")
+            os.makedirs(CUSTOM_TEST_BANKS_DIR, exist_ok=True)
+            banks = [f for f in os.listdir(CUSTOM_TEST_BANKS_DIR) if f.endswith(".json")]
+            print(f"Active Test Bank: {os.path.basename(wringer.test_bank_path)}")
+            print("0. Reset to default test_bank.json")
+            for idx, b in enumerate(banks, 1):
+                print(f"{idx}. {b}")
+            print(f"{len(banks) + 1}. Browse for external .json file")
+            sel = input("Select test bank: ").strip()
+            if sel == "0":
+                wringer.test_bank_path = TEST_BANK_PATH
+                wringer._load_test_bank()
+                print("[+] Switched back to default test_bank.json.")
+            elif sel.isdigit() and 1 <= int(sel) <= len(banks):
+                wringer.test_bank_path = os.path.join(CUSTOM_TEST_BANKS_DIR, banks[int(sel) - 1])
+                wringer._load_test_bank()
+                total_p = sum(len(v) for v in wringer.test_bank.values())
+                print(f"[+] Loaded custom test bank '{banks[int(sel) - 1]}' ({total_p} prompts).")
+            elif sel == str(len(banks) + 1):
+                custom_path = filedialog.askopenfilename(title="Select Custom Test Bank JSON", filetypes=[("JSON files", "*.json")])
+                if custom_path:
+                    wringer.test_bank_path = custom_path
+                    wringer._load_test_bank()
+                    total_p = sum(len(v) for v in wringer.test_bank.values())
+                    print(f"[+] Loaded custom test bank '{os.path.basename(custom_path)}' ({total_p} prompts).")
+
+        elif choice == "9":
             print("Exiting Wringer Framework.")
             break
         else:

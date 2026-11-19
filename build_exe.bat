@@ -29,7 +29,7 @@ if /I "!BUILD_MODE!"=="onefile" (
     echo Building onedir application folder...
 )
 
-set "APP_NAME=SerenityPC Legacy v1.8.0"
+set "APP_NAME=SerenityPC Legacy v1.9.0"
 set "DIST_TARGET=dist\!APP_NAME!"
 
 echo [1/2] Checking dependencies...
@@ -43,6 +43,8 @@ if /I "!BUILD_MODE!"=="onedir" (
         echo [3/3] Assembling standalone distribution layout...
         if not exist "!DIST_TARGET!\Media" xcopy /E /I /Y "Media" "!DIST_TARGET!\Media\" >nul 2>&1
         if not exist "!DIST_TARGET!\Users" xcopy /E /I /Y "Users" "!DIST_TARGET!\Users\" >nul 2>&1
+        if not exist "!DIST_TARGET!\Users\Default\Mailbox\DeadDrop" mkdir "!DIST_TARGET!\Users\Default\Mailbox\DeadDrop" >nul 2>&1
+        if not exist "!DIST_TARGET!\.tmp" mkdir "!DIST_TARGET!\.tmp" >nul 2>&1
         if not exist "!DIST_TARGET!\Models" mkdir "!DIST_TARGET!\Models" >nul 2>&1
         if not exist "!DIST_TARGET!\Logs" mkdir "!DIST_TARGET!\Logs" >nul 2>&1
         if not exist "!DIST_TARGET!\History" mkdir "!DIST_TARGET!\History" >nul 2>&1

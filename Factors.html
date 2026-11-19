@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title> Factorization </title>
+</head>
+
+<body>
+
+	<h1>F a c t o r</h1>
+
+	<script>
+		function getAllFactors(num) {
+			let factors = [];
+			for (let i = 1; i <= Math.sqrt(num); i++) {
+				if (num % i === 0) {
+					factors.push(i);
+					if (num / i !== i) {
+						factors.push(num / i);
+					}
+				}
+			}
+			return factors.sort((a, b) => a - b);
+		}
+
+		let result = getAllFactors(594259425949);
+
+		alert("Factors of 59425949 5942 are: " + result.join(", "));
+	</script>
+
+</body>
+
+</html>

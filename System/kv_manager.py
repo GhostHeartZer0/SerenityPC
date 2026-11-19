@@ -1,5 +1,9 @@
 from typing import List, Dict, Any, Optional
 from System.tri_attention_core import TriAttentionScorer
+try:
+    from System.serenity_utils import safe_zlib_decompress
+except ImportError:
+    from serenity_utils import safe_zlib_decompress
 import logging
 import numpy as np
 import os
@@ -7,11 +11,11 @@ import os
 class KVManager:
     """
     Manages the context window by pruning messages when they exceed
-    the maximum context threshold. It uses TriAttention simulated
-    scoring to determine which messages to keep.
+    the maximum context threshold or computing dynamic auto-scaling targets.
     """
-    def __init__(self, max_context_tokens: int = 262144, prune_ratio: float = 0.5): #TODO: make this dymanic, tied to chosen setting.
-        # Default target of 262144 (256k) for massive context windows, dynamically updated on model load
+    CTX_LADDER = (2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768, 40860, 49152, 57344, 65536, 81920, 98304, 114688, 131072, 163840, 196608, 229376, 262144)
+
+    def __init__(self, max_context_tokens: int = 262144, prune_ratio: float = 0.5):
         self.max_context_tokens = max_context_tokens
         self.prune_ratio = prune_ratio
         self.scorer = TriAttentionScorer(budget_ratio=prune_ratio)
@@ -21,6 +25,40 @@ class KVManager:
         """Dynamically update maximum context capacity matching active model tier."""
         self.max_context_tokens = max_context_tokens
 
+    @classmethod
+    def compute_scaled_context(cls, current_ctx: int, required_tokens: int, mode: str = "step_up", max_cap: int = 262144) -> int:
+        """
+        Calculates target context window size from CTX_LADDER based on scaling mode:
+        - 'step_up': Advances to the next ladder step(s) sufficient to hold required_tokens.
+        - '2x': Doubles current_ctx until >= required_tokens (snapped to ladder).
+        - 'fit': Selects exact smallest ladder step >= required_tokens.
+        """
+        cur = max(2048, int(current_ctx or 4096))
+        req = max(cur + 1, int(required_tokens))
+        m = str(mode or "step_up").lower().strip()
+
+        if m == "2x":
+            target = cur
+            while target < req and target < max_cap:
+                target *= 2
+            for step in cls.CTX_LADDER:
+                if step >= target:
+                    return min(max_cap, step)
+            return min(max_cap, target)
+
+        if m == "step_up":
+            next_steps = [s for s in cls.CTX_LADDER if s > cur]
+            for step in next_steps:
+                if step >= req:
+                    return min(max_cap, step)
+            return min(max_cap, next_steps[-1] if next_steps else max_cap)
+
+        # Default / 'fit': smallest ladder rung >= req
+        for step in cls.CTX_LADDER:
+            if step >= req and step > cur:
+                return min(max_cap, step)
+        return min(max_cap, max(cur, req))
+
     def _estimate_tokens(self, content: Any) -> int:
         """Robust token estimation (typically 4 chars = 1 token for LLMs, handles multimodal lists)."""
         if isinstance(content, str):
@@ -29,8 +67,11 @@ class KVManager:
             total = 0
             for item in content:
                 if isinstance(item, dict):
-                    txt = item.get("text", "") or str(item.get("image_url", ""))
-                    total += len(str(txt)) // 4
+                    if item.get("type") in ("image_url", "input_audio"):
+                        total += 576
+                    else:
+                        txt = item.get("text", "") or str(item.get("image_url", ""))
+                        total += len(str(txt)) // 4
                 else:
                     total += len(str(item)) // 4
             return max(1, total)
@@ -166,9 +207,11 @@ class TurboVecIndex:
             print("[TURBOVEC] Gracefully falling back to keyword indexing.")
             self.mode = "fallback"
 
-    def ingest_needed_files(self, active_model_path: Optional[str], active_level: Optional[int], lookup_mode: str):
+    def ingest_needed_files(self, active_model_path: Optional[str], active_level: Optional[int], lookup_mode: str, vault_manager: Any = None):
         if self.mode == "off":
             return
+        if vault_manager is not None:
+            self.vault_manager = vault_manager
 
         import glob
         import os
@@ -181,7 +224,14 @@ class TurboVecIndex:
             if active_model_path:
                 active_model_name = os.path.splitext(os.path.basename(active_model_path))[0].lower()
 
-            files = [os.path.join(self.history_dir, fname) for fname in os.listdir(self.history_dir) if fname.endswith(".history.jsonz") or fname.endswith(".history.encz")] if os.path.exists(self.history_dir) else []
+            files = []
+            if os.path.exists(self.history_dir):
+                excluded_dirs = {"backups", "backups_repair", "jsonz to txt", ".tmp"}
+                for root_dir, dirs, fnames in os.walk(self.history_dir):
+                    dirs[:] = [d for d in dirs if d not in excluded_dirs]
+                    for fname in fnames:
+                        if fname.endswith(".history.jsonz") or fname.endswith(".history.encz"):
+                            files.append(os.path.join(root_dir, fname))
             files_to_load = []
 
             for f in files:
@@ -196,7 +246,10 @@ class TurboVecIndex:
                 f_level = f_levels[-1] if f_levels else None
 
                 should_load = False
-                if lookup_mode == "targeted":
+                is_lvl7_file = (7 in f_levels) or ("cecilia" in basename.lower())
+                if is_lvl7_file and active_level != 7:
+                    should_load = False
+                elif lookup_mode == "targeted":
                     if active_model_name and f_model == active_model_name and active_level is not None and active_level in f_levels:
                         should_load = True
                 elif lookup_mode == "model":
@@ -209,22 +262,37 @@ class TurboVecIndex:
                     should_load = True
 
                 if should_load:
-                    files_to_load.append((f, f_model, f_level))
+                    files_to_load.append((f, f_model, f_level, f_levels))
 
             newly_ingested = 0
-            for f, f_model, f_level in files_to_load:
+            for f, f_model, f_level, f_levels in files_to_load:
                 if f in self._ingested_files:
                     continue
                 try:
-                    if f.endswith(".encz") and getattr(self, "vault_manager", None) is not None:
-                        history = self.vault_manager.read_history_messages(f)
+                    if f.endswith(".encz"):
+                        vault = getattr(self, "vault_manager", None) or vault_manager
+                        if vault is not None and not getattr(vault, "is_locked", lambda: False)():
+                            try:
+                                history = vault.read_history_messages(f)
+                            except Exception:
+                                # Another user's encrypted file or unable to decrypt with current session key:
+                                # Silently ignore and mark ingested to prevent console spam
+                                self._ingested_files.add(f)
+                                continue
+                        else:
+                            # Vault locked or unavailable: silently skip encrypted archives
+                            continue
                     else:
                         with open(f, 'rb') as fp:
-                            history = json.loads(zlib.decompress(fp.read()).decode('utf-8'))
+                            history = json.loads(safe_zlib_decompress(fp.read()).decode('utf-8'))
                     
                     texts = []
                     temp_metadata = []
                     for msg in history:
+                        m_lvl = msg.get("level") if msg.get("level") is not None else f_level
+                        m_persona = str(msg.get("persona", "")).strip().lower()
+                        if active_level != 7 and (m_lvl == 7 or 7 in f_levels or m_persona == "cecilia"):
+                            continue
                         content = msg.get("content", "")
                         if len(content) > 20:
                             texts.append(content)
@@ -233,7 +301,9 @@ class TurboVecIndex:
                                 "role": msg.get("role"),
                                 "file": f,
                                 "model": f_model,
-                                "level": f_level
+                                "level": m_lvl,
+                                "levels": f_levels,
+                                "persona": m_persona
                             })
                     
                     if texts and self.mode == "on" and self.embedder is not None and self.collection is not None:
@@ -247,19 +317,23 @@ class TurboVecIndex:
 
                     self._ingested_files.add(f)
                 except Exception as e:
-                    print(f"[TURBOVEC] Failed to parse history {f}: {e}")
+                    self._ingested_files.add(f)
+                    err_str = str(e).lower()
+                    if not any(k in err_str for k in ["permission", "locked", "decrypt", "tag", "key"]):
+                        print(f"[TURBOVEC] Failed to parse history {f}: {e}")
 
             if newly_ingested > 0:
                 print(f"[TURBOVEC] Ingested {newly_ingested} new chunks. Total indexed: {len(self.metadata)}")
 
-    def search(self, query: str, top_k: int = 3, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted"):
+    def search(self, query: str, top_k: int = 3, active_model_path: Optional[str] = None, active_level: Optional[int] = None, lookup_mode: str = "targeted", vault_manager: Any = None):
         if self.mode == "off":
             return []
 
+        import re
         import numpy as np
         
         with self.lock:
-            self.ingest_needed_files(active_model_path, active_level, lookup_mode)
+            self.ingest_needed_files(active_model_path, active_level, lookup_mode, vault_manager=vault_manager)
             
             if not self.metadata:
                 return []
@@ -270,6 +344,18 @@ class TurboVecIndex:
 
             mask = np.zeros(len(self.metadata), dtype=bool)
             for i, meta in enumerate(self.metadata):
+                meta_file = os.path.basename(str(meta.get("file", ""))).lower()
+                meta_lvls = meta.get("levels") or []
+                meta_lvl7 = (
+                    meta.get("level") == 7
+                    or (7 in meta_lvls)
+                    or str(meta.get("persona", "")).strip().lower() == "cecilia"
+                    or "cecilia" in meta_file
+                    or bool(re.search(r"_lvls?(?:[0-9_]*_)?7(?:_[0-9_]+)?\.history\.", meta_file))
+                )
+                if meta_lvl7 and active_level != 7:
+                    mask[i] = False
+                    continue
                 match = False
                 if lookup_mode == "targeted":
                     if active_model_name and meta["model"] == active_model_name and active_level is not None and meta["level"] == active_level:
@@ -325,7 +411,7 @@ class TurboVecIndex:
             return []
         if vault_manager is not None:
             self.vault_manager = vault_manager
-        raw_hits = self.search(query, top_k=top_k, active_model_path=active_model_path, active_level=active_level, lookup_mode=lookup_mode)
+        raw_hits = self.search(query, top_k=top_k, active_model_path=active_model_path, active_level=active_level, lookup_mode=lookup_mode, vault_manager=vault_manager)
         if not raw_hits:
             return []
         import re

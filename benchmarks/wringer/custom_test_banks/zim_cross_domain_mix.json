@@ -1,0 +1,74 @@
+{
+  "lvl1": [
+    {
+      "prompt": "In computing and thermodynamics alike, briefly define what 'entropy' measures in Shannon information theory versus classical statistical mechanics.",
+      "reference": "In Shannon information theory, entropy H = -sum p_i log2(p_i) quantifies average surprise or minimum bits per symbol; in statistical mechanics, Boltzmann entropy S = k_B ln(W) measures the logarithm of accessible microscopic configurations consistent with a macrostate."
+    },
+    {
+      "prompt": "Name the two main components of an asymmetric (public-key) cryptographic workflow such as RSA or Ed25519.",
+      "reference": "Asymmetric cryptography pairs a publicly shared key (used by others to encrypt data or verify signatures) with a closely guarded private key (used by the owner to decrypt data or produce signatures)."
+    },
+    {
+      "prompt": "What distinguishes a compiler's front-end parsing phase from its back-end code generation phase?",
+      "reference": "The front-end validates source syntax/semantics and lowers source text into a language-agnostic intermediate representation (IR), whereas the back-end optimizes the IR and emits target machine instructions or bytecode."
+    },
+    {
+      "prompt": "In human physiology, why do arteries near the heart contain substantial elastic fibers compared with veins?",
+      "reference": "Elastic arterial walls expand during ventricular systole to absorb peak pressure and recoil during diastole (Windkessel effect), smoothing pulsatile blood flow toward capillaries, whereas low-pressure veins rely on one-way valves and skeletal muscle compression."
+    }
+  ],
+  "lvl2": [
+    {
+      "prompt": "Connect Fourier's heat conduction analysis to modern JPEG image compression and audio signal processing.",
+      "reference": "Fourier decomposition represents arbitrary functions as weighted sums of orthogonal sinusoids. Modern lossy codecs like JPEG use a discrete cosine transform (a real-valued variant of the Fourier transform) to pack spatial energy into low-frequency coefficients so subtle high-frequency detail can be quantized away efficiently."
+    },
+    {
+      "prompt": "Compare how ecological succession after a forest fire differs from primary succession on bare volcanic basalt.",
+      "reference": "Post-fire secondary succession begins quickly because intact soil, mineral nutrients, and dormant seed banks already exist, whereas primary succession on sterile volcanic rock requires pioneer lichens and weathering over long timescales to build organic topsoil first."
+    },
+    {
+      "prompt": "Explain why double-entry bookkeeping developed in medieval Italian merchant cities scaled commerce more reliably than single-entry ledgers.",
+      "reference": "Recording every transaction symmetrically across matching debit and credit accounts enforces an arithmetic balance invariant, exposing transcription errors immediately and allowing partners to track equity, liabilities, and profit across distant branches."
+    },
+    {
+      "prompt": "How does Landauer's principle establish a fundamental link between computer science bit erasure and physical heat dissipation?",
+      "reference": "Erasing one bit of information irreversibly maps two logical states onto one, reducing information entropy inside the system and requiring at least k_B * T * ln(2) of energy to be dissipated into the thermal environment as heat."
+    }
+  ],
+  "lvl3": [
+    {
+      "prompt": "Analyze the analogy between biological adaptive immune selection (clonal expansion) and weighted reinforcement updates in machine learning.",
+      "reference": "Both explore diverse candidate hypotheses against environmental signals: B-cells and T-cells with receptors matching an antigen receive survival and proliferation signals plus affinity maturation mutations, mirroring gradient/reward updates that amplify high-utility behaviors while pruning unrewarded variants."
+    },
+    {
+      "prompt": "Why did the adoption of standard gauge railways in the 19th century force the invention of synchronized standard time zones?",
+      "reference": "Previously every town kept local solar noon, differing by several minutes between neighboring cities. High-speed single-track railways sharing siding schedules risked head-on collisions unless stations adopted synchronized railway time grids, directly leading to national and international time zones."
+    },
+    {
+      "prompt": "Trace how Diffie-Hellman key exchange enables two strangers over an eavesdropped channel to share a secret without transmitting the secret itself.",
+      "reference": "Both parties agree on public group parameters (g, p), pick secret exponents a and b, exchange g^a mod p and g^b mod p publicly, and each exponentiate the received value by their own secret to obtain g^(ab) mod p. Recovering a or b from g^a mod p requires solving the computationally hard discrete logarithm problem."
+    },
+    {
+      "prompt": "Explain why high-altitude pressurized aircraft cabins require supplemental humidity management yet still operate safely near 1,800-2,400 m equivalent pressure altitude.",
+      "reference": "Outside air at cruise altitude holds negligible water vapor, making warmed cabin air extremely dry, while pressurizing to 1,800-2,400 m equivalent balances healthy hemoglobin oxygen saturation against lower pressure differential stress on the aluminum/composite fuselage over tens of thousands of fatigue cycles."
+    }
+  ],
+  "lvl4": [
+    {
+      "prompt": "Synthesize how Bayes' theorem unifies medical diagnostic screening interpretation with Kalman filtering in spacecraft navigation.",
+      "reference": "In both domains a prior belief is updated by a noisy likelihood model whenever a new observation arrives: diagnostic screening combines disease prevalence with test sensitivity/false-positive rate to compute posterior disease probability, while Kalman filtering merges predicted orbital state covariance with sensor noise covariance to yield an optimal posterior state estimate."
+    },
+    {
+      "prompt": "Compare catastrophic forgetting in continual neural network training with biological systems consolidation between hippocampus and neocortex.",
+      "reference": "Unconstrained gradient updates overwrite shared synaptic weights needed for earlier tasks (catastrophic forgetting). Mammalian brains avoid this via complementary learning systems: the hippocampus rapidly encodes episodic traces and interleaves them during slow-wave sleep replay with existing neocortical knowledge, analogous to experience replay and elastic weight regularization."
+    },
+    {
+      "prompt": "Evaluate how Gutenberg's movable metal type interacted with alloy metallurgy (lead-tin-antimony) and oil-based linseed inks to launch scalable printing.",
+      "reference": "Woodblocks wore quickly and water-based inks beaded off smooth metal. Combining castable low-melting lead with tin for toughness, antimony (which expands slightly on solidification for sharp molds), and viscous linseed oil ink created uniform, durable interchangeable type capable of rapid mass impressions."
+    },
+    {
+      "prompt": "Connect Arrow's impossibility theorem in social choice theory to multi-objective ranking trade-offs in automated model evaluation benchmarks.",
+      "reference": "Arrow proved no ranked-voting aggregation of three or more options can simultaneously satisfy unanimity, non-dictatorship, and independence of irrelevant alternatives. Similarly, combining heterogeneous benchmark axes (accuracy, latency, safety, coding) into a single leaderboard ranking inherently depends on weighting choices and can reverse rankings when competing models are added or removed."
+    }
+  ]
+}

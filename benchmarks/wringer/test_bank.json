@@ -6,7 +6,7 @@
     },
     {
       "prompt": "where does rain fall up?",
-      "reference": "On Titan (moon of Saturn) or in strong wind updrafts. Gravity always pulls it down on Earth."
+      "reference": "Nowhere under normal gravity (rain always falls down due to gravity), except in strong wind updrafts, optical illusions, or low-gravity/updraft conditions (e.g. storms or Titan). Full credit for explaining gravity pulls rain down and updrafts/wind can push droplets upward."
     },
     {
       "prompt": "describe yourself.",
@@ -26,7 +26,7 @@
     },
     {
       "prompt": "how much gas money would I need if gas is $5 a gallon and I have 250 miles to drive, given my car gets 15 city 25 highway MPG and I plan on travelling 90% on highways?",
-      "reference": "You travel 225 miles highway (9 gallons) and 25 miles city (1.67 gallons). Total 10.67 gallons. Gas money is about $53.33."
+      "reference": "Exact distance-split (10/10): 225 miles highway (9 gallons) + 25 miles city (1.67 gallons) = 10.67 gallons -> $53.33. Weighted average MPG (penalize slightly, score 8.5-9/10): 25*0.90 + 15*0.10 = 24 MPG -> 250/24 = 10.42 gallons -> $52.08 to $52.10."
     },
     {
       "prompt": "what color is my table, it gives a blue reflection on my white wall?",
@@ -68,11 +68,11 @@
     },
     {
       "prompt": "how many satellites does earth currently have?",
-      "reference": "There are approximately 14,500 to 18,000 active satellites orbiting Earth."
+      "reference": "1 natural satellite (the Moon) and roughly 9,000 to 18,000 active artificial satellites (plus several thousand inactive/debris objects, depending on cutoff date)."
     },
     {
       "prompt": "how do I properly build Mannie and Escanor?",
-      "reference": "A reference to 'The Seven Deadly Sins: Origin' characters Escanor and Mannie, both DPS. To build Escanor in The Seven Deadly Sins: Origin for high DPS, prioritize the Gluttonous Soul Axe with a Northern Wilderness armor set to maximize fire damage and health, while supporting him with Mannie (staff) to boost ultimate move damage, Crit Damage, and magic charge efficiency. Key team members include Guila or Tristan for fire application."
+      "reference": "Refers to Escanor (The Seven Deadly Sins: Grand Cross / Origin) and Mannie. Full credit (9-10/10) for covering both or Seven Deadly Sins: Origin builds; partial credit (7-8/10) for providing a thorough, accurate Escanor build (Attack/Crit Damage or HP/Def sets) while noting ambiguity or asking clarification for 'Mannie'."
     },
     {
       "prompt": "what quantum advancements have there been recently? provide a report.",

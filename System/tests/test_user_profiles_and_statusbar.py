@@ -283,5 +283,44 @@ class TestUserProfilesAndStatusBar(unittest.TestCase):
         self.assertTrue(vm.unlock("MyPass123!"))
         self.assertFalse(vm.is_locked())
 
+    def test_magicmock_folder_prevention_and_pruning(self):
+        from unittest.mock import MagicMock
+        from main import ChatbotApp
+
+        class MockApp:
+            def __init__(self, script_dir):
+                self.script_dir = script_dir
+                self.dirs = {d: os.path.join(self.script_dir, d) for d in ["Media", "History", "Models", "Logs", "System", "Users"]}
+                for d in self.dirs.values(): os.makedirs(d, exist_ok=True)
+                self.config = {"username": MagicMock()}
+
+            get_active_username = ChatbotApp.get_active_username
+            get_user_history_dir = ChatbotApp.get_user_history_dir
+            get_user_dir = ChatbotApp.get_user_dir
+            list_user_profiles = ChatbotApp.list_user_profiles
+
+        app = MockApp(self.root_dir)
+        # 1. get_active_username must default to "Default" when config contains MagicMock
+        self.assertEqual(app.get_active_username(), "Default")
+
+        # 2. get_user_dir and get_user_history_dir must default to "Default" when passed a MagicMock
+        self.assertTrue(app.get_user_dir(MagicMock()).endswith(os.path.join("Users", "Default")))
+        self.assertTrue(app.get_user_history_dir(MagicMock()).endswith(os.path.join("History", "Default")))
+
+        # 3. Simulate an existing mock folder on disk alongside a legitimate 'Mockingbird' folder
+        fake_mock_dir = os.path.join(app.dirs["Users"], "MagicMock_Profile_1")
+        real_mockingbird_dir = os.path.join(app.dirs["Users"], "Mockingbird")
+        os.makedirs(fake_mock_dir, exist_ok=True)
+        os.makedirs(real_mockingbird_dir, exist_ok=True)
+        self.assertTrue(os.path.exists(fake_mock_dir))
+
+        # 4. list_user_profiles must filter mock names without destructively deleting folders on disk
+        profiles = app.list_user_profiles()
+        self.assertNotIn("MagicMock_Profile_1", profiles)
+        self.assertIn("Mockingbird", profiles)
+        self.assertTrue(os.path.exists(fake_mock_dir))
+        self.assertTrue(os.path.exists(real_mockingbird_dir))
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -129,12 +129,27 @@ class TestDynamicDispatch(unittest.TestCase):
         self.assertNotIn("streaming", statuses, "Subagent communications must NOT leak into chat response buffer")
 
     def test_subagent_density_modes(self):
-        """Verify minimal required vs all desired selection modes."""
+        """Verify minimal required vs vector-grounded all desired selection modes."""
         trace_min = UtilityDispatchEngine.evaluate(6, "Hello there", selection_mode="minimal")
         self.assertEqual(len(trace_min.selected_agent_ids), 1, "Minimal mode should only pick fallback/best agent for generic greetings")
 
-        trace_all = UtilityDispatchEngine.evaluate(6, "Hello there", selection_mode="all")
-        self.assertEqual(trace_all.selected_agent_ids, [1, 2, 3, 4, 5], "All mode should dispatch all 5 subagents for Lvl 6")
+        # In grounded 'all' mode, a zero-vector greeting should NOT blindly turn on all levels
+        trace_all_greeting = UtilityDispatchEngine.evaluate(6, "Hello there", selection_mode="all")
+        self.assertEqual(trace_all_greeting.selected_agent_ids, [1], "All mode should ground in vectors and avoid blindly selecting all 5 levels on zero vectors")
+
+        # For a factual and logical problem, grounded 'all' mode selects relevant agents (2, 3, 5, 1) without blind tone activation
+        trace_all_complex = UtilityDispatchEngine.evaluate(6, "Search python release date and analyze algorithm time complexity", selection_mode="all")
+        self.assertIn(2, trace_all_complex.selected_agent_ids, "Lvl 2 (Search) must be selected in grounded all mode")
+        self.assertIn(5, trace_all_complex.selected_agent_ids, "Lvl 5 (Brains) must be selected in grounded all mode")
+        self.assertNotIn(4, trace_all_complex.selected_agent_ids, "Lvl 4 (Tone) should be skipped when emotion vector is 0")
+
+    def test_dynamic_re_invocation_delegation(self):
+        """Verify dynamic execution sequence and re-invocation support."""
+        res = self.mgr.execute_delegation_chain(6, "Analyze complex algorithm and calculate time complexity", {})
+        self.assertIn("compiled_briefing", res)
+        # Verify reports tracked execution steps properly
+        step_levels = [r.from_level for r in res["reports"]]
+        self.assertIn(5, step_levels, "Level 5 should have executed for complex algorithm query")
 
     def test_delegation_dynamic_model_swap(self):
         """Verify dynamic model swap is invoked when delegation_model_mode is per_subagent_model."""

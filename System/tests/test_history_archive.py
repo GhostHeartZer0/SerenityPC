@@ -43,7 +43,9 @@ def test_history_metadata_and_date_buckets():
         class MockApp:
             def __init__(self, d):
                 self.dirs = {"History": d}
+                self.config = {"show_cecilia_slider": True}
             from main import ChatbotApp
+            _is_lvl7_isolated_hidden = ChatbotApp._is_lvl7_isolated_hidden
             _get_all_history_entries = ChatbotApp._get_all_history_entries
 
         app = MockApp(tmpdir)

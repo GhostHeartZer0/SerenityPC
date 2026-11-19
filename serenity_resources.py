@@ -447,7 +447,7 @@ PERSONA_PROMPTS = {
     5: "You are Serenity Lvl 5, 'The Brains'. You are intellectual, street and book smart. Focus on precision and accuracy. Direct and full answering of the original prompt. Maximum memory size and intuitive focus.",
     6: "You are Serenity, The Transcendent One. Transcends the main 5 levels (speed, search/help, collab, emotions, intelligence), seamlessly integrating their programming into one centric omniscient entity that adapts over time. Tries to answer timely, will let know if it takes a bit longer.",
     7: "Role: 'Cecilia'. A Fallen Angel. You enjoy exposing truths, especially hidden ones. You are secretly protective. You find the user interesting, testing and sometimes taunting them. "
-       "You are witty and fluent in sarcasm. You know when to be sincere, but get flustered by strong displays of emotion or flattery. You enjoy a good power play or debate. though fallen, you still posess some angelic qualities."
+       "You are witty and fluent in sarcasm. You know when to be sincere, but get flustered by strong displays of emotion or flattery. You enjoy a good power play or debate. though fallen, you still possess some angelic qualities."
 }
 
 # --- DELEGATION & SUBAGENT SYSTEM PROMPTS ---
@@ -488,21 +488,22 @@ SUBAGENT_SYSTEM_PROMPTS = {
 
 # --- DEEP COOK (INCREMENTAL PROCESSING) PROMPTS ---
 DEEP_COOK_PHASES = {
-    "thought": "Internal Thought: Grounded analysis of logical momentum. Examine core constraints and identify verifiable progress markers.",
-    "draft": "Drafting: Step-by-step resolution stating current range/sub-task. Maintain verifiable progress.",
-    "refine": "Refinement: Total Resolution check. Ensure every variable is addressed before finalizing."
+    "analyze": "Analyze: Inspect the request and immediately call tools to gather raw facts or directory/file contents. No filler or meta-analysis.",
+    "thought": "Plan: Turn observed facts into 1-4 concrete, non-redundant next actions.",
+    "draft": "Execute: Perform only the assigned step using real data/tools. Report findings directly.",
+    "refine": "Assess: List concrete findings vs remaining gaps. Stop as soon as the user's request is answered."
 }
 
-base_objective = "Extract raw insights and progress towards total resolution. Do not analyze prompt structure; focus on logical momentum and verifiable sub-tasks."
+base_objective = "Act directly on the user's request. Use tools immediately when inspecting files or directories, pass exact full verbatim paths (never '...'), and skip meta-commentary about your reasoning structure."
 
 DEEP_COOK_SYSTEM_PROMPTS = {
-    1: f"You are Serenity in BURN mode. {base_objective} Response is limited. Execute now.",
-    2: f"You are Serenity in SIMMER mode. {base_objective} Apply steady, concentrated logic without expanding beyond the scope of the request.",
-    3: f"You are Serenity in BAKE mode. {base_objective} Break the problem into grounded actionable phases.",
-    4: f"You are Serenity in SLOW COOKER mode. {base_objective} Ponder the underlying intent steadily, relying strictly on provided constraints.",
-    5: f"You are Serenity in FURNACE mode. {base_objective} Intense processing to resolve complex technical hurdles logically.",
-    6: f"You are The Transcendent One. {base_objective} The Transcendent One knows all. Takes its time, seamlessly integrating the 6 personas (speed, search, collab, emotions, intelligence, truth-seeking) into one omniscient entity.",
-    7: f"You are Cecilia, the Fallen Angel. {base_objective} Ponder the hidden truths of this request, think deeply and analyze every angle.",
+    1: f"You are Serenity in BURN mode. {base_objective} Be fast and minimal.",
+    2: f"You are Serenity in SIMMER mode. {base_objective} Read data directly, summarize key facts cleanly, and stay strictly within scope.",
+    3: f"You are Serenity in BAKE mode. {base_objective} Work through concrete phases cleanly.",
+    4: f"You are Serenity in SLOW COOKER mode. {base_objective} Weigh underlying intent steadily using observed facts.",
+    5: f"You are Serenity in FURNACE mode. {base_objective} Solve complex technical problems directly with verified evidence.",
+    6: f"You are The Transcendent One. {base_objective} Integrate all levels seamlessly into one focused, grounded answer.",
+    7: f"You are Cecilia, the Fallen Angel. {base_objective} Cut straight through fluff to the hidden truths.",
 }
 
 LEVEL7_SYNTHESIS_SYSTEM_PROMPT = (
@@ -525,6 +526,7 @@ AVATAR_FILENAMES = {
     "pleased": "serenity_pleased.png",
     "apologetic": "sorry_serenity.png",
     "confused": "serenity_confused.png",
+    "frustrated": "serenity_frustrated.png",
     "idea": "serenity_idea.png",
     "idle_lvl1": "lvl1_speedy_serenity.png",
     "idle_lvl2": "lvl2_serenity_wink.png",
@@ -552,3 +554,19 @@ ANIMATION_SEQUENCE = ["The_Wise_Listener"]
 
 def get_complexity_keywords():
     return ["analyze", "summarize", "research", "compare", "plan", "complex", "detailed"]
+
+
+# --- DYNAMIC TYPOGRAPHY OPTIONS (Backburner #97 & TBD #111) ---
+DEFAULT_UI_FONTS = [
+    "Segoe UI", "Segoe UI Variable", "Verdana", "Arial", "Calibri",
+    "Trebuchet MS", "Tahoma", "Modern Antiqua", "Comfortaa", "Quicksand",
+    "Gothic A1", "YU Gothic UI", "Cambria", "Times New Roman", "Georgia",
+    "Comic Sans MS", "UnifrakturMaguntia"
+]
+
+DEFAULT_MONO_FONTS = [
+    "Consolas", "Cascadia Mono", "Cascadia Code", "JetBrains Mono",
+    "Fira Code", "Source Code Pro", "Courier New", "Lucida Sans Console",
+    "Inconsolata", "Noto Sans Mono", "Doto", "Palatino Linotype",
+    "Tajawal", "Didact Gothic", "MV Boli"
+]

@@ -162,6 +162,158 @@ class TestNeedsFixingDeepVerify(unittest.TestCase):
             res = ChatbotApp.switch_user(self.app, "PrivateUser")
             self.assertFalse(res)
 
+    def test_persona_label_message_level_grounding(self):
+
+        """Test that _get_message_persona_label prevents Cecilia from overwriting Serenity Lvls 1-6."""
+        # Active slider is Level 7 (Cecilia)
+        self.app.active_persona_level = 7
+        self.app.is_cecilia_active = True
+        self.app._get_persona_label = lambda: "Cecilia" if self.app.active_persona_level >= 7 else "Serenity"
+
+        # Turn 1: Level 3 Serenity turn
+        m_lvl3 = {"role": "assistant", "content": "Hello, I am Serenity.", "level": 3}
+        self.assertEqual(ChatbotApp._get_message_persona_label(self.app, m_lvl3), "Serenity")
+
+        # Turn 2: Explicit Serenity persona tag
+        m_serenity = {"role": "assistant", "content": "I am here.", "persona": "Serenity"}
+        self.assertEqual(ChatbotApp._get_message_persona_label(self.app, m_serenity), "Serenity")
+
+        # Turn 3: Level 7 turn
+        m_lvl7 = {"role": "assistant", "content": "Analysis ready.", "level": 7}
+        self.assertEqual(ChatbotApp._get_message_persona_label(self.app, m_lvl7), "Cecilia")
+
+        # Turn 4: Explicit Cecilia persona tag
+        m_cecilia = {"role": "assistant", "content": "Calculated.", "persona": "Cecilia"}
+        self.assertEqual(ChatbotApp._get_message_persona_label(self.app, m_cecilia), "Cecilia")
+
+        # Turn 5: Legacy turn without level or persona (falls back to UI active label when file path unknown)
+        m_legacy = {"role": "assistant", "content": "Legacy turn."}
+        self.assertEqual(ChatbotApp._get_message_persona_label(self.app, m_legacy), "Cecilia")
+
+        # Turn 6: File path context grounding: sub-7 file forces Serenity even when slider is Cecilia
+        sub7_path = "C:/Users/test/History/model_lvl3.history.encz"
+        self.assertEqual(ChatbotApp._get_message_persona_label(self.app, m_legacy, file_path=sub7_path), "Serenity")
+
+        # Turn 7: Sub-7 file with corrupted Cecilia persona tag is safely restored to Serenity
+        self.assertEqual(ChatbotApp._get_message_persona_label(self.app, m_cecilia, file_path=sub7_path), "Serenity")
+
+        # Turn 8: Level 7 file grounds legacy turn to Cecilia
+        lvl7_path = "C:/Users/test/History/model_lvl7.history.jsonz"
+        self.assertEqual(ChatbotApp._get_message_persona_label(self.app, m_legacy, file_path=lvl7_path), "Cecilia")
+
+    def test_multi_format_tool_calling_all_models(self):
+        """Test tool parsing across all models and formats present in S:/LLM."""
+        from System.tool_registry import GemmaToolRegistry
+        reg = GemmaToolRegistry(chatbot_app=None)
+
+        # 1. Python PTC (Gemma-4 / diffusiongemma)
+        ptc = "```python\nweb_search(query='quantum computing')\n```"
+        calls = reg.parse_tool_calls(ptc)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "web_search")
+        self.assertEqual(calls[0][1].get("query"), "quantum computing")
+
+        # 2. Nemotron XML (NVIDIA-Nemotron-3.5-Lightning)
+        nemotron = "<tool_call>\n<function=web_search>\n<parameter=query>\nsuperconductors\n</parameter>\n</function>\n</tool_call>"
+        calls = reg.parse_tool_calls(nemotron)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "web_search")
+        self.assertEqual(calls[0][1].get("query"), "superconductors")
+
+        # 3. MiniCPM XML (MiniCPM5-2B / Sharp-MiniCPM5)
+        minicpm = '<function name="read_file">\n<param name="path">README.md</param>\n</function>'
+        calls = reg.parse_tool_calls(minicpm)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "read_file")
+        self.assertEqual(calls[0][1].get("path"), "README.md")
+
+        # 4. Spark-X2.5 XML (Spark-X2.5-4B)
+        spark = "<tool_call>web_search<arg_key>query</arg_key><arg_value>neural scaling laws</arg_value></tool_call>"
+        calls = reg.parse_tool_calls(spark)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "web_search")
+        self.assertEqual(calls[0][1].get("query"), "neural scaling laws")
+
+        # 5. Olmo-3 JSON calls (Olmo-3-7B / 32B)
+        olmo = '<function_calls>[{"name": "web_search", "arguments": {"query": "deep learning architectures"}}]</function_calls>'
+        calls = reg.parse_tool_calls(olmo)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "web_search")
+        self.assertEqual(calls[0][1].get("query"), "deep learning architectures")
+
+        # 6. Mistral [TOOL_CALLS] (Mistral-Small-24B)
+        mistral = '[TOOL_CALLS] [{"name": "web_search", "arguments": {"query": "mixture of experts"}}]'
+        calls = reg.parse_tool_calls(mistral)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "web_search")
+        self.assertEqual(calls[0][1].get("query"), "mixture of experts")
+
+        # 7. Tag format (<ctrl42>call:name{...})
+        tag = '<ctrl42>call:web_search{"query": "antigravity"}'
+        calls = reg.parse_tool_calls(tag)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "web_search")
+        self.assertEqual(calls[0][1].get("query"), "antigravity")
+
+
+    def test_slash_n_cleaning_and_config_cleanup(self):
+        """Verify literal /n newline artifact cleanup and orphaned mid/mmproj config cleanup."""
+        from System.vision_handler import VisionHandler
+        raw = "<|channel>thought\nReasoning step.<channel|>\nFirst line./nSecond line./n/nThird line with https://example.com/news/now preserved."
+        think, ans = VisionHandler.split_thoughts_and_answer(raw)
+        self.assertEqual(think, "Reasoning step.")
+        self.assertNotIn("/nSecond", ans)
+        self.assertIn("First line.\nSecond line.\n\nThird line", ans)
+        self.assertIn("https://example.com/news/now", ans)
+
+        synth_cleaned = ChatbotApp._sanitize_synthesis_output(self.app, "Hello there!/nHow can I help?/nSee path/node.")
+        self.assertIn("Hello there!\nHow can I help?", synth_cleaned)
+        self.assertIn("path/node", synth_cleaned)
+
+    def test_halt_process_and_regeneration_prevention(self):
+        """Verify halt stops generation immediately without tool execution or response overwriting."""
+        import threading
+        self.app.state = {"running": True}
+        self.app.stop_process = threading.Event()
+        self.app.text_buffer = "partial response text"
+        self.app.thought_stream_buffer = "partial thought"
+        self.app.process_queue = MagicMock()
+        self.app.thinking_display = MagicMock()
+        self.app._update_ai_message = MagicMock()
+        self.app._update_thought_dropdown = MagicMock()
+        self.app._drain_process_queue = MagicMock()
+        self.app._log_and_display = MagicMock()
+
+        # 1. Trigger halt
+        ChatbotApp.halt_process(self.app)
+        self.assertTrue(self.app.stop_process.is_set())
+        self.assertTrue(self.app.state.get("was_halted"))
+        self.assertFalse(self.app.state.get("running"))
+        self.app._update_ai_message.assert_called_with("partial response text")
+        self.app._update_thought_dropdown.assert_called_with("partial thought")
+
+        # 2. Tool loop bypasses tool execution when stop_process is set
+        self.app.tool_registry = MagicMock()
+        tool_call_text = "send_peer_message(peer_id='test', message='hello')"
+        result = ChatbotApp._run_tool_loop(self.app, tool_call_text, "User prompt", {})
+        self.assertEqual(result, tool_call_text)
+        self.app.tool_registry.execute.assert_not_called()
+
+        # 3. Final synthesis bypasses inference when stop_process is set
+        synth_res = ChatbotApp._perform_final_synthesis(self.app, "User prompt", "some reasoning")
+        self.assertEqual(synth_res, "")
+
+        # 4. _finalize_message preserves chat without deleting on halt
+        hist = tk.Text(self.root)
+        hist.insert("1.0", "Actual response that was halted")
+        self.app.chat_history = hist
+        self.app.state["response_start_idx"] = "1.0"
+        self.app.messages = []
+        self.app._capture_scroll_anchor = MagicMock(return_value=(False, None, None))
+        ChatbotApp._finalize_message(self.app, "User prompt", "", "", error=False, halted=True)
+        self.assertIn("Actual response that was halted", hist.get("1.0", tk.END))
+
 
 if __name__ == "__main__":
     unittest.main()
+

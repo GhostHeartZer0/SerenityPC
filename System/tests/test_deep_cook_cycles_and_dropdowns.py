@@ -224,6 +224,8 @@ class TestDeepCookCyclesAndDropdowns(unittest.TestCase):
         app.state = {}
         app.config = {"scroll_lock_enabled": False}
         app._is_chat_at_bottom = MagicMock(return_value=True)
+        app._capture_scroll_anchor = lambda h: (False, 0.0, "1.0")
+        app._restore_or_scroll_bottom = lambda *a, **k: None
 
         # 1. Start Cycle 1
         msg_cyc = {"ctype": "cycle", "cnum": 1, "dnum": 0, "title": "Cycle 1: Plan"}
@@ -318,6 +320,192 @@ class TestDeepCookCyclesAndDropdowns(unittest.TestCase):
             app.current_model_tier = "transcendent"
             ChatbotApp.model_swap(app, target_level=6, target_tier="deep_cook")
             self.assertEqual(app.current_model_tier, "deep_cook")
+
+    def test_split_deep_cook_thought_and_output(self):
+        """Thought channel prefix is stripped when post-closer output exists, while <think>-only steps are preserved."""
+        from main import ChatbotApp
+        raw_split = "<|channel>thought\nInternal meta check\n<channel|>Concrete findings here."
+        thought, out = ChatbotApp._split_deep_cook_thought_and_output(raw_split)
+        self.assertEqual(thought, "Internal meta check")
+        self.assertEqual(out, "Concrete findings here.")
+
+        think_only = "<think>\nOnly inside think block\n</think>"
+        thought2, out2 = ChatbotApp._split_deep_cook_thought_and_output(think_only)
+        self.assertEqual(thought2, "")
+        self.assertEqual(out2, "Only inside think block")
+
+    def test_per_call_tool_dropdown_inline_deep_cook_nesting_and_finalize_preservation(self):
+        """Verify T1 per-call tool dropdowns render, toggle, nest under cycles, and survive _finalize_message."""
+        from main import ChatbotApp
+        chat = tk.Text(self.root)
+        app = MagicMock(spec=ChatbotApp)
+        app.chat_history = chat
+        app.root = self.root
+        app.fonts = {"stats": ("Segoe UI", 8), "log": ("Consolas", 9)}
+        app.state = {"deep_cook": False, "response_started": False, "was_halted": False}
+        app.config = {"scroll_lock_enabled": False, "media_rendering": 0, "thinking_checkbox": True, "reasoning_strength": "medium"}
+        app.active_persona_level = 2
+        app.messages = []
+        app.dirs = {"System": "System"}
+        app.thinking_display = None
+        app.semantic_vault = None
+        app._capture_scroll_anchor = lambda h: (True, None, None)
+        app._restore_or_scroll_bottom = lambda *a, **k: None
+        app._get_persona_label = lambda: "Serenity (Lvl 2)"
+        app._append_to_chat = lambda txt, tag: ChatbotApp._append_to_chat(app, txt, tag)
+        app._format_tool_arg_preview = ChatbotApp._format_tool_arg_preview
+        app._sanitize_synthesis_output = lambda t: t
+        app.set_ui_state = MagicMock()
+        app.set_avatar_state = MagicMock()
+        app.save_history = MagicMock()
+
+        # 1. Normal chat inline tool call dropdown (success, cached, failed)
+        ChatbotApp._handle_tool_call_ui_start(app, {
+            "call_id": "tc1",
+            "call_name": "read_file",
+            "args": {"path": r"C:\dir\GGUForge\moe_dual_refined_summary.json"},
+        })
+        ChatbotApp._handle_tool_call_ui_done(app, {
+            "call_id": "tc1",
+            "call_name": "read_file",
+            "args": {"path": r"C:\dir\GGUForge\moe_dual_refined_summary.json"},
+            "result": '{"experts": 4, "status": "ok"}',
+            "ok": True,
+            "cached": False,
+            "duration_ms": 12.4,
+        })
+        info = app.state["tool_call_ui_registry"]["tc1"]
+        btn = info["btn"]
+        self.assertEqual(btn.cget("text"), "[+] 🔧 read_file (moe_dual_refined_summary.json) ✓ 12ms")
+        self.assertEqual(str(chat.tag_cget(info["tag"], "elide")), "1")
+        btn.invoke()
+        self.assertEqual(str(chat.tag_cget(info["tag"], "elide")), "0")
+        self.assertIn("[-] 🔧 read_file (moe_dual_refined_summary.json) ✓ 12ms", btn.cget("text"))
+        btn.invoke()
+        self.assertEqual(str(chat.tag_cget(info["tag"], "elide")), "1")
+
+        # Simulate _finalize_message with non-streamed think_log + normal tool call
+        ChatbotApp._finalize_message(app, "read summary", "internal thought", "Here is the summary.", error=False)
+        rendered = chat.get("1.0", tk.END)
+        self.assertIn('{"experts": 4, "status": "ok"}', rendered)
+        self.assertIn("Here is the summary.", rendered)
+        self.assertTrue(btn.winfo_exists())
+        self.assertFalse(app.state["tool_calls_rendered"])
+
+        # 2. Deep Cook cycle nesting and collapse reset
+        app.state["deep_cook"] = True
+        ChatbotApp._handle_deep_cook_ui_start(app, {"ctype": "cycle", "cnum": 1, "dnum": 0, "title": "Cycle 1: Plan"})
+        cyc_tag = "dc_cycle_1_0"
+        ChatbotApp._handle_tool_call_ui_start(app, {
+            "call_id": "tc_dc",
+            "call_name": "list_directory",
+            "args": {"path": r"C:\dir\GGUForge"},
+            "nested_cyc_tag": cyc_tag,
+        })
+        ChatbotApp._handle_tool_call_ui_done(app, {
+            "call_id": "tc_dc",
+            "call_name": "list_directory",
+            "args": {"path": r"C:\dir\GGUForge"},
+            "result": "Directory: C:\\dir\\GGUForge\n[FILE] a.json",
+            "ok": True,
+            "cached": True,
+            "duration_ms": 0.0,
+        })
+        dc_info = app.state["tool_call_ui_registry"]["tc_dc"]
+        self.assertIn(dc_info["tag"], app.state[f"nested_tags_{cyc_tag}"])
+        self.assertIn("↺ 0ms", dc_info["btn"].cget("text"))
+
+        # Expand tool dropdown then collapse parent cycle -> nested tool button resets to [+]
+        dc_info["btn"].invoke()
+        self.assertTrue(dc_info["btn"].cget("text").startswith("[-] "))
+        mock_cyc_btn = MagicMock()
+        ChatbotApp.toggle_cyc_tag(app, cyc_tag, btn=mock_cyc_btn, cnum=1)
+        ChatbotApp.toggle_cyc_tag(app, cyc_tag, btn=mock_cyc_btn, cnum=1)
+        self.assertTrue(dc_info["btn"].cget("text").startswith("[+] "))
+
+    def test_deep_cook_analyze_before_plan_auto_exit_no_lvl2_otl_and_stagnation_break(self):
+        """Verify Analyze-first early exit, Cycle 1 auto exit, no Lvl 2 OTL delegation, and stagnation break."""
+        import queue
+        from main import ChatbotApp
+
+        def _make_fake_stream(text):
+            return iter([{"choices": [{"delta": {"content": text}, "finish_reason": "stop"}]}])
+
+        def _make_app(cycles_cfg="auto"):
+            app = MagicMock(spec=ChatbotApp)
+            app.stop_process = threading.Event()
+            app.process_queue = queue.Queue()
+            app.active_persona_level = 2
+            app.current_model_tier = "deep_cook"
+            app.model_path = "gemma-4.gguf"
+            app.config = {
+                "deep_cook_cycles": cycles_cfg,
+                "deep_cook_agent_coop": "otl_per_step",
+                "delegation_enabled": True,
+                "deep_cook_formatting": "per_step",
+                "expanded_file_access": True,
+            }
+            app.kv_manager = None
+            app.tool_registry = MagicMock()
+            app.tool_registry.get_gemma_declarations.return_value = ""
+            app.tool_registry.parse_tool_calls.return_value = []
+            app._get_inference_params.return_value = {"temperature": 0.6}
+            app._ensure_model_chat_format = MagicMock()
+            app._auto_scale_context_as_needed = MagicMock(return_value=False)
+            app._detect_repetition = MagicMock(return_value=False)
+            app._clean_deep_cook_step_text = ChatbotApp._clean_deep_cook_step_text
+            app._split_deep_cook_thought_and_output = ChatbotApp._split_deep_cook_thought_and_output
+            app._extract_cycle_plan_points = ChatbotApp._extract_cycle_plan_points
+            app._perform_final_synthesis = MagicMock(return_value="Final deep dive output.")
+            app.model = MagicMock()
+            return app
+
+        # Subcase A: Analyze returns [READY TO ANSWER] -> skips Plan/Critique, no OTL subagent status
+        app_a = _make_app("auto")
+        app_a.model.create_chat_completion.side_effect = [
+            _make_fake_stream("<|channel>thought\nmeta\n<channel|>Observed files A, B. [READY TO ANSWER]")
+        ]
+        with patch("main.HardwareProfile"):
+            ChatbotApp._generation_worker_deep_cook(app_a, r'"C:\dir\GGUForge" deep dive')
+        events_a = []
+        while not app_a.process_queue.empty():
+            events_a.append(app_a.process_queue.get())
+        self.assertEqual(app_a.model.create_chat_completion.call_count, 1)
+        self.assertFalse(any(e.get("status") == "subagent_status" for e in events_a))
+        self.assertTrue(any(e.get("status") == "session_finished" for e in events_a))
+
+        # Subcase B: Cycle 1 Assessment hits [TOTAL RESOLUTION] in auto mode -> exits Cycle 1 without Cycle 2
+        app_b = _make_app("auto")
+        app_b.model.create_chat_completion.side_effect = [
+            _make_fake_stream("Need to inspect moe_dual_refined_summary.json next."),
+            _make_fake_stream("Cycle 1 Plan:\n1. Inspect moe_dual_refined_summary.json and summarize metrics.\n2. Summarize directory architecture from observed JSONs."),
+            _make_fake_stream("Read moe_dual_refined_summary.json: 4 experts routed cleanly with balanced throughput metrics across domains."),
+            _make_fake_stream("Summarized architecture: GGUForge tracks recipe runs, dr_zero evaluations, and MoE topology proposals cleanly."),
+            _make_fake_stream("1. Verified Findings: Summary & layout verified.\n2. Remaining Gaps: None\n3. [TOTAL RESOLUTION]"),
+        ]
+        with patch("main.HardwareProfile"):
+            ChatbotApp._generation_worker_deep_cook(app_b, r'"C:\dir\GGUForge" deep dive')
+        events_b = []
+        while not app_b.process_queue.empty():
+            events_b.append(app_b.process_queue.get())
+        self.assertEqual(app_b.model.create_chat_completion.call_count, 5)
+        self.assertFalse(any(e.get("status") == "subagent_status" for e in events_b))
+
+        # Subcase C: Stagnation guard breaks repeated stall drafts early even when fixed cycles=3
+        app_c = _make_app("3")
+        stall_txt = "Understood, Chris. Standing by for your command to inspect the GGUForge directory and execute verification."
+        app_c.model.create_chat_completion.side_effect = [
+            _make_fake_stream("Initial request inspection: need to inspect files in GGUForge."),
+            _make_fake_stream("Cycle 1 Plan:\n1. Inspect comparison_420m_vs_lfm3.json metrics.\n2. Inspect moe_topology_proposal.json."),
+            _make_fake_stream(stall_txt),
+            _make_fake_stream(stall_txt),  # Redirect still stalls -> stagnation_hits = 1
+            _make_fake_stream(stall_txt),
+            _make_fake_stream(stall_txt),  # Redirect still stalls -> stagnation_hits = 2 -> break early
+        ]
+        with patch("main.HardwareProfile"):
+            ChatbotApp._generation_worker_deep_cook(app_c, r'"C:\dir\GGUForge" deep dive')
+        self.assertEqual(app_c.model.create_chat_completion.call_count, 6)
+        self.assertTrue(app_c._perform_final_synthesis.called)
 
 
 if __name__ == "__main__":
