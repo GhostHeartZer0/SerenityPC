@@ -370,7 +370,7 @@ class MediaGenerator:
         max_r = int(min(w, h) * 0.28)
 
         if is_diagram or "-->" in prompt or "graph " in prompt.lower():
-            nodes = [s.strip() for s in re.split(r"-->|->|\n|;", prompt) if s.strip()][:6]
+            nodes = [s.strip() for s in re.split(r"--!>|-->|->|\n|;", prompt) if s.strip()][:6]
             if not nodes:
                 nodes = ["Input Prompt", "Serenity Engine", "Visual Output"]
             box_w = min(int(w * 0.68), 360)
