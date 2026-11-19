@@ -256,6 +256,63 @@ class TestNeedsFixingDeepVerify(unittest.TestCase):
         self.assertEqual(calls[0][1].get("query"), "antigravity")
 
 
+    def test_slash_n_cleaning_and_config_cleanup(self):
+        """Verify literal /n newline artifact cleanup and orphaned mid/mmproj config cleanup."""
+        from System.vision_handler import VisionHandler
+        raw = "<|channel>thought\nReasoning step.<channel|>\nFirst line./nSecond line./n/nThird line with https://example.com/news/now preserved."
+        think, ans = VisionHandler.split_thoughts_and_answer(raw)
+        self.assertEqual(think, "Reasoning step.")
+        self.assertNotIn("/nSecond", ans)
+        self.assertIn("First line.\nSecond line.\n\nThird line", ans)
+        self.assertIn("https://example.com/news/now", ans)
+
+        synth_cleaned = ChatbotApp._sanitize_synthesis_output(self.app, "Hello there!/nHow can I help?/nSee path/node.")
+        self.assertIn("Hello there!\nHow can I help?", synth_cleaned)
+        self.assertIn("path/node", synth_cleaned)
+
+    def test_halt_process_and_regeneration_prevention(self):
+        """Verify halt stops generation immediately without tool execution or response overwriting."""
+        import threading
+        self.app.state = {"running": True}
+        self.app.stop_process = threading.Event()
+        self.app.text_buffer = "partial response text"
+        self.app.thought_stream_buffer = "partial thought"
+        self.app.process_queue = MagicMock()
+        self.app.thinking_display = MagicMock()
+        self.app._update_ai_message = MagicMock()
+        self.app._update_thought_dropdown = MagicMock()
+        self.app._drain_process_queue = MagicMock()
+        self.app._log_and_display = MagicMock()
+
+        # 1. Trigger halt
+        ChatbotApp.halt_process(self.app)
+        self.assertTrue(self.app.stop_process.is_set())
+        self.assertTrue(self.app.state.get("was_halted"))
+        self.assertFalse(self.app.state.get("running"))
+        self.app._update_ai_message.assert_called_with("partial response text")
+        self.app._update_thought_dropdown.assert_called_with("partial thought")
+
+        # 2. Tool loop bypasses tool execution when stop_process is set
+        self.app.tool_registry = MagicMock()
+        tool_call_text = "send_peer_message(peer_id='test', message='hello')"
+        result = ChatbotApp._run_tool_loop(self.app, tool_call_text, "User prompt", {})
+        self.assertEqual(result, tool_call_text)
+        self.app.tool_registry.execute.assert_not_called()
+
+        # 3. Final synthesis bypasses inference when stop_process is set
+        synth_res = ChatbotApp._perform_final_synthesis(self.app, "User prompt", "some reasoning")
+        self.assertEqual(synth_res, "")
+
+        # 4. _finalize_message preserves chat without deleting on halt
+        hist = tk.Text(self.root)
+        hist.insert("1.0", "Actual response that was halted")
+        self.app.chat_history = hist
+        self.app.state["response_start_idx"] = "1.0"
+        self.app.messages = []
+        ChatbotApp._finalize_message(self.app, "User prompt", "", "", error=False, halted=True)
+        self.assertIn("Actual response that was halted", hist.get("1.0", tk.END))
+
+
 if __name__ == "__main__":
     unittest.main()
 

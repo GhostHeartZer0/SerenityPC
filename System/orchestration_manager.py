@@ -356,9 +356,13 @@ class UtilityDispatchEngine:
                     selected = False
                     rationale = f"Skipped: Vector grounding insufficient in All-Subagent mode (Domain unaligned or Net: {net_u:.3f} < 0.05)"
             elif net_u >= cls.DISPATCH_THRESHOLD:
-                selected = True
-                selected_ids.append(agent_id)
-                rationale = f"Selected: Net Utility {net_u:.3f} >= Threshold {cls.DISPATCH_THRESHOLD}"
+                if agent_id == 5 and profile.reasoning_complexity < 0.55:
+                    selected = False
+                    rationale = f"Skipped: Lvl 5 high-gate (Reasoning {profile.reasoning_complexity:.3f} < 0.55)"
+                else:
+                    selected = True
+                    selected_ids.append(agent_id)
+                    rationale = f"Selected: Net Utility {net_u:.3f} >= Threshold {cls.DISPATCH_THRESHOLD}"
             else:
                 selected = False
                 rationale = f"Skipped: Net Utility {net_u:.3f} < Threshold {cls.DISPATCH_THRESHOLD}"
@@ -386,7 +390,12 @@ class UtilityDispatchEngine:
 
         # Fallback: if minimal mode and no agent crossed threshold, dispatch minimal best agent
         if not selected_ids and allowed_agents:
-            permitted_scores = [s for s in scores if s.agent_id in allowed_agents]
+            permitted_scores = [
+                s for s in scores
+                if s.agent_id in allowed_agents and (s.agent_id != 5 or profile.reasoning_complexity >= 0.45)
+            ]
+            if not permitted_scores:
+                permitted_scores = [s for s in scores if s.agent_id in allowed_agents]
             best = max(permitted_scores, key=lambda s: s.net_utility)
             best.selected = True
             best.rationale += " [Fallback Selected as Best Match]"
@@ -715,7 +724,7 @@ class OrchestrationManager:
                     else:
                         search_obs = f"Fact context for '{clean_query or user_query[:50]}' retrieved."
 
-                    active_ctx.staged_facts.append(search_obs[:500])
+                    active_ctx.staged_facts.append(search_obs[:1500])
                     active_ctx.raw_payload += f"\n{search_obs}"
                     _emit_subagent_dropdown(sub_id, "stream", 2, chunk=f"Findings staged ({len(search_obs)} chars): {search_obs[:240]}")
 
@@ -794,13 +803,38 @@ class OrchestrationManager:
                         {"role": "system", "content": "You are Serenity Lvl 5 (The Brains). Apply deep logical deduction to resolve the problem with verifiable precision. Deliver core deductions directly."},
                         {"role": "user", "content": prompt_ctx}
                     ]
+                    streamed_chunks: List[str] = []
+                    _tok_buf = ""
+
+                    def _stream_lvl5(tok: str):
+                        nonlocal _tok_buf
+                        if not tok:
+                            return
+                        _tok_buf += tok
+                        if "\n" in _tok_buf or len(_tok_buf) >= 120:
+                            out = _tok_buf.strip()
+                            _tok_buf = ""
+                            if out:
+                                streamed_chunks.append(out)
+                                _emit_subagent_dropdown(sub_id, "stream", 5, chunk=out)
+
                     if hasattr(self.app, "_run_blocking_inference"):
                         try:
-                            reasoning_res = self.app._run_blocking_inference(reasoning_prompt, params)
+                            import inspect
+                            sig = inspect.signature(self.app._run_blocking_inference)
+                            if "stream_callback" in sig.parameters:
+                                reasoning_res = self.app._run_blocking_inference(reasoning_prompt, params, stream_callback=_stream_lvl5)
+                            else:
+                                reasoning_res = self.app._run_blocking_inference(reasoning_prompt, params)
                         except Exception as e:
                             reasoning_res = f"Deduction established: {e}"
                     else:
                         reasoning_res = f"Deduction for '{user_query}' derived logically."
+
+                    if _tok_buf.strip():
+                        rem = _tok_buf.strip()
+                        streamed_chunks.append(rem)
+                        _emit_subagent_dropdown(sub_id, "stream", 5, chunk=rem)
 
                     # Sanitize subagent thoughts to isolate internal reasoning from final deduction
                     try:
@@ -808,12 +842,14 @@ class OrchestrationManager:
                         sub_think, sub_ans = VisionHandler.split_thoughts_and_answer(reasoning_res)
                         if sub_think:
                             _log_diag(f"[SUBAGENT LVL 5 THOUGHT LOG]:\n{sub_think}")
-                            _emit_subagent_dropdown(sub_id, "stream", 5, chunk=f"[Thinking]: {sub_think[:300]}")
+                            if not streamed_chunks:
+                                _emit_subagent_dropdown(sub_id, "stream", 5, chunk=f"[Thinking]: {sub_think[:300]}")
                         clean_res = sub_ans if sub_ans else sub_think
                     except Exception:
                         clean_res = reasoning_res
 
-                    _emit_subagent_dropdown(sub_id, "stream", 5, chunk=clean_res[:500])
+                    if not streamed_chunks:
+                        _emit_subagent_dropdown(sub_id, "stream", 5, chunk=clean_res[:500])
                     active_ctx.reasoning_steps.append(clean_res)
                     next_target = execution_queue[0] if execution_queue else orchestrator_level
                     report = HandoffReport(

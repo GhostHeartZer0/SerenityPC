@@ -270,6 +270,45 @@ class TestSettingsReorganization(unittest.TestCase):
         self.assertIn("autocont", radio_values)
         self.assertIn("respond", radio_values)
 
+        # Check KV / Context Auto-Scaling options: step_up, 2x, fit, ask, off
+        self.assertIn("step_up", radio_values)
+        self.assertIn("2x", radio_values)
+        self.assertIn("fit", radio_values)
+        self.assertIn("ask", radio_values)
+
+    def test_kv_ctx_auto_scaling_logic(self):
+        from System.kv_manager import KVManager
+        # Step-Up mode
+        self.assertEqual(KVManager.compute_scaled_context(4096, 4500, mode="step_up"), 6144)
+        self.assertEqual(KVManager.compute_scaled_context(4096, 10000, mode="step_up"), 12288)
+        # 2x mode
+        self.assertEqual(KVManager.compute_scaled_context(4096, 4500, mode="2x"), 8192)
+        self.assertEqual(KVManager.compute_scaled_context(4096, 10000, mode="2x"), 16384)
+        # Fit mode
+        self.assertEqual(KVManager.compute_scaled_context(4096, 5000, mode="fit"), 6144)
+        self.assertEqual(KVManager.compute_scaled_context(4096, 20000, mode="fit"), 24576)
+
+    def test_session_only_context_auto_scale_does_not_mutate_saved_config(self):
+        from main import ChatbotApp
+        dummy = type("DummyApp", (), {
+            "current_model_tier": "low",
+            "active_persona_level": 3,
+            "context_size_config": {"low": 4096},
+            "session_context_overrides": {},
+            "config": {"ctx_auto_scale_mode": "step_up"},
+            "model": type("DummyModel", (), {"n_ctx": lambda self: 4096})(),
+            "model_path": "",
+            "kv_manager": None,
+            "process_queue": None,
+        })()
+        dummy._get_effective_context_size = lambda tier=None, level=None: ChatbotApp._get_effective_context_size(dummy, tier, level)
+        dummy._expand_context_config = lambda tier, req, persist=False: ChatbotApp._expand_context_config(dummy, tier, req, persist)
+
+        scaled = ChatbotApp._auto_scale_context_as_needed(dummy, 4500, tier="low", level=3)
+        self.assertTrue(scaled)
+        self.assertEqual(dummy.context_size_config["low"], 4096)  # Preserves base config
+        self.assertEqual(dummy._get_effective_context_size("low", 3), 6144)  # Session override scaled
+
     def test_template_apply_returns_to_modify_mode(self):
         win = tk.Toplevel(self.root)
         parent = tk.Frame(win)

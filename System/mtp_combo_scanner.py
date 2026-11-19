@@ -256,7 +256,7 @@ def open_mtp_combos_dialog(parent_win, app):
         for item in tree.get_children():
             tree.delete(item)
 
-        # 1. Search model's containing folder FIRST, then parent, then model_paths, then custom, then S:/LLM
+        # 1. Search model's containing folder FIRST, then parent, then model_paths, then custom, then workspace Models
         scan_dirs = []
         cur_p = getattr(app, "model_path", "") or ""
         if cur_p and os.path.exists(cur_p):
@@ -273,7 +273,6 @@ def open_mtp_combos_dialog(parent_win, app):
 
         if hasattr(app, "dirs") and "Models" in app.dirs:
             scan_dirs.append(app.dirs["Models"])
-        scan_dirs.append("S:/LLM")
 
         # Deduplicate while preserving first-seen order (folder of active model searched first)
         seen_d = set()
@@ -370,7 +369,7 @@ def open_mtp_combos_dialog(parent_win, app):
             return
         idx = int(selected[0])
         c = combos_data[idx]
-        init_dir = os.path.dirname(c["target"]["path"]) if os.path.exists(c["target"]["path"]) else (app.dirs.get("Models") or "S:/LLM")
+        init_dir = os.path.dirname(c["target"]["path"]) if os.path.exists(c["target"]["path"]) else (app.dirs.get("Models") or getattr(app, "script_dir", os.getcwd()))
         manual_path = filedialog.askopenfilename(
             parent=win,
             title=f"Select Companion Drafter for {c['target']['filename']}",

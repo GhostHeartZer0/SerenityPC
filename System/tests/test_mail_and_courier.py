@@ -159,8 +159,8 @@ class TestSerenityMailAndCourier(unittest.TestCase):
                 "timestamp": 1760000000000,
             }
         ]
-        bmb_b64 = SerenityMailCrypto.export_legacy_bmb(turns, session_id="s25_plus")
-        parsed = SerenityMailCrypto.decrypt_smp(bmb_b64)
+        bmb_b64 = SerenityMailCrypto.export_legacy_bmb(turns, session_id="s25_plus", passphrase="test-bmb-pass")
+        parsed = SerenityMailCrypto.decrypt_smp(bmb_b64, passphrase="test-bmb-pass")
         self.assertEqual(parsed["type"], "brainuke_messageboard_packet")
         self.assertEqual(len(parsed["turns"]), 1)
 
@@ -302,7 +302,7 @@ class TestSerenityMailAndCourier(unittest.TestCase):
         reg = GemmaToolRegistry(app)
 
         # Pair a mock friend
-        reg.courier.mailbox.register_peer(peer_id="jesse_1", display_name="Jesse")
+        reg.courier.mailbox.register_peer(peer_id="jesse_1", display_name="Jesse", shared_passphrase="test-share-pass")
 
         # Multi-line PTC call with triple quotes
         ptc_block = '''```python
@@ -326,7 +326,7 @@ Line 2: Subagent dropdowns streaming cleanly."""
             )
         )
         self.assertEqual(share_res["status"], "queued_store_and_forward")
-        decrypted = SerenityMailCrypto.decrypt_smp(share_res["smp_payload"])
+        decrypted = SerenityMailCrypto.decrypt_smp(share_res["smp_payload"], passphrase="test-share-pass")
         shared_turns = decrypted["payload"]["attachment"]["turns"]
         self.assertEqual(len(shared_turns), 2)
         self.assertNotIn("<thought>", shared_turns[1]["content"])

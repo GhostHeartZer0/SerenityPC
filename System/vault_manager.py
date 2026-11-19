@@ -9,11 +9,25 @@ import os
 import sys
 import json
 import zlib
+import hmac
 import shutil
 import secrets
 import hashlib
 import datetime
 from typing import Optional, Dict, Any, List, Tuple
+
+try:
+    from System.serenity_utils import safe_zlib_decompress
+except ImportError:
+    try:
+        from serenity_utils import safe_zlib_decompress
+    except ImportError:
+        def safe_zlib_decompress(compressed: bytes, max_bytes: int = 50 * 1024 * 1024) -> bytes:
+            decomp = zlib.decompressobj()
+            out = decomp.decompress(compressed, max_bytes)
+            if decomp.unconsumed_tail:
+                raise ValueError("Compressed payload exceeds maximum safe decompression size.")
+            return out + decomp.flush()
 
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -43,6 +57,7 @@ class VaultManager:
     PBKDF2_ITERATIONS = 250_000
     SALT_SIZE = 16
     NONCE_SIZE = 12
+    MIN_PASSWORD_LENGTH = 8
     HEADER_MAGIC = b"SERENITY_ENCZ_V1"
 
     def __init__(self, history_dir: str, state_dir: str):
@@ -96,8 +111,8 @@ class VaultManager:
         """Initializes a new vault state for a newly created profile with its own password."""
         if not self.is_crypto_available():
             return False, "Cryptography package (AESGCM) is not available."
-        if not password or len(password) < 4:
-            return False, "Password must be at least 4 characters long."
+        if not password or len(password) < self.MIN_PASSWORD_LENGTH:
+            return False, f"Password must be at least {self.MIN_PASSWORD_LENGTH} characters long."
 
         u_dir_abs = os.path.abspath(user_dir)
         h_dir_abs = os.path.abspath(history_dir)
@@ -176,7 +191,7 @@ class VaultManager:
             if len(env_val) == 64 and all(c in "0123456789abcdefABCDEF" for c in env_val):
                 candidate_key = bytes.fromhex(env_val)
                 verifier = self._compute_verifier(candidate_key)
-                if verifier == self._state.get("verifier_hash", ""):
+                if hmac.compare_digest(verifier, str(self._state.get("verifier_hash", ""))):
                     self._session_key = candidate_key
                     self._is_locked = False
                     print("[VAULT] Serenity Vault unlocked automatically via .env storage key.")
@@ -270,12 +285,18 @@ class VaultManager:
                     ts_candidates.append(dt.timestamp())
                 except Exception:
                     pass
-        for path_cand in (self.state_file, os.path.join(self.state_dir, "config.json"), self.state_dir):
-            if path_cand and os.path.exists(path_cand):
-                try:
-                    ts_candidates.append(os.path.getctime(path_cand))
-                except Exception:
-                    pass
+        if self.state_dir != getattr(self, "default_state_dir", self.state_dir):
+            for path_cand in (self.state_file, os.path.join(self.state_dir, "config.json")):
+                if path_cand and os.path.exists(path_cand):
+                    try:
+                        ts_candidates.append(os.path.getctime(path_cand))
+                    except Exception:
+                        pass
+        elif self.state_file and os.path.exists(self.state_file):
+            try:
+                ts_candidates.append(os.path.getctime(self.state_file))
+            except Exception:
+                pass
         if not ts_candidates:
             return 0.0
         oldest_ts = min(ts_candidates)
@@ -329,9 +350,7 @@ class VaultManager:
         key = self.derive_key(password, salt)
         verifier = self._compute_verifier(key)
         
-        if hmac_compare := getattr(hashlib, 'compare_digest', None):
-            return hmac_compare(verifier, stored_verifier)
-        return verifier == stored_verifier
+        return hmac.compare_digest(verifier, stored_verifier)
 
     def unlock(self, password: str) -> bool:
         """Attempts to unlock the vault and caches the AES master key in session memory."""
@@ -351,10 +370,7 @@ class VaultManager:
         key = self.derive_key(password, salt)
         verifier = self._compute_verifier(key)
 
-        if hmac_compare := getattr(hashlib, 'compare_digest', None):
-            valid = hmac_compare(verifier, stored_verifier)
-        else:
-            valid = (verifier == stored_verifier)
+        valid = hmac.compare_digest(verifier, stored_verifier)
 
         if valid:
             self._session_key = key
@@ -378,8 +394,8 @@ class VaultManager:
         if not self.is_crypto_available():
             return False, "Cryptography package (AESGCM) is not available."
 
-        if not new_password or len(new_password) < 4:
-            return False, "Master password must be at least 4 characters long."
+        if not new_password or len(new_password) < self.MIN_PASSWORD_LENGTH:
+            return False, f"Master password must be at least {self.MIN_PASSWORD_LENGTH} characters long."
 
         was_enabled = self.is_lock_enabled()
         old_key = self._session_key
@@ -427,8 +443,8 @@ class VaultManager:
         if not self.is_crypto_available():
             return False, "Cryptography package (AESGCM) is not available."
 
-        if not password or len(password) < 4:
-            return False, "Master password must be at least 4 characters long."
+        if not password or len(password) < self.MIN_PASSWORD_LENGTH:
+            return False, f"Master password must be at least {self.MIN_PASSWORD_LENGTH} characters long."
 
         if not self.is_lock_enabled():
             return self.set_password(password)
@@ -546,10 +562,10 @@ class VaultManager:
             if self.is_locked() or not self._session_key:
                 raise PermissionError("Vault is locked. Master password required to read encrypted archive.")
             decrypted_compressed = self.decrypt_data(raw_data)
-            decompressed = zlib.decompress(decrypted_compressed).decode("utf-8")
+            decompressed = safe_zlib_decompress(decrypted_compressed).decode("utf-8")
             return json.loads(decompressed)
         else:
-            decompressed = zlib.decompress(raw_data).decode("utf-8")
+            decompressed = safe_zlib_decompress(raw_data).decode("utf-8")
             return json.loads(decompressed)
 
     def write_history_messages(self, path: str, messages: List[Dict[str, Any]]):
@@ -606,6 +622,7 @@ class VaultManager:
                         all_files_rel.append(rel_path)
 
             if not all_files_rel:
+                shutil.rmtree(backup_dir, ignore_errors=True)
                 return True, "No history files to migrate."
 
             print(f"[VAULT] Backing up {len(all_files_rel)} history archives to {backup_dir}...")
@@ -627,11 +644,11 @@ class VaultManager:
                 # A. Obtain original decompressed JSON content
                 if rel_f.endswith(".encz") or raw_data.startswith(self.HEADER_MAGIC):
                     if not source_key:
-                        raise ValueError(f"Cannot decrypt {f} without source master key.")
+                        raise ValueError(f"Cannot decrypt {rel_f} without source master key.")
                     decrypted_raw = self.decrypt_data(raw_data, custom_key=source_key)
-                    decompressed_str = zlib.decompress(decrypted_raw).decode("utf-8")
+                    decompressed_str = safe_zlib_decompress(decrypted_raw).decode("utf-8")
                 else:
-                    decompressed_str = zlib.decompress(raw_data).decode("utf-8")
+                    decompressed_str = safe_zlib_decompress(raw_data).decode("utf-8")
 
                 # Verify JSON structure
                 parsed_json = json.loads(decompressed_str)
@@ -646,7 +663,7 @@ class VaultManager:
                     transformed_data = self.encrypt_data(compressed_bytes, custom_key=target_key)
                     
                     # Verify immediately that transformed data can be decrypted and verified
-                    verify_decomp = zlib.decompress(self.decrypt_data(transformed_data, custom_key=target_key)).decode("utf-8")
+                    verify_decomp = safe_zlib_decompress(self.decrypt_data(transformed_data, custom_key=target_key)).decode("utf-8")
                     if verify_decomp != json.dumps(parsed_json):
                         raise ValueError(f"Integrity verification failed for {target_filename}")
                 else:
@@ -655,7 +672,7 @@ class VaultManager:
                     os.makedirs(os.path.dirname(target_path), exist_ok=True)
                     transformed_data = compressed_bytes
                     
-                    verify_decomp = zlib.decompress(transformed_data).decode("utf-8")
+                    verify_decomp = safe_zlib_decompress(transformed_data).decode("utf-8")
                     if verify_decomp != json.dumps(parsed_json):
                         raise ValueError(f"Integrity verification failed for {target_filename}")
 
@@ -672,7 +689,11 @@ class VaultManager:
                 if os.path.exists(old_path):
                     os.remove(old_path)
 
-            print(f"[VAULT] Successfully migrated {len(all_files_rel)} archives (Backup retained at {backup_dir}).")
+            if to_encrypted:
+                shutil.rmtree(backup_dir, ignore_errors=True)
+                print(f"[VAULT] Successfully migrated and verified {len(all_files_rel)} encrypted archives.")
+            else:
+                print(f"[VAULT] Successfully migrated {len(all_files_rel)} archives (Backup retained at {backup_dir}).")
             return True, "Migration completed successfully."
 
         except Exception as e:

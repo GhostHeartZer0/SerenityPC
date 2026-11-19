@@ -1,0 +1,74 @@
+{
+  "lvl1": [
+    {
+      "prompt": "Compute the exact value of (17 * 13) - (84 / 7) and show each intermediate step.",
+      "reference": "17 * 13 = 221, 84 / 7 = 12, and 221 - 12 = 209."
+    },
+    {
+      "prompt": "In Python, explain the difference between a list's `.append(x)` method and `.extend(x)` method when `x` is `[4, 5]`.",
+      "reference": "`.append([4, 5])` adds the list `[4, 5]` as a single nested element at the end, increasing length by 1, whereas `.extend([4, 5])` iterates over `x` and appends `4` and `5` individually, increasing length by 2."
+    },
+    {
+      "prompt": "All squares are rectangles, and no triangles have four sides. Can any square be a triangle? State yes or no and justify briefly.",
+      "reference": "No. Squares are rectangles (four-sided polygons), whereas no triangle has four sides, so the sets are disjoint."
+    },
+    {
+      "prompt": "Return a single JSON object with keys `status` set to `ok` and `count` set to the integer `3`, with no extra prose outside the JSON.",
+      "reference": "{\"status\": \"ok\", \"count\": 3}"
+    }
+  ],
+  "lvl2": [
+    {
+      "prompt": "A train leaves Station A at 08:15 traveling at 80 km/h, and another train leaves Station A on a parallel track at 09:00 traveling in the same direction at 100 km/h. At what time does the faster train catch the slower train?",
+      "reference": "In 45 minutes (0.75 hours), the first train travels 60 km. The relative catch-up speed is 100 - 80 = 20 km/h, so it takes 60 / 20 = 3 hours after 09:00, catching up at 12:00."
+    },
+    {
+      "prompt": "Given Python function `def add_item(val, target=[]): target.append(val); return target`, why does calling `add_item(1)` followed by `add_item(2)` return `[1, 2]`, and how should the signature be fixed?",
+      "reference": "Mutable default arguments are evaluated once at function definition time and shared across calls. Fix by defaulting `target=None` and initializing `if target is None: target = []` inside the function."
+    },
+    {
+      "prompt": "Three switches outside a closed opaque room control three incandescent bulbs inside. You may flip switches any way you like, then open the door once and never touch the switches again. How do you identify which switch controls each bulb?",
+      "reference": "Turn Switch 1 on for 10 minutes, turn it off, turn Switch 2 on, leave Switch 3 off, and enter the room. The lit bulb belongs to Switch 2, the unlit warm bulb belongs to Switch 1, and the unlit cold bulb belongs to Switch 3."
+    },
+    {
+      "prompt": "Identify the worst-case time complexity of looking up a key in a balanced binary search tree (e.g., Red-Black tree) versus a sorted Python list using `bisect_left`.",
+      "reference": "Both lookups run in O(log n) worst-case time, though `bisect_left` on a contiguous array exhibits better cache locality while a balanced BST supports O(log n) worst-case insertions and deletions."
+    }
+  ],
+  "lvl3": [
+    {
+      "prompt": "Analyze why holding a SQLite connection open across nested calls to helper methods opening a second write connection can trigger `database is locked`, and state the structural fix.",
+      "reference": "SQLite permits only one writer transaction at a time per database file. A second connection attempting to write while the outer connection holds a write lock will contend and raise `OperationalError: database is locked`. Fix by completing or closing the outer transaction before calling the second helper, or passing the active connection explicitly."
+    },
+    {
+      "prompt": "A biased coin lands heads with probability 0.6. What is the exact probability of observing at least two heads in three independent flips?",
+      "reference": "P(X = 2) = 3 * (0.6^2) * (0.4) = 0.432 and P(X = 3) = 0.6^3 = 0.216, giving P(X >= 2) = 0.432 + 0.216 = 0.648."
+    },
+    {
+      "prompt": "When designing a path sandbox validator for an LLM `write_file` tool on Windows, why is string prefix checking like `path.startswith(root)` alone unsafe, and what canonical check replaces it?",
+      "reference": "Raw prefix checks fail on `..` path traversal, case differences, and sibling directory prefix collisions such as `C:\\root_secret` matching `C:\\root`. Resolve canonical absolute paths via `os.path.realpath` / `Path.resolve()` and compare with `os.path.commonpath([norm_target, norm_root]) == norm_root`."
+    },
+    {
+      "prompt": "Explain why a model trained only with greedy decoding evaluation can underperform when deployed at temperature 0.8 without `min_p` or `top_p` filtering.",
+      "reference": "Unfiltered high-temperature sampling assigns non-zero probability to a long tail of low-probability tokens, compounding off-topic drift over autoregressive steps. `min_p` or `top_p` truncates incoherent tail tokens while preserving diversity."
+    }
+  ],
+  "lvl4": [
+    {
+      "prompt": "Design a zero-drift viewport scroll-lock strategy for a Tkinter `Text` widget that streams appended tokens at `tk.END` while the user reads an earlier message.",
+      "reference": "Before mutating the widget, capture whether scroll should remain locked and record both the top visible text index (`hist.index('@0,0')`) and fractional fallback (`hist.yview()[0]`). After insertion, calling `yview(saved_top)` keeps the exact line pinned without downward fractional drift as total document height grows, falling back to `yview_moveto(saved_y0)` only when the index was invalidated."
+    },
+    {
+      "prompt": "Prove that for any integer n >= 1, the sum of the first n positive odd integers equals n^2.",
+      "reference": "Base case n=1: 1 = 1^2. Inductive step: assume sum_{k=1..m} (2k-1) = m^2. Adding the (m+1)-th odd integer gives m^2 + (2(m+1) - 1) = m^2 + 2m + 1 = (m + 1)^2, completing induction."
+    },
+    {
+      "prompt": "Suppose you need to combine historical chat recall across models without leaking a private persona tier (Level 7) into Levels 1-6. Name the three boundaries that must enforce isolation simultaneously.",
+      "reference": "Isolation must hold at: (1) vector/archive indexing and retrieval (`TurboVecIndex` file loading and query masking), (2) active/cross-session message history assembly passed to prompt construction, and (3) History tab listing and deep full-text search results."
+    },
+    {
+      "prompt": "Compare `plt.tight_layout()` and `constrained_layout=True` in Matplotlib when combining multi-panel GridSpec subplots with rotated model tick labels.",
+      "reference": "`tight_layout()` can raise UserWarnings or overlap when GridSpec spans and rotated labels compete across axes, whereas `constrained_layout=True` computes padding constraints globally across axes, titles, and tick labels before rendering."
+    }
+  ]
+}

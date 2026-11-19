@@ -752,6 +752,8 @@ class VisionHandler:
         think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
         final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
         final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
+        final_answer = re.sub(r'(?<![a-zA-Z0-9_:\\/])(?:/n)+(?![a-z][a-z0-9_]*)', lambda m: '\n' * (len(m.group(0)) // 2), final_answer).strip()
+        final_answer = re.sub(r'(?<![a-zA-Z0-9_:\\])/n(?![a-zA-Z0-9_/])', '\n', final_answer).strip()
 
         return think_log, final_answer
 

@@ -186,7 +186,8 @@ def wire_serenity_app(app: Any) -> bool:
                                 if hasattr(name_lbl, "cget") and name_lbl.winfo_class() == "Label":
                                     raw_title = getattr(name_lbl, "_full_history_title", None) or str(name_lbl.cget("text"))
                                     name_lbl._full_history_title = raw_title
-                                    _real_marquee(name_lbl, raw_title, app=app, limit=28, full_path=raw_title)
+                                    full_p = getattr(name_lbl, "_full_history_path", raw_title)
+                                    _real_marquee(name_lbl, raw_title, app=app, limit=28, full_path=full_p)
             except Exception:
                 pass
             return res
@@ -241,6 +242,16 @@ def handle_subagent_spawn(app: Any, msg: Dict[str, Any]) -> None:
     fg_col = PERSONA_SECONDARY_COLORS.get(lvl, THEME.get("electric_blue", "#00bfff"))
 
     try:
+        lock_scroll = bool(getattr(app, "_should_lock_scroll", lambda: False)())
+        saved_y0 = None
+        saved_top = None
+        if hasattr(app, "_capture_scroll_anchor"):
+            lock_scroll, saved_y0, saved_top = app._capture_scroll_anchor(hist)
+        elif lock_scroll:
+            try:
+                saved_y0 = float(hist.yview()[0])
+            except Exception:
+                saved_y0 = None
         hist.config(state="normal")
 
         def _toggle_sa(t=tag, b_ref=sub_id):
@@ -285,6 +296,11 @@ def handle_subagent_spawn(app: Any, msg: Dict[str, Any]) -> None:
         hist.insert(tk.END, f"  [{clean_base}]\n", (tag, "ai"))
         hist.tag_config(tag, elide=True, foreground="#9a9a9a", font=log_font, lmargin1=18, lmargin2=18)
         hist.config(state="disabled")
+        if lock_scroll:
+            if hasattr(app, "_restore_or_scroll_bottom"):
+                app._restore_or_scroll_bottom(hist, True, saved_y0, saved_top, target="end-1c")
+            elif saved_y0 is not None:
+                hist.yview_moveto(saved_y0)
     except Exception:
         pass
 
@@ -316,9 +332,24 @@ def handle_subagent_stream(app: Any, msg: Dict[str, Any]) -> None:
 
     tag = reg[sub_id]["tag"]
     try:
+        lock_scroll = bool(getattr(app, "_should_lock_scroll", lambda: False)())
+        saved_y0 = None
+        saved_top = None
+        if hasattr(app, "_capture_scroll_anchor"):
+            lock_scroll, saved_y0, saved_top = app._capture_scroll_anchor(hist)
+        elif lock_scroll:
+            try:
+                saved_y0 = float(hist.yview()[0])
+            except Exception:
+                saved_y0 = None
         hist.config(state="normal")
         hist.insert(tk.END, f"  {chunk}", (tag, "ai"))
         hist.config(state="disabled")
+        if lock_scroll:
+            if hasattr(app, "_restore_or_scroll_bottom"):
+                app._restore_or_scroll_bottom(hist, True, saved_y0, saved_top, target="end-1c")
+            elif saved_y0 is not None:
+                hist.yview_moveto(saved_y0)
     except Exception:
         pass
 

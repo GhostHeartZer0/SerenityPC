@@ -48,23 +48,28 @@ def run_auto_detect(app, window=None):
                 rlhf_penalty = rlhf_data.get("vram_global_penalty", 0)
         except: pass
 
-    # 3. Model-Aware Tier Scaling
-    tiers = ["fast", "search", "low", "med", "high", "transcendent", "secret", "deep_cook", 
-             "vision_video", "vision_video_deep", "vision_multimodal"]
-    
+    # 3. Model-Aware Tier Scaling (Synced with mtp_combo_scanner 6GB safe ceilings)
+    tiers = ["fast", "search", "low", "med", "mid", "high", "transcendent", "secret", "deep_cook",
+             "vision_video", "vision_video_deep", "vision_multimodal", "synth_image", "synth_video"]
+
     recommendations = {}
     for tier in tiers:
         path = app.model_paths.get(tier, "").lower()
-        
-        # APEX GUARD: Force everything to -1 for E-series
-        if any(x in path for x in ["e2b", "e4b", "tiny"]):
+
+        # APEX GUARD: Force everything to -1 for E-series / small companion models
+        if any(x in path for x in ["e2b", "e4b", "tiny", "1.3b", "sdxl-lightning", "lcm"]):
             recommendations[tier] = -1
             continue
 
-        # MOE/Large Model GUARD: Cap at 14 layers for 6GB stability (Verified limit)
-        if vram_gb < 7 and any(x in path for x in ["26b", "31b", "moe"]):
-                recommendations[tier] = 14
-                continue
+        # 12B / 9B Mid-Tier Models on 6GB VRAM: Safe ceiling 16 layers
+        if vram_gb < 7 and any(x in path for x in ["12b", "9b", "14b"]):
+            recommendations[tier] = 16
+            continue
+
+        # MOE / Large Model GUARD: Cap at 8 layers on 6GB VRAM to prevent WDDM Shared System Memory PCIe spill
+        if vram_gb < 7 and any(x in path for x in ["26b", "27b", "30b", "31b", "moe"]):
+            recommendations[tier] = 8
+            continue
         
         # 4. Standard Linear Calculation (Layers per GB)
         base_ratio = 4.5
@@ -368,16 +373,27 @@ def open_settings_window(app, is_generating=None):
         SCALE_REV_MAP = {val: lbl for lbl, val in TEXT_SCALE_PRESETS}
         curr_text_scale = int(app.config.get("text_scale", 100))
 
-        UI_FONT_OPTIONS = [
-            "Segoe UI", "Verdana", "Times New Roman", "Cambria",
-            "Comic Sans MS", "Gothic A1", "Modiableic",
-            "Comfortaa", "YU Gothic UI", "Segoe UI Variable",
-            "Modern Antiqua", "Quicksand", "UnifrakturMaguntia",
-        ]
-        MONO_FONT_OPTIONS = [
-            "Doto", "Inconsolata", "Noto Sans Mono", "Lucida Sans Console",
-            "Palatino Linotype", "Tajawal", "MV Boli", "Didact Gothic",
-        ]
+        try:
+            from serenity_resources import DEFAULT_UI_FONTS, DEFAULT_MONO_FONTS
+            UI_FONT_OPTIONS = list(DEFAULT_UI_FONTS)
+            MONO_FONT_OPTIONS = list(DEFAULT_MONO_FONTS)
+        except Exception:
+            UI_FONT_OPTIONS = [
+                "Segoe UI", "Segoe UI Variable", "Verdana", "Arial", "Calibri",
+                "Modern Antiqua", "Comfortaa", "Quicksand", "Gothic A1", "YU Gothic UI",
+                "Cambria", "Times New Roman", "Comic Sans MS", "UnifrakturMaguntia",
+            ]
+            MONO_FONT_OPTIONS = [
+                "Consolas", "Cascadia Mono", "JetBrains Mono", "Fira Code",
+                "Courier New", "Lucida Sans Console", "Inconsolata", "Noto Sans Mono",
+                "Doto", "Palatino Linotype", "Tajawal", "MV Boli", "Didact Gothic",
+            ]
+        cur_ui_f = app.config.get("ui_font", "Segoe UI")
+        cur_mono_f = app.config.get("mono_font", "Consolas")
+        if cur_ui_f and cur_ui_f not in UI_FONT_OPTIONS:
+            UI_FONT_OPTIONS.insert(0, cur_ui_f)
+        if cur_mono_f and cur_mono_f not in MONO_FONT_OPTIONS:
+            MONO_FONT_OPTIONS.insert(0, cur_mono_f)
 
         init_reasoning = app.config.get("reasoning_strength", app.config.get("muse_reasoning_strength", "medium"))
         if init_reasoning == "minimal": init_reasoning = "low"
@@ -396,6 +412,7 @@ def open_settings_window(app, is_generating=None):
             "repeat_mode_var": tk.StringVar(value=app.config.get("repeat_detection_mode", "lazy")),
             "ratio_var": tk.IntVar(value=app.config.get("max_token_ratio", 4)),
             "overfill_behavior_var": tk.StringVar(value=app.config.get("overfill_behavior_mode", app.config.get("budget_recovery_mode", "wrapup"))),
+            "ctx_auto_scale_var": tk.StringVar(value=app.config.get("ctx_auto_scale_mode", "step_up")),
             "halt_behavior_var": tk.StringVar(value=app.config.get("halt_behavior_mode", "off")),
             "stream_var": tk.StringVar(value=app.state.get("streaming_mode", "Buffered")),
             "v_behavior": tk.StringVar(value=app.state.get("deep_cook_behavior", "oneshot")),
@@ -420,6 +437,8 @@ def open_settings_window(app, is_generating=None):
             "deep_cook_format_var": tk.StringVar(value=str(app.config.get("deep_cook_formatting", "per_step"))),
             "normal_format_var": tk.StringVar(value=str(app.config.get("normal_generation_formatting", "inline"))),
             "offline_mode_var": tk.BooleanVar(value=app.config.get("offline_mode", False)),
+            "kiwix_search_enabled_var": tk.BooleanVar(value=app.config.get("kiwix_search_enabled", True)),
+            "kiwix_zim_dir_var": tk.StringVar(value=app.config.get("kiwix_zim_dir", "")),
             "auto_vram_var": tk.BooleanVar(value=app.config.get("auto_vram_offload", False)),
             "spec_draft_var": tk.BooleanVar(value=app.config.get("speculative_drafting", False)),
             "ghost_var": tk.BooleanVar(value=app.config.get("ghost_mode", False)),
@@ -429,8 +448,9 @@ def open_settings_window(app, is_generating=None):
             "format_prompts_var": tk.BooleanVar(value=app.config.get("format_prompts_markdown", False)),
             "monitor_graph_var": tk.BooleanVar(value=app.config.get("monitor_graph_mode", False)),
             "show_tooltips_var": tk.BooleanVar(value=app.config.get("show_tooltips", True)),
+            "show_terminal_drawer_var": tk.BooleanVar(value=app.config.get("show_terminal_drawer", True)),
             "resp_len_var": tk.StringVar(value=app.config.get("response_length", "natural")),
-            "media_var": tk.IntVar(value=app.config.get("media_rendering", 1)),
+            "media_var": tk.IntVar(value=app.config.get("media_rendering", 2)),
             "dev_names": dev_names,
             "stt_dev_var": tk.StringVar(value=curr_dev_label),
             "stt_lang_var": tk.StringVar(value=app.config.get("stt_language", "en-US")),
@@ -464,6 +484,21 @@ def open_settings_window(app, is_generating=None):
             "ui_font_var": tk.StringVar(value=app.config.get("ui_font", "Segoe UI")),
             "mono_font_var": tk.StringVar(value=app.config.get("mono_font", "Consolas")),
             "marquee_text_var": tk.BooleanVar(value=app.config.get("marquee_text_enabled", False)),
+            "show_extended_kv_var": tk.BooleanVar(value=app.config.get("show_extended_kv_types", False)),
+            "wait_on_tool_calls_var": tk.BooleanVar(value=app.config.get("wait_on_tool_calls", False)),
+            "expanded_file_access_var": tk.BooleanVar(value=app.config.get("expanded_file_access", False)),
+            "qs_reasoning_var": tk.BooleanVar(value=("reasoning_strength" in app.config.get("quick_settings_items", ["reasoning_strength", "response_length", "kv_cache", "headroom"]))),
+            "qs_length_var": tk.BooleanVar(value=("response_length" in app.config.get("quick_settings_items", ["reasoning_strength", "response_length", "kv_cache", "headroom"]))),
+            "qs_kv_var": tk.BooleanVar(value=("kv_cache" in app.config.get("quick_settings_items", ["reasoning_strength", "response_length", "kv_cache", "headroom"]))),
+            "qs_headroom_var": tk.BooleanVar(value=("headroom" in app.config.get("quick_settings_items", ["reasoning_strength", "response_length", "kv_cache", "headroom"]))),
+            "qs_history_var": tk.BooleanVar(value=("history_mode" in app.config.get("quick_settings_items", ["reasoning_strength", "response_length", "kv_cache", "headroom"]))),
+            "qs_media_var": tk.BooleanVar(value=("media_gen_mode" in app.config.get("quick_settings_items", ["reasoning_strength", "response_length", "kv_cache", "headroom"]))),
+            "media_gen_mode_var": tk.StringVar(value=app.config.get("media_gen_mode", "off")),
+            "media_gen_backend_var": tk.StringVar(value=app.config.get("media_gen_backend", "sd_cpp")),
+            "media_gen_res_var": tk.StringVar(value=app.config.get("media_gen_resolution", "768x768")),
+            "video_gen_frames_var": tk.IntVar(value=int(app.config.get("video_gen_frames", 16))),
+            "video_gen_fps_var": tk.IntVar(value=int(app.config.get("video_gen_fps", 8))),
+            "media_gen_evacuate_var": tk.BooleanVar(value=app.config.get("media_gen_evacuate_vram", True)),
             "open_scaling_center_fn": lambda: open_text_scaling_center(app, win)
         }
         vars_dict["budget_recovery_var"] = vars_dict["overfill_behavior_var"]
@@ -725,6 +760,39 @@ def open_settings_window(app, is_generating=None):
                 app.history_usage_button.config(text=app._get_history_usage_label(), fg=app._get_history_usage_color())
             if hasattr(app, 'history_autosave_button') and app.history_autosave_button:
                 app.history_autosave_button.config(text=app._get_history_autosave_label(), fg=app._get_history_autosave_color())
+            if "show_extended_kv_var" in vars_dict:
+                app.config["show_extended_kv_types"] = bool(vars_dict["show_extended_kv_var"].get())
+            if "wait_on_tool_calls_var" in vars_dict:
+                app.config["wait_on_tool_calls"] = bool(vars_dict["wait_on_tool_calls_var"].get())
+            if "expanded_file_access_var" in vars_dict:
+                app.config["expanded_file_access"] = bool(vars_dict["expanded_file_access_var"].get())
+            qs_map = [
+                ("qs_reasoning_var", "reasoning_strength"),
+                ("qs_length_var", "response_length"),
+                ("qs_kv_var", "kv_cache"),
+                ("qs_headroom_var", "headroom"),
+                ("qs_history_var", "history_mode"),
+                ("qs_media_var", "media_gen_mode"),
+            ]
+            if any(k in vars_dict for k, _ in qs_map):
+                selected_qs = [item_id for k, item_id in qs_map if k in vars_dict and bool(vars_dict[k].get())]
+                app.config["quick_settings_items"] = selected_qs or ["reasoning_strength", "response_length", "kv_cache", "headroom"]
+            if "media_gen_mode_var" in vars_dict:
+                app.config["media_gen_mode"] = vars_dict["media_gen_mode_var"].get()
+            if "media_gen_backend_var" in vars_dict:
+                app.config["media_gen_backend"] = vars_dict["media_gen_backend_var"].get()
+            if "media_gen_res_var" in vars_dict:
+                app.config["media_gen_resolution"] = vars_dict["media_gen_res_var"].get()
+            if "video_gen_frames_var" in vars_dict:
+                try: app.config["video_gen_frames"] = int(vars_dict["video_gen_frames_var"].get())
+                except Exception: pass
+            if "video_gen_fps_var" in vars_dict:
+                try: app.config["video_gen_fps"] = int(vars_dict["video_gen_fps_var"].get())
+                except Exception: pass
+            if "media_gen_evacuate_var" in vars_dict:
+                app.config["media_gen_evacuate_vram"] = bool(vars_dict["media_gen_evacuate_var"].get())
+            if hasattr(app, 'media_gen_button') and app.media_gen_button and hasattr(app, '_get_media_gen_label'):
+                app.media_gen_button.config(text=app._get_media_gen_label(), fg=app._get_media_gen_color())
 
             try:
                 for pth in [os.path.join(app.script_dir, "Live", "System", "params.json"),
@@ -751,9 +819,15 @@ def open_settings_window(app, is_generating=None):
             app.config["format_prompts_markdown"] = vars_dict["format_prompts_var"].get()
             app.config["overfill_behavior_mode"] = vars_dict["overfill_behavior_var"].get()
             app.config["budget_recovery_mode"] = vars_dict["overfill_behavior_var"].get()
+            if "ctx_auto_scale_var" in vars_dict:
+                app.config["ctx_auto_scale_mode"] = vars_dict["ctx_auto_scale_var"].get()
             app.config["halt_behavior_mode"] = vars_dict["halt_behavior_var"].get()
             app.config["monitor_graph_mode"] = vars_dict["monitor_graph_var"].get()
             app.config["show_tooltips"] = vars_dict["show_tooltips_var"].get()
+            if "show_terminal_drawer_var" in vars_dict:
+                app.config["show_terminal_drawer"] = bool(vars_dict["show_terminal_drawer_var"].get())
+                if hasattr(app, "apply_terminal_drawer_visibility"):
+                    app.apply_terminal_drawer_visibility()
             app.state["streaming_mode"] = vars_dict["stream_var"].get()
             app.config["max_token_ratio"] = vars_dict["ratio_var"].get()
             app.config["multimedia_handling"] = vars_dict["multimedia_handling_var"].get()
@@ -817,6 +891,8 @@ def open_settings_window(app, is_generating=None):
 
             app.config["repeat_detection_mode"] = vars_dict["repeat_mode_var"].get()
             app.config["offline_mode"] = vars_dict["offline_mode_var"].get()
+            app.config["kiwix_search_enabled"] = vars_dict["kiwix_search_enabled_var"].get()
+            app.config["kiwix_zim_dir"] = vars_dict["kiwix_zim_dir_var"].get().strip()
             try:
                 from System.network_guard import set_offline_mode
                 set_offline_mode(vars_dict["offline_mode_var"].get())
@@ -978,6 +1054,8 @@ def open_settings_window(app, is_generating=None):
                 if "overfill_behavior_var" in vars_dict:
                     app.config["overfill_behavior_mode"] = vars_dict["overfill_behavior_var"].get()
                     app.config["budget_recovery_mode"] = vars_dict["overfill_behavior_var"].get()
+                if "ctx_auto_scale_var" in vars_dict:
+                    app.config["ctx_auto_scale_mode"] = vars_dict["ctx_auto_scale_var"].get()
                 if "halt_behavior_var" in vars_dict:
                     app.config["halt_behavior_mode"] = vars_dict["halt_behavior_var"].get()
                 if "reasoning_var" in vars_dict:
@@ -989,6 +1067,23 @@ def open_settings_window(app, is_generating=None):
                     app.state["streaming_mode"] = vars_dict["stream_var"].get()
                 if "ratio_var" in vars_dict:
                     app.config["max_token_ratio"] = vars_dict["ratio_var"].get()
+                if "expanded_file_access_var" in vars_dict:
+                    app.config["expanded_file_access"] = bool(vars_dict["expanded_file_access_var"].get())
+                if "show_terminal_drawer_var" in vars_dict:
+                    app.config["show_terminal_drawer"] = bool(vars_dict["show_terminal_drawer_var"].get())
+                    if hasattr(app, "apply_terminal_drawer_visibility"):
+                        app.apply_terminal_drawer_visibility()
+                qs_map = [
+                    ("qs_reasoning_var", "reasoning_strength"),
+                    ("qs_length_var", "response_length"),
+                    ("qs_kv_var", "kv_cache"),
+                    ("qs_headroom_var", "headroom"),
+                    ("qs_history_var", "history_mode"),
+                    ("qs_media_var", "media_gen_mode"),
+                ]
+                if any(k in vars_dict for k, _ in qs_map):
+                    selected_qs = [item_id for k, item_id in qs_map if k in vars_dict and bool(vars_dict[k].get())]
+                    app.config["quick_settings_items"] = selected_qs or ["reasoning_strength", "response_length", "kv_cache", "headroom"]
                 if hasattr(app, "save_config"):
                     app.save_config()
             except Exception as sync_err:

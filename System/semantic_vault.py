@@ -114,6 +114,15 @@ class SemanticVault:
             row = cursor.fetchone()
             return row["id"] if row else 0
 
+    SLOP_PATTERNS = (
+        "[pc core offline]",
+        "[error",
+        "traceback (most recent",
+        "apologize",
+        "as an ai",
+        "i cannot fulfill",
+    )
+
     def store_insight(
         self,
         insight: str,
@@ -124,8 +133,19 @@ class SemanticVault:
         dominance_weight: float = 0.8
     ) -> int:
         """Persists a distilled DMN essence node into the long-term vault."""
+        clean_insight = str(insight or "").strip()
+        if len(clean_insight) < 10:
+            return -1
+        low_insight = clean_insight.lower()
+        if any(pat in low_insight for pat in self.SLOP_PATTERNS):
+            return -1
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            last_row = cursor.execute(
+                "SELECT insight FROM distilled_insights ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if last_row and str(last_row[0] or "").strip().lower() == low_insight:
+                return -1
             cursor.execute("""
                 INSERT INTO distilled_insights (
                     insight, emotional_shift, world_delta, concept_family,
@@ -133,7 +153,7 @@ class SemanticVault:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
-                insight.strip(),
+                clean_insight,
                 json.dumps(emotional_shift or {}),
                 json.dumps(world_delta or {}),
                 concept_family,
@@ -288,7 +308,30 @@ class SemanticVault:
                 cursor.execute("UPDATE interaction_history SET simmered = 1 WHERE id = ?", (row["id"],))
 
             conn.commit()
-            return distilled_count
+        self.apply_memory_decay()
+        return distilled_count
+
+    def apply_memory_decay(self, decay_rate: float = 0.05, min_weight: float = 0.25) -> int:
+        """Applies gradual importance decay to non-core distilled insights."""
+        rate = min(0.95, max(0.0, float(decay_rate)))
+        floor_w = max(0.05, float(min_weight))
+        if rate <= 0.0:
+            return 0
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE distilled_insights
+                SET importance_weight = MAX(?, ROUND(importance_weight * ?, 4))
+                WHERE LOWER(COALESCE(concept_family, '')) NOT IN (
+                    'core_guardrails', 'essence_anchor', 'rlhf_correction', 'security_guardrails'
+                )
+                AND importance_weight > ?
+                """,
+                (floor_w, 1.0 - rate, floor_w),
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0)
 
     def suggest_concept_family(self, text: str) -> Tuple[str, float]:
         """Categorizes insight into concept family and determines dominance weight."""

@@ -1,0 +1,74 @@
+{
+  "lvl1": [
+    {
+      "prompt": "What is the chemical symbol for the element tungsten, and from which alternative historical name is that symbol derived?",
+      "reference": "The chemical symbol for tungsten is W, derived from the mineral wolframite (or its older name wolfram)."
+    },
+    {
+      "prompt": "Which planet in our Solar System rotates in retrograde motion relative to most planets, making the Sun appear to rise in the west?",
+      "reference": "Venus rotates slowly in retrograde motion (clockwise when viewed from above Earth's north pole), causing the Sun to rise in the west and set in the east (Uranus also has extreme axial tilt > 90 degrees)."
+    },
+    {
+      "prompt": "Who wrote the 1949 dystopian novel 'Nineteen Eighty-Four'?",
+      "reference": "George Orwell (pen name of Eric Arthur Blair) wrote 'Nineteen Eighty-Four'."
+    },
+    {
+      "prompt": "Which strait separates the Iberian Peninsula in Europe from North Africa?",
+      "reference": "The Strait of Gibraltar separates Spain (Iberian Peninsula) from Morocco (North Africa), connecting the Atlantic Ocean to the Mediterranean Sea."
+    }
+  ],
+  "lvl2": [
+    {
+      "prompt": "Explain why the Gregorian calendar introduced in 1582 omits leap days on century years not divisible by 400.",
+      "reference": "The solar tropical year is slightly shorter than 365.25 days (~365.2422 days). Omitting 3 leap days every 400 years yields an average year length of 365.2425 days, preventing seasonal drift of the equinox."
+    },
+    {
+      "prompt": "Distinguish between the legislative bodies established by the Great Compromise (Connecticut Compromise) at the 1787 U.S. Constitutional Convention.",
+      "reference": "The House of Representatives allocates seats proportionally by state population, while the Senate provides equal representation of two senators per state."
+    },
+    {
+      "prompt": "What biological process in eukaryotic cells uses the enzyme RuBisCO, and in which organelle does it take place?",
+      "reference": "Carbon fixation during the Calvin cycle of photosynthesis uses RuBisCO, occurring in the stroma of chloroplasts."
+    },
+    {
+      "prompt": "Which 14th-century Moroccan scholar dictated the 'Rihla', documenting roughly three decades of travels across Africa, Europe, and Asia?",
+      "reference": "Ibn Battuta dictated the 'Rihla' recounting his extensive journeys across Afro-Eurasia."
+    }
+  ],
+  "lvl3": [
+    {
+      "prompt": "Explain the physical cause of the Chandler wobble and distinguish it from axial precession of the Earth.",
+      "reference": "The Chandler wobble is a small (~9 m at poles, ~433-day period) free nutation of Earth's rotation axis relative to Earth's crust caused by dynamic redistribution of ocean and atmospheric mass, whereas axial precession is a ~25,772-year torque-driven sweep of Earth's rotational axis caused by solar and lunar gravity on the equatorial bulge."
+    },
+    {
+      "prompt": "How did Rosalind Franklin's Photo 51 X-ray diffraction pattern constrain the molecular model of B-DNA proposed by Watson and Crick?",
+      "reference": "The characteristic X-shaped cross indicated a helical structure, dark layer-line spacing gave a 3.4 nm helical pitch (10 base pairs per turn at 0.34 nm rise), and missing fourth layer lines showed two intertwined strands offset vertically (double helix)."
+    },
+    {
+      "prompt": "Compare the Treaty of Tordesillas (1494) and the Treaty of Zaragoza (1529) in shaping early modern colonial spheres.",
+      "reference": "The Treaty of Tordesillas drew an Atlantic meridian dividing newly explored lands outside Europe between Spain and Portugal, while the Treaty of Zaragoza defined the corresponding anti-meridian in the Asia-Pacific hemisphere after Magellan's voyage created disputes over the Moluccas."
+    },
+    {
+      "prompt": "Why does atmospheric Rayleigh scattering make daytime skies blue while sunsets appear red?",
+      "reference": "Rayleigh scattering intensity scales inversely with the fourth power of wavelength (lambda^-4), scattering short blue wavelengths strongly overhead, while low sun angles force light through a thicker air column that scatters away short wavelengths and leaves longer red wavelengths along the direct line of sight."
+    }
+  ],
+  "lvl4": [
+    {
+      "prompt": "Contrast the architectural innovations of Hagia Sophia in Constantinople with Gothic rib-vaulted cathedrals in managing lateral thrust.",
+      "reference": "Hagia Sophia supports a vast central hemispherical dome over a square bay using pendentives paired with east-west semidomes and massive interior piers, whereas Gothic cathedrals channel rib-vault lateral thrust exteriorly across stained-glass walls through flying buttresses anchored by heavy pinnacles."
+    },
+    {
+      "prompt": "Analyze the thermodynamic reason why a Carnot heat engine's maximum efficiency depends only on reservoir temperatures rather than working fluid.",
+      "reference": "Any reversible cycle operating between two thermal reservoirs must absorb Q_h and reject Q_c in fixed ratio T_h / T_c by Clausius's theorem and the second law of thermodynamics; otherwise pairing engines would create a perpetual decrease in net entropy. Therefore eta_max = 1 - T_c / T_h independently of substance."
+    },
+    {
+      "prompt": "Trace how the invention of the marine chronometer by John Harrison solved the 18th-century longitude problem.",
+      "reference": "Because Earth rotates 15 degrees per hour, knowing accurate home-port (Greenwich) time via a temperature-compensated sea clock allowed navigators to compare local solar noon against reference time, converting the time difference directly into geographic longitude."
+    },
+    {
+      "prompt": "Distinguish between the Ptolemaic deferent-epicycle system and Kepler's laws of planetary motion in accounting for Mars's retrograde loop.",
+      "reference": "Ptolemy accounted for apparent backward motion using auxiliary rotating circles (epicycles) riding on larger deferents around a stationary Earth, whereas Kepler's heliocentric elliptical orbits naturally explain retrograde loops as perspective parallax when faster-orbiting Earth overtakes outer Mars."
+    }
+  ]
+}

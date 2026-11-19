@@ -2,7 +2,7 @@ import importlib
 import tkinter as tk
 from tkinter import scrolledtext, simpledialog, messagebox, filedialog, ttk
 import tkinter.font as tkFont
-import threading, traceback, sys, os, shutil, json, zlib, time, queue, subprocess, re, atexit, webbrowser, io, faulthandler, struct, random
+import threading, traceback, sys, os, shutil, json, zlib, time, queue, subprocess, re, atexit, webbrowser, io, faulthandler, struct, random, difflib, ipaddress, socket, urllib.parse
 try:
     import numpy as np
 except ImportError:
@@ -60,14 +60,16 @@ def initialize_system_managers():
     global open_text_scaling_center, run_auto_detect, VaultManager
     global set_offline_mode, is_offline_mode, STTManager
     global GemmaToolRegistry, KVManager, TurboVecIndex, bind_entry_limit, OrchestrationManager
-    global CognitiveAffectEngine, AffectState, SemanticVault, ThoughtIsolation
+    global CognitiveAffectEngine, AffectState, SemanticVault, ThoughtIsolation, setup_marquee_label
+    global SlashSkillPopup, show_skill_tree_popup, safe_zlib_decompress
 
     from System.serenity_utils import (
         WidgetLogger, FileAndWidgetLogger, LoadingScreen, log_uncaught_exception,
         HardwareProfile, MediaProcessor, SystemMonitor, enable_fault_debugging,
         ThreadSafeDict, ThreadSafeList, ThinkingDisplay, patch_gguf_architecture,
         patch_llama_deallocator, ToolTip, TutorialOverlay,
-        enable_high_dpi_awareness, bind_entry_limit,
+        enable_high_dpi_awareness, bind_entry_limit, setup_marquee_label,
+        safe_zlib_decompress,
     )
     from System.modular_registry import DynamicParamRegistry
     from System.markdown_engine import MarkdownEngine
@@ -83,6 +85,7 @@ def initialize_system_managers():
     from System.affect_engine import CognitiveAffectEngine, AffectState
     from System.semantic_vault import SemanticVault
     from System.thought_isolation import ThoughtIsolation
+    from System.skills_registry import SlashSkillPopup, show_skill_tree_popup
 
 
 USERS_DATA_PATH = setup_localized_environment()
@@ -222,10 +225,8 @@ def set_apex_affinity():
         print(f"[APEX] Error: Couldn't lock in. {e}")
 
 def kill_engine_on_shutdown(*args, **kwargs):
-    """Ensure all engine backend processes are terminated on exit."""
+    """Ensure all engine backend child processes are terminated cleanly on exit."""
     print("[SYSTEM] Serenity shutting down... cleaning up backend processes.")
-    
-    # 1. Graceful child termination via psutil (if available)
     if SYSTEM_MONITOR_LOADED:
         try:
             current_process = psutil.Process()
@@ -234,15 +235,16 @@ def kill_engine_on_shutdown(*args, **kwargs):
                 try:
                     print(f"[SYSTEM] Terminating child: {child.pid}")
                     child.terminate()
-                except: pass
-        except: pass
-
-    # 2. Hard port cleanup for port 8001 (Windows-specific scorched earth)
-    if sys.platform == "win32":
-        try:
-            # Silence the command output to keep the console clean
-            os.system('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :8001\') do taskkill /F /PID %a >nul 2>&1')
-        except: pass
+                except Exception:
+                    pass
+            _, alive = psutil.wait_procs(children, timeout=2.0)
+            for child in alive:
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 # Register the cleanup hook
 atexit.register(kill_engine_on_shutdown)
@@ -380,7 +382,6 @@ class ChatbotApp:
         self.root = tk_root
         self.root.title("SerenityPC")
         self.loading_screen = loading_screen
-        self.tool_registry = GemmaToolRegistry(self)
         self.dynamic_param_registry = DynamicParamRegistry()
         self.stt_manager = STTManager()
         self.mic_button = None
@@ -524,6 +525,7 @@ class ChatbotApp:
         self.context_size_config["high"] = 262144
         self.context_size_config["secret"] = 131072
         self.context_size_config["vision_video_deep"] = 16384
+        self.session_context_overrides: Dict[str, int] = {}
         
         self.kv_manager = None
         self.vault_manager = VaultManager(
@@ -626,7 +628,6 @@ class ChatbotApp:
         self.active_tab = "active"
         self.send_button = None
         self.deep_thought_button = None
-        self.hurry_button = None
         self.secret_trigger = None
         self.last_user_message = ""
         self._status_timer = None
@@ -656,9 +657,10 @@ class ChatbotApp:
             "thought_log_update": lambda msg: getattr(self, "_buffer_thought_log", lambda _content: None)(msg.get("content", "")),
             "thought_stream": lambda msg: getattr(self, "_buffer_thought_stream", lambda _content: None)(msg.get("content", "")),
             "agentic_stream": lambda msg: getattr(self, "_buffer_agentic_stream", lambda _content: None)(msg.get("content", "")),
-            "error_log_update": lambda msg: getattr(self, "_buffer_log", lambda _content: None)(msg.get("content", "")),
+            "error_log_update": lambda msg: getattr(self, "_buffer_log", lambda _content, **_kw: None)(msg.get("content", ""), is_chat_template=bool(msg.get("is_chat_template", False))),
             "tool_log_update": lambda msg: self._buffer_tool_log(msg.get("content", "")),
             "diag_log_update": lambda msg: self._buffer_diag_log(msg.get("content", "")),
+            "terminal_log_update": lambda msg: getattr(self, "_buffer_terminal_log", lambda _c: None)(msg.get("content", "")),
             "thinking_status": lambda msg: self.thinking_display.update_status(msg.get("content", "Thinking...")) if self.thinking_display and self.thinking_display.winfo_exists() else None,
             "subagent_status": lambda msg: getattr(self, "_handle_subagent_status", lambda _msg: None)(msg),
             "status_phase": lambda msg: self.thinking_display.set_phase(msg.get("phase", ""), msg.get("details", ""), msg.get("tokens", 0), msg.get("speed", 0.0), msg.get("progress_val", -1)) if self.thinking_display and self.thinking_display.winfo_exists() else None,
@@ -667,10 +669,12 @@ class ChatbotApp:
             "streaming_replace": lambda msg: self._replace_ai_message(msg.get("content", "")),
             "success": lambda msg: self._handle_session_finished({"user_msg": self.last_user_message, "final_answer": msg.get("content", ""), "is_error": False}),
             "session_finished": lambda msg: self._handle_session_finished(msg),
-            "interrupted": lambda msg: self._handle_session_finished({"user_msg": self.last_user_message, "final_answer": msg.get("content", ""), "is_error": True}),
+            "interrupted": lambda msg: self._handle_session_finished({"user_msg": self.last_user_message, "final_answer": msg.get("content", ""), "is_error": False, "halted": True}),
             "deep_cook_ui_batch": lambda msg: self._handle_deep_cook_ui_batch(msg),
             "deep_cook_ui_start": lambda msg: self._handle_deep_cook_ui_start(msg),
             "deep_cook_ui_stream": lambda msg: self._handle_deep_cook_ui_stream(msg),
+            "tool_call_start": lambda msg: self._handle_tool_call_ui_start(msg),
+            "tool_call_done": lambda msg: self._handle_tool_call_ui_done(msg),
             "vision_oneshot_finish": lambda msg: self.offload_model(),
             "video_progress": lambda msg: self._set_progress(msg.get("content", 0)),
             "stt_transcript": lambda msg: self._handle_stt_result(msg.get("content", ""), msg.get("error", None)),
@@ -746,24 +750,17 @@ class ChatbotApp:
             if not isinstance(item, str):
                 return False
             il = item.lower()
-            return il not in excluded and "mock" not in il and not il.startswith("<")
+            return il not in excluded and not il.startswith(("magicmock", "mock_", "<"))
 
         for d_key in ("Users", "History"):
             base_p = self.dirs.get(d_key)
             if base_p and os.path.exists(base_p):
                 for item in os.listdir(base_p):
                     item_p = os.path.join(base_p, item)
-                    if os.path.isdir(item_p):
-                        if "mock" in item.lower() or item.startswith("<"):
-                            try:
-                                shutil.rmtree(item_p, ignore_errors=True)
-                            except Exception:
-                                pass
+                    if os.path.isdir(item_p) and _is_valid_user(item):
+                        if (item == "Default" and not show_def) or (item == "Public" and not show_pub):
                             continue
-                        if _is_valid_user(item):
-                            if (item == "Default" and not show_def) or (item == "Public" and not show_pub):
-                                continue
-                            users.add(item)
+                        users.add(item)
         curr = self.get_active_username()
         if curr and _is_valid_user(curr): users.add(curr)
         if not users: users.add("Default")
@@ -891,11 +888,11 @@ class ChatbotApp:
             self.soft_reload_turbovec()
         return True
 
-    def delete_user_profile(self, username: str) -> Tuple[bool, str]:
+    def delete_user_profile(self, username: str, password: Optional[str] = None) -> Tuple[bool, str]:
         """
         Safely deletes a user profile directory and associated history directory.
-        Protects system profiles ('Default', 'Public') from deletion.
-        Automatically switches active user to 'Default' if deleting the active profile.
+        Protects system profiles ('Default', 'Public') from deletion and requires
+        master password verification when the target profile has Vault lock enabled.
         """
         clean_un = "".join(c for c in str(username).strip() if c.isalnum() or c in ("-", "_", " ")).strip()
         if not clean_un:
@@ -904,16 +901,26 @@ class ChatbotApp:
         if clean_un in ("Default", "Public"):
             return False, f"Profile '{clean_un}' is a system profile and cannot be deleted."
 
+        u_dir = os.path.join(self.dirs["Users"], clean_un)
+        h_dir = os.path.join(self.dirs["History"], clean_un)
+        u_vault_state = os.path.join(u_dir, "vault_state.json")
+        if os.path.isfile(u_vault_state):
+            try:
+                target_vm = VaultManager(history_dir=h_dir, state_dir=u_dir)
+                if target_vm.is_lock_enabled():
+                    if not password or not target_vm.verify_password(password):
+                        return False, f"Master password verification required to delete protected profile '{clean_un}'."
+            except Exception as auth_err:
+                return False, f"Failed to verify vault lock for '{clean_un}': {auth_err}"
+
         # If currently active, switch to Default first
         curr_active = self.get_active_username()
         if curr_active == clean_un:
             self.switch_user("Default", skip_lock_prompt=True)
 
         deleted_any = False
-        import shutil
 
         # Remove from Users directory
-        u_dir = os.path.join(self.dirs["Users"], clean_un)
         if os.path.exists(u_dir):
             try:
                 shutil.rmtree(u_dir)
@@ -922,7 +929,6 @@ class ChatbotApp:
                 return False, f"Failed to delete user profile directory: {e}"
 
         # Remove from History directory
-        h_dir = os.path.join(self.dirs["History"], clean_un)
         if os.path.exists(h_dir):
             try:
                 shutil.rmtree(h_dir)
@@ -1049,6 +1055,8 @@ class ChatbotApp:
 
         # Synchronize button state, footer toggles, and colors with loaded config
         try:
+            if hasattr(self, "apply_terminal_drawer_visibility"):
+                self.apply_terminal_drawer_visibility()
             if hasattr(self, "_sync_deep_cook_ui"):
                 self._sync_deep_cook_ui()
             if hasattr(self, "ghost_button") and self.ghost_button:
@@ -1057,6 +1065,8 @@ class ChatbotApp:
                 self.history_usage_button.config(text=self._get_history_usage_label(), fg=self._get_history_usage_color())
             if hasattr(self, "history_autosave_button") and self.history_autosave_button:
                 self.history_autosave_button.config(text=self._get_history_autosave_label(), fg=self._get_history_autosave_color())
+            if hasattr(self, "media_gen_button") and self.media_gen_button:
+                self.media_gen_button.config(text=self._get_media_gen_label(), fg=self._get_media_gen_color())
         except Exception as _ui_sync_err:
             print(f"[UI] Footer button sync warning: {_ui_sync_err}")
         self.set_ui_state(model_loaded=(self.model is not None), generating=False)
@@ -1361,40 +1371,142 @@ class ChatbotApp:
         btn.pack(side=side, **pack_opts)
         return btn
 
-    def _expand_context_config(self, tier, required_ctx):
+    def _get_effective_context_size(self, tier: Optional[str] = None, level: Optional[int] = None) -> int:
+        """Returns session-overridden runtime context size if dynamically scaled, else base config."""
+        t = tier or getattr(self, "current_model_tier", None) or "low"
+        overrides = getattr(self, "session_context_overrides", None)
+        if isinstance(overrides, dict) and t in overrides and overrides[t] > 0:
+            return int(overrides[t])
+        lvl = level if level is not None else getattr(self, "active_persona_level", 3)
+        default_ctx = 2048 if t == "deep_cook" else (8192 if str(t).startswith("vision_") else CONTEXT_SIZE_MAP.get(lvl, 4096))
+        return int(self.context_size_config.get(t, default_ctx))
+
+    def _expand_context_config(self, tier, required_ctx, persist=False):
         """
-        Dynamically adjusts context_size_config in config.json to prevent OOM
-        or truncation on high-res multimodal tasks.
+        Dynamically adjusts context window in session runtime (or config.json if persist=True)
+        to prevent OOM or truncation on high-res multimodal or large context tasks.
         """
-        if self.context_size_config.get(tier, 0) >= required_ctx:
+        cur_eff = self._get_effective_context_size(tier)
+        if cur_eff >= required_ctx:
             return
 
-        print(f"[CONFIG] Expanding context for {tier}: {self.context_size_config.get(tier)} -> {required_ctx}")
+        if not hasattr(self, "session_context_overrides") or not isinstance(self.session_context_overrides, dict):
+            self.session_context_overrides = {}
+        print(f"[CTX AUTO-SCALE] Expanding session context for {tier}: {cur_eff} -> {required_ctx}")
+        self.session_context_overrides[tier] = int(required_ctx)
+        if getattr(self, "kv_manager", None) is not None:
+            self.kv_manager.set_max_context(int(required_ctx))
+
+        if not persist:
+            return
+
         self.context_size_config[tier] = required_ctx
-        
-        # PERSIST TO DISK
         try:
             config_data = {}
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r') as f: config_data = json.load(f)
-            
             if "context_size_config" not in config_data:
                 config_data["context_size_config"] = {}
-            
             config_data["context_size_config"][tier] = required_ctx
-            
             with open(self.config_file, 'w') as f:
                 json.dump(config_data, f, indent=4)
             print(f"[CONFIG] Updated {self.config_file} with new context budget.")
         except Exception as e:
             print(f"[CONFIG] Failed to persist expanded context: {e}")
 
-    def _determine_tier(self):
-        if self.root is None: return
-        self.root.config(bg=THEME["bg_color"])
-        self.paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg=THEME["bg_color"], 
-                                   sashwidth=4, sashrelief=tk.FLAT, borderwidth=0)
-        self.paned.pack(fill=tk.BOTH, expand=True)
+    def _auto_scale_context_as_needed(self, required_tokens: int, tier: Optional[str] = None, level: Optional[int] = None) -> bool:
+        """
+        Evaluates whether `required_tokens` exceeds the loaded KV cache capacity (`n_ctx`),
+        and handles scaling according to `ctx_auto_scale_mode` ('step_up', '2x', 'fit', 'ask', 'off').
+        Performs a session-only synchronous model reload if scaling is approved.
+        """
+        t = tier or getattr(self, "current_model_tier", None) or "low"
+        lvl = int(level if level is not None else getattr(self, "active_persona_level", 3))
+        if "diffusion" in (getattr(self, "model_path", "") or "").lower():
+            return False
+
+        loaded_ctx = 0
+        if getattr(self, "model", None) is not None:
+            try:
+                loaded_ctx = self.model.n_ctx() if hasattr(self.model, "n_ctx") and callable(self.model.n_ctx) else int(getattr(self.model, "_n_ctx", 0) or 0)
+            except Exception:
+                loaded_ctx = 0
+        if loaded_ctx <= 0:
+            loaded_ctx = self._get_effective_context_size(t, lvl)
+
+        if required_tokens <= int(loaded_ctx * 0.9):
+            return False
+
+        mode = str(self.config.get("ctx_auto_scale_mode", "step_up") or "step_up").lower().strip()
+        if mode in ("off", "manual"):
+            warn_msg = f"[CTX OVERFLOW] Required context (~{required_tokens} tokens) exceeds loaded KV cache ({loaded_ctx} tokens). Auto-scaling is OFF (Manual Only)."
+            print(warn_msg)
+            if hasattr(self, "process_queue") and self.process_queue:
+                self.process_queue.put({"status": "diag_log_update", "content": warn_msg})
+                self.process_queue.put({"status": "error_log_update", "content": warn_msg})
+                self.process_queue.put({"status": "thinking_status", "content": f"⚠ KV Cache Full ({loaded_ctx} ctx) — Pruning"})
+            return False
+
+        calc_mode = "step_up" if mode == "ask" else mode
+        new_ctx = KVManager.compute_scaled_context(loaded_ctx, int(required_tokens * 1.15), mode=calc_mode)
+        if new_ctx <= loaded_ctx:
+            return False
+
+        if mode == "ask":
+            approved = [False]
+            ask_ev = threading.Event()
+            def _prompt_user():
+                try:
+                    ans = messagebox.askyesno(
+                        "KV Cache Context Auto-Scale",
+                        f"Current prompt & history (~{required_tokens} tokens) exceeds the active KV cache window ({loaded_ctx} tokens).\n\n"
+                        f"Scale session context window to {new_ctx} tokens and reload {t.upper()}?",
+                        parent=self.root if (getattr(self, "root", None) and self.root.winfo_exists()) else None
+                    )
+                    approved[0] = bool(ans)
+                except Exception:
+                    approved[0] = False
+                finally:
+                    ask_ev.set()
+
+            if getattr(self, "root", None) and hasattr(self.root, "after"):
+                try:
+                    self.root.after(0, _prompt_user)
+                    ask_ev.wait(timeout=60.0)
+                except Exception:
+                    approved[0] = False
+            if not approved[0]:
+                decline_msg = f"[CTX AUTO-SCALE] User declined scaling {loaded_ctx} -> {new_ctx}. Falling back to TriAttention pruning."
+                print(decline_msg)
+                if hasattr(self, "process_queue") and self.process_queue:
+                    self.process_queue.put({"status": "diag_log_update", "content": decline_msg})
+                return False
+
+        scale_msg = f"[CTX AUTO-SCALE] Mode '{mode.upper()}': Scaling {t.upper()} KV cache {loaded_ctx} -> {new_ctx} tokens (needed ~{required_tokens})..."
+        print(scale_msg)
+        if hasattr(self, "process_queue") and self.process_queue:
+            self.process_queue.put({"status": "diag_log_update", "content": scale_msg})
+            self.process_queue.put({"status": "thinking_status", "content": f"Auto-Scaling KV Cache ({loaded_ctx} → {new_ctx})..."})
+
+        self._expand_context_config(t, new_ctx, persist=False)
+
+        if getattr(self, "model", None) is not None and getattr(self, "model_path", None) and os.path.exists(str(self.model_path)):
+            try:
+                del self.model
+                self.model = None
+                import gc
+                gc.collect()
+                if TORCH_AVAILABLE and torch is not None and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                reloaded = self._load_model_worker(lvl, t, is_subagent_swap=True)
+                if reloaded is not None:
+                    self.model = reloaded
+                    if hasattr(self, "process_queue") and self.process_queue:
+                        self.process_queue.put({"status": "diag_log_update", "content": f"[CTX AUTO-SCALE] Reloaded {t.upper()} with n_ctx={new_ctx}."})
+                    return True
+            except Exception as sc_err:
+                print(f"[CTX AUTO-SCALE ERROR] Dynamic reload failed: {sc_err}")
+        return True
 
     def _setup_llama_log_capture(self):
         """Intercepts C++ backend logs and routes specific diagnostics to the UI."""
@@ -1421,13 +1533,29 @@ class ChatbotApp:
                     "llama_model_loader: - type"
                 ]
 
+                now_ts = time.time()
+                low_msg = msg_str.lower()
+                is_ct_line = ("chat_template" in low_msg or "chat template" in low_msg)
+                if is_ct_line:
+                    self._llama_in_ct_dump = True
+                    self._llama_ct_last_ts = now_ts
+                elif getattr(self, "_llama_in_ct_dump", False) and (now_ts - getattr(self, "_llama_ct_last_ts", 0.0)) < 2.0:
+                    if any(tok in msg_str for tok in ("{%", "%}", "{{", "}}", "add_generation_prompt", "bos_token", "eos_token", "messages")) or msg_str.startswith((" ", "\t")):
+                        is_ct_line = True
+                        self._llama_ct_last_ts = now_ts
+                    else:
+                        self._llama_in_ct_dump = False
+                if is_ct_line:
+                    self.process_queue.put({"status": "error_log_update", "content": msg_str, "is_chat_template": True})
+                    return
+
                 if any(p in msg_str for p in diag_identifiers):
                     self.process_queue.put({"status": "diag_log_update", "content": f"[C++] {msg_str}"})
                     return
 
                 # --- ERROR & CRITICAL DIAG ONLY (⚠) ---
                 if any(kw in msg_str.lower() for kw in ["error", "failed", "exception", "cuda error"]):
-                    self.process_queue.put({"status": "log_update", "content": f"\n[INTERNAL ERROR] {msg_str}\n"})
+                    self.process_queue.put({"status": "error_log_update", "content": f"\n[INTERNAL ERROR] {msg_str}\n"})
             except: pass
 
         try:
@@ -1484,10 +1612,10 @@ class ChatbotApp:
         self.btn_video = btn_vid
         ToolTip(btn_vid, "Initiate video multimodal frame analysis.", app=self)
         
-        # Sizes Button (Replaces Pulse Button)
-        btn_sizes = self._add_btn(top, "[📐] Sizes", self.toggle_sizes_popup)
+        # Quick Settings Button (2-row label; configurable in Settings > Interface)
+        btn_sizes = self._add_btn(top, "Quick\nSettings", self.toggle_sizes_popup)
         self.btn_sizes = btn_sizes
-        ToolTip(btn_sizes, "Configure Reasoning Strength and Response Length target sizes.", app=self)
+        ToolTip(btn_sizes, "Open Quick Settings (Reasoning, Length, KV Cache, Headroom — configurable in Settings > Interface).", app=self)
         
         btn_clr = self._add_btn(top, "Clear", self._reset_multimodal_ui)
         self.btn_clear_queue = btn_clr
@@ -1521,10 +1649,11 @@ class ChatbotApp:
         self._update_hw_indicator()
 
         lbl_status = tk.Label(tab_frame, text="System: Idle", bg=THEME["bg_color"], 
-                                          fg=THEME["electric_blue"], font=self.fonts["italic"])
+                                          fg=THEME["electric_blue"], font=self.fonts["italic"], cursor="hand2")
         self.system_status_label = lbl_status
         lbl_status.pack(side=tk.RIGHT, padx=(0, 6))
-        ToolTip(lbl_status, "Core Data & System Stats.", app=self)
+        lbl_status.bind("<Button-1>", self._on_status_label_click)
+        ToolTip(lbl_status, "Core Data & System Stats. Click to select active level model & template.", app=self)
 
         # --- TEXT WIDGETS ---
         # 1. Floating Pinned Prompt (Hidden on startup)
@@ -1667,6 +1796,97 @@ class ChatbotApp:
         txt_past.tag_config("md_strike", font=self.fonts["md_strike"], foreground="#7f848e")
         txt_past.tag_config("md_hidden", elide=True)
 
+        # 4. Collapsible Bottom Terminal Drawer (Under Chat)
+        self._terminal_expanded = False
+        self._orig_chat_height = int(txt_chat.cget("height") or 24)
+        self.terminal_drawer_frame = tk.Frame(chat_frame, bg=THEME["bg_color"], bd=1, relief=tk.SOLID)
+        self.apply_terminal_drawer_visibility()
+
+        self.terminal_header_bar = tk.Frame(self.terminal_drawer_frame, bg=THEME["widget_bg_color"])
+        self.terminal_header_bar.pack(side=tk.TOP, fill=tk.X)
+        self.terminal_toggle_btn = tk.Button(
+            self.terminal_header_bar,
+            text=">_ Terminal ▲",
+            command=self.toggle_terminal_drawer,
+            bg=THEME["button_bg_color"],
+            fg=THEME["electric_blue"],
+            relief=tk.FLAT,
+            font=self.fonts["ui_small"],
+            cursor="hand2",
+            padx=6,
+            pady=1,
+        )
+        self.terminal_toggle_btn.pack(side=tk.LEFT, padx=4, pady=2)
+        ToolTip(self.terminal_toggle_btn, "Expand/collapse integrated terminal drawer.", app=self)
+
+        self.terminal_cwd_lbl = tk.Label(
+            self.terminal_header_bar,
+            text=os.path.basename(self.script_dir),
+            bg=THEME["widget_bg_color"],
+            fg="#888888",
+            font=self.fonts["stats"],
+        )
+        self.terminal_cwd_lbl.pack(side=tk.LEFT, padx=6)
+
+        self.terminal_clear_btn = tk.Button(
+            self.terminal_header_bar,
+            text="Clear",
+            command=lambda: self._clear_terminal_output(),
+            bg=THEME["button_bg_color"],
+            fg=THEME["fg_color"],
+            relief=tk.FLAT,
+            font=self.fonts["ui_small"],
+            cursor="hand2",
+            padx=5,
+            pady=1,
+        )
+        self.terminal_clear_btn.pack(side=tk.RIGHT, padx=4, pady=2)
+
+        self._terminal_cwd = self.script_dir
+        self._terminal_cmd_history = []
+        self._terminal_hist_idx = 0
+        self.terminal_body_frame = tk.Frame(self.terminal_drawer_frame, bg="#0c0c0f")
+
+        term_in_row = tk.Frame(self.terminal_body_frame, bg="#141418")
+        term_in_row.pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=(0, 2))
+        tk.Label(term_in_row, text="PS>", bg="#141418", fg="#00ffcc", font=self.fonts["stats_bold"]).pack(side=tk.LEFT, padx=(4, 4))
+        self.terminal_entry = tk.Entry(
+            term_in_row,
+            bg="#1a1a22",
+            fg="#ffffff",
+            insertbackground="#00ffcc",
+            relief=tk.FLAT,
+            font=self.fonts["log"],
+        )
+        self.terminal_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4), pady=2)
+        self.terminal_entry.bind("<Return>", lambda e: self._submit_terminal_entry())
+        self.terminal_entry.bind("<Up>", lambda e: self._terminal_history_nav(-1))
+        self.terminal_entry.bind("<Down>", lambda e: self._terminal_history_nav(1))
+        tk.Button(
+            term_in_row,
+            text="Run",
+            command=self._submit_terminal_entry,
+            bg=THEME["button_active_color"],
+            fg="#00ffcc",
+            relief=tk.FLAT,
+            font=self.fonts["ui_small"],
+            cursor="hand2",
+            padx=8,
+        ).pack(side=tk.RIGHT, padx=2, pady=2)
+
+        self.terminal_output = scrolledtext.ScrolledText(
+            self.terminal_body_frame,
+            font=self.fonts["log"],
+            bg="#0c0c0f",
+            fg="#00ffcc",
+            insertbackground="#00ffcc",
+            relief=tk.FLAT,
+            state="disabled",
+            height=12,
+        )
+        self.terminal_output.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=2, pady=2)
+        self._buffer_terminal_log(f"PS {self._terminal_cwd}> (ready)")
+
         # --- 3. INPUT FRAME (Themed Border) ---
         input_frame = tk.Frame(left, bg=THEME["trim_color"], highlightthickness=1, 
                                highlightbackground=THEME["trim_color"], highlightcolor=THEME["electric_blue"])
@@ -1678,6 +1898,7 @@ class ChatbotApp:
         self.attachment_frame.pack(side=tk.TOP, fill=tk.X, padx=2, pady=(2,0))
         
         txt_user = tk.Text(input_frame, height=3, font=self.fonts["main"], wrap=tk.WORD,
+                           undo=True, maxundo=50,
                            bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
                            insertbackground=THEME.get("electric_blue", THEME["fg_color"]),
                            highlightthickness=1, highlightbackground=THEME["trim_color"], 
@@ -1685,7 +1906,11 @@ class ChatbotApp:
         self.user_input = txt_user
         txt_user.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         txt_user.bind("<KeyPress>", self._handle_input_key)
-        ToolTip(txt_user, "Enter prompt. Press Enter to send, Shift+Enter for newline.", app=self)
+        txt_user.bind("<Alt-Up>", lambda e: self._restore_last_prompt())
+        txt_user.bind("<Alt-Down>", lambda e: self._restore_prompt_draft())
+        txt_user.bind("<Control-Up>", lambda e: self._restore_last_prompt(only_if_empty=True))
+        self._slash_popup = SlashSkillPopup(txt_user, scope="main")
+        ToolTip(txt_user, "Enter prompt or '/' for skills. Press Enter to send, Shift+Enter for newline, Alt+Up to restore (Alt+Down/Ctrl+Z to undo).", app=self)
 
         # --- 4. PERSONA CONTROLS (Single Slider Fix) ---
         p_frame = tk.Frame(left, bg=THEME["bg_color"])
@@ -1732,9 +1957,10 @@ class ChatbotApp:
         self.root.bind("<Configure>", self._on_root_configure)
 
         # --- FOOTER BUTTONS ---
+        left.grid_rowconfigure(6, weight=0)
         ctrl_frame = tk.Frame(left, bg=THEME["bg_color"])
         self.footer_control_frame = ctrl_frame
-        ctrl_frame.grid(row=5, column=0, sticky="ew", padx=10, pady=5)
+        ctrl_frame.grid(row=6, column=0, sticky="ew", padx=10, pady=5)
         
         self.lock_button = None
 
@@ -1762,6 +1988,13 @@ class ChatbotApp:
         ToolTip(self.history_usage_button, "Toggle TurboVec long-term history recall.", app=self)
         self.history_autosave_button = self._add_btn(ctrl_frame, self._get_history_autosave_label(), self.toggle_history_autosave, side=tk.RIGHT, font=self.fonts["ui_button"], fg=self._get_history_autosave_color())
         ToolTip(self.history_autosave_button, "Toggle History AutoSave mode (End / Close / Manual).", app=self)
+
+        # Bottom-Left Media Generation Button (Image / GIF / Video) next to History Selector
+        self.media_gen_button = self._add_btn(ctrl_frame, self._get_media_gen_label(), self.toggle_media_gen_mode, side=tk.RIGHT, font=self.fonts["ui_button"], fg=self._get_media_gen_color())
+        self.btn_image = self.media_gen_button
+        self.media_gen_button.bind("<Button-3>", self.open_media_gen_popup)
+        self.media_gen_button.bind("<Shift-Button-1>", self.open_media_gen_popup)
+        ToolTip(self.media_gen_button, "Cycle Media Generation mode (Off / Image / GIF / Video). Right-click or Shift+Click to open Synthesis Studio & generate immediately.", app=self)
 
         # Right Panel (Avatar & Stats)
         canvas_r = tk.Canvas(self.paned, bg=THEME["bg_color"], highlightthickness=0)
@@ -2019,7 +2252,12 @@ class ChatbotApp:
         # We pack chat_history first so we can refer to it with 'before=' if we pack others dynamically
         chat_history = self.chat_history
         if chat_history is not None:
-            chat_history.pack(side=tk.TOP, fill="both", expand=True, padx=2, pady=0)
+            if getattr(self, "_terminal_expanded", False):
+                chat_history.config(height=4)
+                chat_history.pack(side=tk.TOP, fill="x", expand=False, padx=2, pady=0)
+            else:
+                chat_history.config(height=getattr(self, "_orig_chat_height", 24))
+                chat_history.pack(side=tk.TOP, fill="both", expand=True, padx=2, pady=0)
             
         if hasattr(self, 'timeline_frame') and self.timeline_frame is not None and self.timeline_frame.winfo_exists() and chat_history is not None:
             if self.state.get("processing_multimodal", False):
@@ -2194,6 +2432,7 @@ class ChatbotApp:
         canvas = tk.Canvas(content_frame, bg=THEME["bg_color"], highlightthickness=0)
         scroll_frame = tk.Frame(canvas, bg=THEME["bg_color"])
         self._history_canvas = canvas
+        self.history_scroll_frame = scroll_frame
 
         canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
         
@@ -2325,10 +2564,24 @@ class ChatbotApp:
             self._bind_targeted_history_scroll(meta_lbl, canvas)
 
             # Display Name
-            name_lbl = tk.Label(hdr_row, text=item.get("display_name", "Chat Session"), 
+            raw_disp_name = item.get("display_name", "Chat Session")
+            name_lbl = tk.Label(hdr_row, text=raw_disp_name, 
                                 bg=THEME["widget_bg_color"], fg=THEME["fg_color"], 
                                 font=self.fonts["main"], anchor="w")
+            name_lbl._full_history_title = raw_disp_name
             name_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            name_lbl._full_history_path = item.get("filename", raw_disp_name)
+            try:
+                _marquee = globals().get("setup_marquee_label")
+                if _marquee is None:
+                    try:
+                        from System.serenity_utils import setup_marquee_label as _marquee
+                    except ImportError:
+                        from serenity_utils import setup_marquee_label as _marquee
+                if _marquee:
+                    _marquee(name_lbl, raw_disp_name, app=self, limit=28, full_path=name_lbl._full_history_path)
+            except Exception:
+                pass
             self._bind_targeted_history_scroll(name_lbl, canvas)
 
             # Deep Search Snippet Preview (if matched)
@@ -2388,6 +2641,21 @@ class ChatbotApp:
 
         _bind_tree(widget)
 
+    def _is_lvl7_isolated_hidden(self, levels=None, level=None, persona=None, filename="") -> bool:
+        """Returns True when Level 7/Cecilia history item must stay isolated from standard levels."""
+        if getattr(self, "active_persona_level", 3) == 7:
+            return False
+        if level == 7:
+            return True
+        if levels and 7 in levels:
+            return True
+        if str(persona or "").strip().lower() == "cecilia":
+            return True
+        fname = str(filename or "").lower()
+        if "cecilia" in fname or bool(re.search(r"_lvls?(?:[0-9_]*_)?7(?:_[0-9_]+)?\.history\.", fname)):
+            return True
+        return False
+
     def _get_all_history_entries(self):
         """Scans User History directory and parses metadata and date categories."""
         import datetime
@@ -2404,6 +2672,7 @@ class ChatbotApp:
         except Exception:
             return []
 
+        show_cecilia = bool(self.config.get("show_cecilia_slider", False)) if getattr(self, "config", None) else False
         for f in files:
             full_path = os.path.join(history_dir, f)
             try:
@@ -2425,6 +2694,9 @@ class ChatbotApp:
                 except Exception:
                     levels = []
                     lvl = None
+
+            if not show_cecilia and self._is_lvl7_isolated_hidden(levels=levels, level=lvl, filename=f):
+                continue
 
             # Clean Display Name - keep titles concise, no quantity
             display_name = re.sub(r"_lvls?[0-9_]+\.history\.(?:jsonz|encz)$", "", f).replace("-", " ").replace("_", " ")
@@ -2518,9 +2790,12 @@ class ChatbotApp:
                 files = [os.path.join(history_dir, f) for f in os.listdir(history_dir) if f.endswith(".history.jsonz") or f.endswith(".history.encz")]
             except: return
 
+            show_cecilia = bool(self.config.get("show_cecilia_slider", False)) if getattr(self, "config", None) else False
             for path in files:
                 if search_id is not None and getattr(self, "_history_search_counter", 0) != search_id:
                     return
+                if not show_cecilia and self._is_lvl7_isolated_hidden(filename=os.path.basename(path)):
+                    continue
 
                 # Check cached content or decompress/decrypt via vault_manager
                 msgs = self._history_content_cache.get(path)
@@ -2529,15 +2804,17 @@ class ChatbotApp:
                         if hasattr(self, 'vault_manager'):
                             msgs = self.vault_manager.read_history_messages(path)
                         else:
-                            import zlib, json
+                            import json
                             with open(path, "rb") as fp:
-                                msgs = json.loads(zlib.decompress(fp.read()).decode("utf-8"))
+                                msgs = json.loads(safe_zlib_decompress(fp.read()).decode("utf-8"))
                         self._history_content_cache[path] = msgs
                     except Exception:
                         continue
 
                 # Search within dialogue contents
                 for m in msgs:
+                    if not show_cecilia and self._is_lvl7_isolated_hidden(level=m.get("level"), persona=m.get("persona")):
+                        continue
                     content = str(m.get("content", ""))
                     idx = content.lower().find(q_lower)
                     if idx != -1:
@@ -2588,9 +2865,9 @@ class ChatbotApp:
                 if hasattr(self, 'vault_manager'):
                     msgs = self.vault_manager.read_history_messages(path)
                 else:
-                    import zlib, json
+                    import json
                     with open(path, 'rb') as f: 
-                        msgs = json.loads(zlib.decompress(f.read()).decode('utf-8'))
+                        msgs = json.loads(safe_zlib_decompress(f.read()).decode('utf-8'))
                 self._history_content_cache[path] = msgs
 
             # Full Pipeline breakdown with repeats at the top of history file
@@ -3040,8 +3317,52 @@ class ChatbotApp:
             halt_mode = self.config.get("halt_behavior_mode", "off")
             self._log_and_display(f"Halt triggered ({halt_mode})...")
             self.stop_process.set()
+            self.state["was_halted"] = True
+            self.state["running"] = False
+            self.set_ui_state(model_loaded=True, generating=False)
+            if self.thinking_display and self.thinking_display.winfo_exists():
+                self.thinking_display.stop()
         self.state.pop("active_subagent", None)
+        if self.text_buffer:
+            self._update_ai_message(self.text_buffer)
+            self.text_buffer = ""
+        if self.thought_stream_buffer:
+            self._update_thought_dropdown(self.thought_stream_buffer)
+            self.thought_stream_buffer = ""
         self._drain_process_queue()
+        # Prompt & Progress Preservation Guard: ensure halted turn is never lost
+        try:
+            if getattr(self, "last_user_message", None):
+                last_u = str(self.last_user_message).strip()
+                if last_u and hasattr(self, "messages") and isinstance(self.messages, list):
+                    already_in_hist = False
+                    if self.messages and self.messages[-1].get("role") == "user" and self.messages[-1].get("content") == last_u:
+                        already_in_hist = True
+                    elif len(self.messages) >= 2 and self.messages[-2].get("role") == "user" and self.messages[-2].get("content") == last_u:
+                        already_in_hist = True
+                    if not already_in_hist:
+                        ai_text = ""
+                        if hasattr(self, "chat_history") and self.chat_history:
+                            try:
+                                p_start = self.chat_history.index("response_start") if "response_start" in self.chat_history.mark_names() else self.state.get("response_start_idx")
+                                if p_start:
+                                    ai_text = self.chat_history.get(p_start, tk.END).strip()
+                                    lead = f"{self._get_persona_label()}:"
+                                    if ai_text.startswith(lead):
+                                        ai_text = ai_text[len(lead):].strip()
+                            except Exception:
+                                pass
+                        if not ai_text:
+                            ai_text = "[Halted by user]"
+                        self.messages.extend([
+                            {"role": "user", "content": last_u},
+                            {"role": "assistant", "content": ai_text}
+                        ])
+                        if self.config.get("history_autosave_mode", "End") == "End" and hasattr(self, "save_history"):
+                            self.save_history()
+        except Exception as _halt_save_err:
+            print(f"[HALT] Progress commit notice: {_halt_save_err}")
+
 
     def _sync_deep_cook_ui(self):
         """Centralized source of truth for the Deep Cook button appearance."""
@@ -3392,20 +3713,62 @@ class ChatbotApp:
             else:
                 m.chat_format = "llama-2"
 
+    def _prepare_model_swap_target(self, raw_level, target_tier=None):
+        """Resolve integer persona level, tier key, and absolute model path."""
+        level = int(raw_level)
+        if not target_tier:
+            tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
+            target_tier = tier_map.get(level, "low")
+        path = self.model_paths.get(target_tier)
+        if path and not os.path.isabs(path):
+            path = os.path.join(self.script_dir, path)
+        return level, target_tier, path
+
+    def _try_soft_clear_model(self, path: str, target_tier: str) -> bool:
+        """Return True when the active model file can remain warm in VRAM."""
+        if not (self.model and getattr(self, "model_path", None) == path and target_tier not in ("transcendent", "Live")):
+            return False
+        if SYSTEM_MONITOR_LOADED and getattr(self, "gpu_handle", None):
+            try:
+                mem = nvidia_ml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
+                if mem.free / (1024**2) < 600:
+                    return False
+            except Exception:
+                pass
+        return True
+
+    @staticmethod
+    def _flush_cuda_gc() -> None:
+        """Collect Python garbage and release cached CUDA allocations."""
+        import gc
+        gc.collect()
+        if TORCH_AVAILABLE:
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+    def _evacuate_model_vram(self, reason: Optional[str] = None, sleep_sec: float = 0.0) -> None:
+        """Unload self.model, clear CUDA cache, and wait if driver sync is needed."""
+        if self.model:
+            if reason:
+                print(reason)
+            del self.model
+            self.model = None
+            ChatbotApp._flush_cuda_gc()
+            if sleep_sec > 0:
+                time.sleep(sleep_sec)
+        else:
+            self.model = None
+
     def model_swap_synchronous(self, target_level=None, target_tier=None, timeout_sec=120.0):
         """
         Synchronously swaps model for multi-agent delegation without halting generation,
         clearing the chat widget, or triggering UI state destruction.
         """
         raw_val = target_level if target_level is not None else 3
-        level = int(raw_val)
-        if not target_tier:
-            tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
-            target_tier = tier_map.get(level, "low")
-
-        path = self.model_paths.get(target_tier)
-        if path and not os.path.isabs(path):
-            path = os.path.join(self.script_dir, path)
+        level, target_tier, path = ChatbotApp._prepare_model_swap_target(self, raw_val, target_tier)
 
         if not path or not os.path.exists(path):
             print(f"[MODEL SWAP SYNC WARNING] Model for {target_tier.upper()} not found at: {path}")
@@ -3416,42 +3779,15 @@ class ChatbotApp:
             print(f"[MODEL SWAP SYNC] Tier {target_tier.upper()} (Lvl {level}) already active.")
             return True
 
-        # Soft Clear if exact same model path
-        soft_clear = False
-        if self.model and getattr(self, "model_path", None) == path and target_tier not in ("transcendent", "Live"):
-            soft_clear = True
-            if SYSTEM_MONITOR_LOADED and getattr(self, "gpu_handle", None):
-                try:
-                    mem = nvidia_ml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
-                    free_mb = mem.free / (1024**2)
-                    if free_mb < 600: soft_clear = False
-                except: pass
-
-        if soft_clear:
+        if ChatbotApp._try_soft_clear_model(self, path, target_tier):
             print(f"[APEX] VRAM HEALTHY: Soft-Clearing model for sync swap to {target_tier.upper()}.")
             self.current_model_tier = target_tier
             self.active_persona_level = int(level)
             self.loaded_persona_level = int(level)
-            if TORCH_AVAILABLE:
-                try:
-                    if torch.cuda.is_available(): torch.cuda.empty_cache()
-                except: pass
-            import gc; gc.collect()
+            ChatbotApp._flush_cuda_gc()
             return True
 
-        # Evacuate old model VRAM
-        if self.model:
-            print(f"[APEX] Evacuating VRAM for synchronous model swap to {target_tier.upper()}...")
-            del self.model
-            self.model = None
-            import gc
-            gc.collect()
-            if TORCH_AVAILABLE:
-                try:
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except: pass
-            time.sleep(0.5)
+        ChatbotApp._evacuate_model_vram(self, f"[APEX] Evacuating VRAM for synchronous model swap to {target_tier.upper()}...", sleep_sec=0.5)
 
         self.model_path = path
         self.current_model_tier = target_tier
@@ -3495,14 +3831,7 @@ class ChatbotApp:
                   self._reset_multimodal_ui()
 
         raw_val = int(value) if value else (target_level if target_level else self.depth_slider.get() if self.depth_slider else 3)
-        level = int(raw_val)
-        if not target_tier:
-            tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
-            target_tier = tier_map.get(level, "low")
-
-        path = self.model_paths.get(target_tier)
-        if path and not os.path.isabs(path):
-            path = os.path.join(self.script_dir, path)
+        level, target_tier, path = ChatbotApp._prepare_model_swap_target(self, raw_val, target_tier)
             
         if not path or not os.path.exists(path):
             msg = f"Model for {target_tier.upper()} tier not found at:\n{path or 'Not Set'}"
@@ -3523,30 +3852,14 @@ class ChatbotApp:
                     self.send_message(t.get("message"), skip_swap_check=True)
             return
 
-        # --- APEX VRAM SOFT-CLEAR ---
-        # If toggling between layers of the exact same model file, keep KV/Logic loaded (exclude Live tier for full purge)
-        soft_clear = False
-        if self.model and getattr(self, "model_path", None) == path and target_tier not in ("transcendent", "Live"):
-            soft_clear = True
-            if SYSTEM_MONITOR_LOADED and getattr(self, "gpu_handle", None):
-                try:
-                    mem = nvidia_ml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
-                    free_mb = mem.free / (1024**2)
-                    if free_mb < 600: soft_clear = False # Require 10% 6GB breathing room
-                except: pass
-
-        if soft_clear:
+        if ChatbotApp._try_soft_clear_model(self, path, target_tier):
             print(f"[APEX] VRAM HEALTHY: Soft-Clearing model instead of hard purge.")
             if self.model: self.save_history()
             
             self.current_model_tier = target_tier
             self.active_persona_level = int(level)
             self._log_and_display(f"Swapped to {target_tier.upper()} tier (Soft Clear)")
-            if TORCH_AVAILABLE:
-                try: 
-                    if torch.cuda.is_available(): torch.cuda.empty_cache()
-                except: pass
-            import gc; gc.collect()
+            ChatbotApp._flush_cuda_gc()
             
             self.clear_chat_ui()
             self.stop_process.clear(); self.state["running"] = False
@@ -3560,21 +3873,7 @@ class ChatbotApp:
         self._log_and_display(f"Swapping to {target_tier.upper()} tier...")
         
         self.set_ui_state(model_loaded=False, loading=True)
-        # --- APEX VRAM EVACUATION ---
-        if self.model:
-            print("[APEX] Breaking Core Paradox: Purging old model for VRAM evacuation...")
-            del self.model
-            self.model = None
-            import gc
-            gc.collect()
-            if TORCH_AVAILABLE:
-                try: 
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except: pass
-            time.sleep(1.0) # Hardware Breath: Allow driver sync
-        else:
-            self.model = None
+        ChatbotApp._evacuate_model_vram(self, "[APEX] Breaking Core Paradox: Purging old model for VRAM evacuation...", sleep_sec=1.0)
 
         self.clear_chat_ui()
         self.stop_process.clear(); self.state["running"] = True
@@ -3633,10 +3932,342 @@ class ChatbotApp:
         processed = re.sub(pattern, replace_match, target_str)
         return processed + remainder
 
+    def _run_monitor_command(self, sub_cmd: str = "scan") -> str:
+        """Executes `/monitor [status|start|stop|scan]` using AgenticMonitor."""
+        from System.agentic_monitor import AgenticMonitor
+        if not getattr(self, "agentic_monitor", None):
+            self.agentic_monitor = AgenticMonitor(app=self)
+        mon = self.agentic_monitor
+        cmd = str(sub_cmd or "scan").strip().lower()
+        if cmd == "start":
+            mon.start()
+            rep = mon.scan_once()
+            return f"[Monitor] Started.\n{rep['summary']}"
+        if cmd == "stop":
+            mon.stop()
+            return "[Monitor] Stopped."
+        if cmd == "status":
+            st = mon.status()
+            rep = st.get("last_report") or mon.scan_once()
+            return f"[Monitor Running={st['running']}, Checks={st['checks_count']}]\n{rep['summary']}"
+        rep = mon.scan_once()
+        return rep["summary"]
+
+    def _run_testbank_command(self, arg_str: str = "") -> str:
+        """Generates a clean Wringer test bank via active loaded model (or crucible fallback) with 001_YYYY-MM-DD naming."""
+        from System.agentic_monitor import is_text_readable, next_auto_label_for_dir
+
+        tokens = [t for t in str(arg_str or "").strip().split() if t]
+        target_count = 6
+        topic_parts = []
+        for tok in tokens:
+            if tok.isdigit() and 1 <= int(tok) <= 30:
+                target_count = int(tok)
+            else:
+                topic_parts.append(tok)
+        topic = " ".join(topic_parts).strip() or "general reasoning"
+
+        banks_dir = os.path.join(self.script_dir, "benchmarks", "wringer", "custom_test_banks")
+        os.makedirs(banks_dir, exist_ok=True)
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", topic.lower()).strip("_")[:24] or "custom"
+        label = next_auto_label_for_dir(banks_dir, suffix=slug)
+        out_path = os.path.join(banks_dir, f"{label}.json")
+
+        bank_data = {}
+        used_model = False
+        if getattr(self, "model", None) is not None and hasattr(self, "_run_blocking_inference"):
+            prompt = (
+                f"Generate a clean JSON benchmark bank on the topic '{topic}' with {target_count} items "
+                "split across keys \"lvl1\", \"lvl2\", and \"lvl3\".\n"
+                "Each key must map to a list of objects {\"prompt\": \"...\", \"reference\": \"...\"}.\n"
+                "Output ONLY raw valid JSON with no markdown commentary."
+            )
+            try:
+                raw = self._run_blocking_inference(prompt, {"temperature": 0.4, "top_p": 0.9, "max_tokens": 1600})
+                if raw:
+                    m = re.search(r"\{[\s\S]*\}", raw)
+                    parsed = json.loads(m.group(0) if m else raw)
+                    if isinstance(parsed, dict):
+                        cleaned = {}
+                        for k, items in parsed.items():
+                            if re.match(r"^lvl\d+$", str(k)) and isinstance(items, list):
+                                valid_items = [
+                                    {"prompt": str(it["prompt"]).strip(), "reference": str(it["reference"]).strip()}
+                                    for it in items
+                                    if isinstance(it, dict)
+                                    and is_text_readable(str(it.get("prompt", "")))
+                                    and is_text_readable(str(it.get("reference", "")))
+                                ]
+                                if valid_items:
+                                    cleaned[k] = valid_items
+                        if cleaned:
+                            bank_data = cleaned
+                            used_model = True
+            except Exception as tb_err:
+                print(f"[TESTBANK LLM FALLBACK] {tb_err}")
+
+        if not bank_data:
+            per_tier = max(1, target_count // 3)
+            bank_data = {
+                "lvl1": [
+                    {
+                        "prompt": f"Define a foundational concept in {topic} (#{i + 1}) and state one practical example.",
+                        "reference": f"A clear definition of {topic} principle #{i + 1} paired with an accurate, verifiable example.",
+                    }
+                    for i in range(per_tier)
+                ],
+                "lvl2": [
+                    {
+                        "prompt": f"Compare two common approaches used in {topic} (#{i + 1}) and explain their trade-offs.",
+                        "reference": f"An accurate comparison detailing strengths, limitations, and selection criteria for {topic} (#{i + 1}).",
+                    }
+                    for i in range(per_tier)
+                ],
+                "lvl3": [
+                    {
+                        "prompt": f"Diagnose an edge-case failure mode in {topic} (#{i + 1}) and propose a concrete verification check.",
+                        "reference": f"Identifies a realistic {topic} failure mode and specifies a reproducible verification test.",
+                    }
+                    for i in range(per_tier)
+                ],
+            }
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(bank_data, f, indent=2, ensure_ascii=False)
+
+        sibling_banks = os.path.join(
+            os.path.dirname(self.script_dir),
+            "Environment M",
+            "Training Station",
+            "benchmarks",
+            "wringer",
+            "custom_test_banks",
+        )
+        if os.path.isdir(sibling_banks):
+            try:
+                with open(os.path.join(sibling_banks, f"{label}.json"), "w", encoding="utf-8") as sf:
+                    json.dump(bank_data, sf, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+        total_q = sum(len(v) for v in bank_data.values() if isinstance(v, list))
+        route_note = "active model" if used_model else "offline template"
+        return f"[TestBank] Saved '{os.path.basename(out_path)}' ({total_q} prompts, routed via {route_note})."
+
+    def _get_contextual_history_messages(self, query_text=None):
+        """Returns active/archived context messages respecting history_usage, relevance, token budget, and Level 7 isolation."""
+        cfg = getattr(self, "config", None) or {}
+        usage = str(cfg.get("history_usage", "all")).lower().strip()
+        if usage == "off":
+            return []
+
+        active_level = int(getattr(self, "active_persona_level", 3) or 3)
+
+        def _filter_msgs(msg_list):
+            if active_level == 7:
+                return [dict(m) for m in (msg_list or []) if isinstance(m, dict)]
+            out = []
+            for m in (msg_list or []):
+                if not isinstance(m, dict):
+                    continue
+                is_lvl7_msg = (
+                    m.get("level") == 7
+                    or str(m.get("persona", "")).strip().lower() == "cecilia"
+                )
+                if is_lvl7_msg:
+                    if out and out[-1].get("role") == "user":
+                        out.pop()
+                    continue
+                out.append(dict(m))
+            return out
+
+        active_msgs = _filter_msgs(getattr(self, "messages", None) or [])
+        if usage in ("window", "current_window"):
+            return active_msgs
+
+        # History: All -> incorporate relevant, token-budgeted cross-session context
+        prior_raw = list(getattr(self, "_archived_history_messages", None) or [])
+        if not prior_raw:
+            hist_dir = self.get_user_history_dir() if hasattr(self, "get_user_history_dir") else (getattr(self, "dirs", {}) or {}).get("History")
+            if hist_dir and os.path.exists(hist_dir):
+                try:
+                    cand_files = [
+                        os.path.join(hist_dir, f)
+                        for f in os.listdir(hist_dir)
+                        if f.endswith(".history.jsonz") or f.endswith(".history.encz")
+                    ]
+                    cand_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                    is_lvl7_active = (active_level == 7)
+                    latest_mtime = os.path.getmtime(cand_files[0]) if cand_files else 0.0
+                    cache_key = (is_lvl7_active, hist_dir, len(cand_files), latest_mtime)
+                    cache = getattr(self, "_cross_session_history_cache", None)
+                    if isinstance(cache, dict) and cache.get("key") == cache_key:
+                        prior_raw = list(cache.get("messages", []))
+                    else:
+                        loaded = []
+                        vault = getattr(self, "vault_manager", None)
+                        for fp in cand_files:
+                            fname = os.path.basename(fp)
+                            if self._is_lvl7_isolated_hidden(filename=fname):
+                                continue
+                            msgs_fp = None
+                            try:
+                                if fp.endswith(".encz"):
+                                    if vault is not None and not getattr(vault, "is_locked", lambda: True)():
+                                        msgs_fp = vault.read_history_messages(fp)
+                                else:
+                                    with open(fp, "rb") as fobj:
+                                        msgs_fp = json.loads(safe_zlib_decompress(fobj.read()).decode("utf-8"))
+                            except Exception:
+                                msgs_fp = None
+                            if isinstance(msgs_fp, list) and msgs_fp:
+                                loaded.extend(msgs_fp[-6:])
+                                if len(loaded) >= 12:
+                                    break
+                        prior_raw = loaded[-12:]
+                        self._cross_session_history_cache = {"key": cache_key, "messages": list(prior_raw)}
+                except Exception:
+                    prior_raw = []
+
+        prior_msgs = _filter_msgs(prior_raw)[-12:]
+        if not prior_msgs:
+            return active_msgs
+
+        # Extract meaningful query keywords from explicit query_text or latest user turn
+        q_src = str(query_text or "").strip()
+        if not q_src:
+            for m in reversed(active_msgs):
+                if m.get("role") == "user":
+                    c = m.get("content", "")
+                    q_src = c if isinstance(c, str) else " ".join(str(p.get("text", "")) for p in c if isinstance(p, dict))
+                    break
+        _stop = {
+            "this", "that", "with", "from", "have", "what", "when", "where", "which", "about",
+            "your", "there", "their", "would", "could", "should", "just", "some", "into", "more",
+            "also", "very", "like", "then", "than", "them", "they", "been", "were", "will", "here",
+            "please", "help", "need", "want", "make", "tell", "know", "think", "current", "turn",
+        }
+        q_terms = {w for w in re.findall(r"[a-zA-Z0-9_]{4,}", q_src.lower()) if w not in _stop}
+
+        # Relevance filter: Lvl 1 & Lvl 2 (efficiency/search) only pull cross-chat history on keyword overlap
+        # so unrelated past chats never pollute prompts or inflate prefill.
+        if q_terms:
+            relevant_prior = []
+            for idx, m in enumerate(prior_msgs):
+                txt = str(m.get("content", "")).lower()
+                if any(t in txt for t in q_terms):
+                    if idx > 0 and prior_msgs[idx - 1].get("role") == "user" and prior_msgs[idx - 1] not in relevant_prior:
+                        relevant_prior.append(prior_msgs[idx - 1])
+                    if m not in relevant_prior:
+                        relevant_prior.append(m)
+            if active_level <= 2:
+                prior_msgs = relevant_prior
+            elif relevant_prior:
+                prior_msgs = relevant_prior
+        elif active_level <= 2:
+            prior_msgs = []
+
+        if not prior_msgs:
+            return active_msgs
+
+        # Strict token budget cap on cross-session archived messages (~1500 tokens / 6000 chars max,
+        # 1200 chars per archived message) so History: All never causes 40k prefill spikes.
+        max_prior_chars = 2400 if active_level <= 2 else 6000
+        max_msg_chars = 800 if active_level <= 2 else 1200
+        seen_pairs = {(m.get("role"), str(m.get("content", ""))) for m in active_msgs}
+        budgeted = []
+        used_chars = 0
+        for m in reversed(prior_msgs):
+            raw_c = m.get("content", "")
+            if (m.get("role"), str(raw_c)) in seen_pairs:
+                continue
+            c_str = str(raw_c) if isinstance(raw_c, str) else str(raw_c)
+            if len(c_str) > max_msg_chars:
+                c_str = c_str[:max_msg_chars] + "... [truncated]"
+            if used_chars + len(c_str) > max_prior_chars and budgeted:
+                break
+            m_copy = dict(m)
+            m_copy["content"] = c_str
+            budgeted.append(m_copy)
+            used_chars += len(c_str)
+        budgeted.reverse()
+
+        combined = budgeted + active_msgs
+        return combined
+
     def send_message(self, msg_override=None, skip_swap_check=False):
         if self.state["running"]: return
         
         raw_msg = msg_override if msg_override else self.user_input.get("1.0", tk.END).strip()
+        if raw_msg.lower() in ("/skills", "/tree"):
+            self.user_input.delete("1.0", tk.END)
+            def _insert_skill(cmd):
+                self.user_input.delete("1.0", tk.END)
+                self.user_input.insert("1.0", cmd)
+                self.user_input.focus_set()
+            show_skill_tree_popup(self.root, scope="main", on_insert=_insert_skill)
+            return
+        if raw_msg.lower() == "/clear":
+            self.user_input.delete("1.0", tk.END)
+            self.clear_current_history()
+            return
+        if raw_msg.lower() == "/monitor" or raw_msg.lower().startswith("/monitor "):
+            if not msg_override:
+                self.user_input.delete("1.0", tk.END)
+            sub_cmd = raw_msg[8:].strip().lower() or "scan"
+            out_txt = self._run_monitor_command(sub_cmd)
+            if self.chat_history is not None:
+                self._append_to_chat(f"\n[SYSTEM] {out_txt}\n", "system")
+            else:
+                self._log_and_display(out_txt)
+            return
+        if raw_msg.lower() == "/testbank" or raw_msg.lower().startswith("/testbank "):
+            if not msg_override:
+                self.user_input.delete("1.0", tk.END)
+            tb_arg = raw_msg[9:].strip()
+            self._log_and_display(f"[TestBank] Generating readable test bank ({tb_arg or 'general'})...")
+            def _tb_worker():
+                res = self._run_testbank_command(tb_arg)
+                if hasattr(self, "process_queue") and self.process_queue:
+                    self.process_queue.put({"status": "log_update", "content": f"\n{res}\n"})
+                if hasattr(self, "root") and self.root:
+                    try:
+                        self.root.after(0, lambda r=res: self._append_to_chat(f"\n[SYSTEM] {r}\n", "system") if getattr(self, "chat_history", None) else None)
+                    except Exception:
+                        pass
+            threading.Thread(target=_tb_worker, daemon=True).start()
+            return
+        if raw_msg.lower().startswith("/game"):
+            self.user_input.delete("1.0", tk.END)
+            from System.gamerenity_router import resolve_active_game_model, resolve_game_model
+            arg = raw_msg[5:].strip().lower()
+            cfg_p = os.path.join(self.script_dir, "benchmarks", "training station", "station_config.json")
+            gf_p = os.path.join(self.script_dir, "benchmarks", "training station", "GGUForge")
+            if not arg or arg == "auto":
+                game_k, g_path = resolve_active_game_model(cfg_path=cfg_p, gguforge_root=gf_p)
+            else:
+                game_k, g_path = arg, resolve_game_model(arg, cfg_path=cfg_p, gguforge_root=gf_p)
+            if not g_path:
+                self._log_and_display(f"[Gamerenity] No active game/GGUF found for '{arg or 'auto'}'.")
+                return
+            if os.path.abspath(g_path) != os.path.abspath(getattr(self, "model_path", "") or ""):
+                self.model_paths["gamerenity"] = g_path
+                self._log_and_display(f"[Gamerenity] Routing '{game_k}' -> {os.path.basename(g_path)}")
+                self.model_swap(target_level=1, target_tier="gamerenity")
+            else:
+                self._log_and_display(f"[Gamerenity] '{game_k}' model already active: {os.path.basename(g_path)}")
+            return
+        if not skip_swap_check and self.config.get("gamerenity_auto_route", False):
+            from System.gamerenity_router import resolve_active_game_model
+            cfg_p = os.path.join(self.script_dir, "benchmarks", "training station", "station_config.json")
+            gf_p = os.path.join(self.script_dir, "benchmarks", "training station", "GGUForge")
+            game_k, g_path = resolve_active_game_model(cfg_path=cfg_p, gguforge_root=gf_p)
+            if g_path and os.path.abspath(g_path) != os.path.abspath(getattr(self, "model_path", "") or ""):
+                self.model_paths["gamerenity"] = g_path
+                self.pending_task = {"type": "chat", "message": raw_msg}
+                self._log_and_display(f"[Gamerenity] Auto-routing '{game_k}' -> {os.path.basename(g_path)}")
+                self.model_swap(target_level=1, target_tier="gamerenity")
+                return
         user_msg = self._parse_and_stage_filename_imports(raw_msg)
         
         # 1. Text Documents Injection
@@ -3737,6 +4368,7 @@ class ChatbotApp:
                         messagebox.showerror("Vision Error", "No Vision model or Vision Projector found for image/media processing.\n\nPlease configure 'vision_multimodal' tier in Settings or load a model with a vision projector (.mmproj).")
                         return
 
+                self._last_submitted_prompt = user_msg
                 if not msg_override:
                     self.user_input.delete("1.0", tk.END)
                     self.last_user_message = user_msg
@@ -3810,8 +4442,8 @@ class ChatbotApp:
                         modified_user_msg = f"You are looking at a sequence of frames sampled from a video at 1 frame per second. {user_msg}"
                     content_list.append({"type": "text", "text": modified_user_msg})
                                 
-                    is_hist_off = (self.config.get("history_usage", "all") == "off")
-                    temp_msgs = [{"role": "user", "content": content_list}] if is_hist_off else (self.messages + [{"role": "user", "content": content_list}])
+                    ctx_msgs = self._get_contextual_history_messages()
+                    temp_msgs = ctx_msgs + [{"role": "user", "content": content_list}]
                     threading.Thread(target=self._generation_worker, args=(user_msg, temp_msgs), daemon=True).start()
                     self.root.after(100, self.check_process_queue)
                     return
@@ -3824,6 +4456,7 @@ class ChatbotApp:
 
             elif self.state.get("staged_multimodal"):
                 staged = self.state["staged_multimodal"]
+                self._last_submitted_prompt = user_msg
                 if not msg_override:
                     self.user_input.delete("1.0", tk.END)
                     self.last_user_message = user_msg
@@ -3836,6 +4469,7 @@ class ChatbotApp:
                     return
 
         if self.state["deep_cook"] and not skip_swap_check:
+            self._last_submitted_prompt = user_msg
             if not msg_override:
                 self.user_input.delete("1.0", tk.END)
                 self.last_user_message = user_msg
@@ -3846,9 +4480,10 @@ class ChatbotApp:
         user_msg = msg_override if msg_override else self.user_input.get("1.0", tk.END).strip()
         if not user_msg: return
 
+        self._last_submitted_prompt = user_msg
+        self.last_user_message = user_msg
         if not msg_override:
             self.user_input.delete("1.0", tk.END)
-            self.last_user_message = user_msg
             self._display_user_message(user_msg)
 
         level = int(self.depth_slider.get()) if self.depth_slider else 3
@@ -3865,8 +4500,8 @@ class ChatbotApp:
         self._set_prefill_avatar_state()
         
         self._prep_generation()
-        is_hist_off = (self.config.get("history_usage", "all") == "off")
-        temp_msgs = [{"role": "user", "content": user_msg}] if is_hist_off else (self.messages + [{"role": "user", "content": user_msg}])
+        ctx_msgs = self._get_contextual_history_messages()
+        temp_msgs = ctx_msgs + [{"role": "user", "content": user_msg}]
         threading.Thread(target=self._generation_worker, args=(user_msg, temp_msgs), daemon=True).start()
         self.root.after(100, self.check_process_queue)
 
@@ -4062,19 +4697,19 @@ class ChatbotApp:
         
         # Deep cook is a special operational mode, not a standard level
         if tier == "deep_cook":
-            params_specs["n_ctx"] = self.context_size_config.get(tier, 2048) 
+            params_specs["n_ctx"] = self._get_effective_context_size(tier, level)
             params_specs["n_gpu_layers"] = 15
             params_specs["extra_args"]["flash_attn"] = True
         elif tier.startswith("vision_"):
-            # Context Expansion: Pull from user settings or fallback to 8192
-            params_specs["n_ctx"] = self.context_size_config.get(tier, 8192)
+            # Context Expansion: Pull from session/user settings or fallback to 8192
+            params_specs["n_ctx"] = self._get_effective_context_size(tier, level)
             # APEX SOLO PROJECTOR: Force 0 layers for LLM to reserve VRAM solo for mmproj
             # This ensures the 1.5GB 'Landing Zone' is maintained.
             params_specs["n_gpu_layers"] = 0 
             params_specs["extra_args"]["flash_attn"] = True
         else:
-            # Pull directly from configuration maps or overrides
-            params_specs["n_ctx"] = self.context_size_config.get(tier, CONTEXT_SIZE_MAP.get(level, 4096))
+            # Pull directly from session/configuration maps or overrides
+            params_specs["n_ctx"] = self._get_effective_context_size(tier, level)
             
             # Dynamic n_ctx scaling based on HardwareProfile (only for standard tiers)
             ram_gb = HardwareProfile.get_total_ram_gb()
@@ -4358,15 +4993,18 @@ class ChatbotApp:
                 "f16": getattr(lcpp, "GGML_TYPE_F16", 1),
                 "fp16": getattr(lcpp, "GGML_TYPE_F16", 1),
                 "q8_0": getattr(lcpp, "GGML_TYPE_Q8_0", 8),
+                "q6_0": getattr(lcpp, "GGML_TYPE_Q6_0", getattr(lcpp, "GGML_TYPE_Q8_0", 8)),
                 "q5_1": getattr(lcpp, "GGML_TYPE_Q5_1", 7),
                 "q5_0": getattr(lcpp, "GGML_TYPE_Q5_0", 6),
                 "q4_1": getattr(lcpp, "GGML_TYPE_Q4_1", 3),
                 "q4_0": getattr(lcpp, "GGML_TYPE_Q4_0", 2),
                 "iq4_nl": getattr(lcpp, "GGML_TYPE_IQ4_NL", 20),
+                "turbo3_tcq": getattr(lcpp, "GGML_TYPE_TURBO3_TCQ", getattr(lcpp, "GGML_TYPE_Q4_0", 2)),
+                "turbo2_tcq": getattr(lcpp, "GGML_TYPE_TURBO2_TCQ", getattr(lcpp, "GGML_TYPE_Q4_0", 2)),
             }
             
-            # Retrieve independent K/V Cache selections from config
-            UNIVERSAL_KV = {"fp16", "f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "f32"}
+            # Retrieve independent K/V Cache selections from config (Backburner #100)
+            UNIVERSAL_KV = {"fp16", "f16", "q8_0", "q6_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl", "turbo3_tcq", "turbo2_tcq", "f32"}
             k_fmt = self.config.get("k_cache_type", params.pop("cache_type_k", "q8_0")).lower()
             v_fmt = self.config.get("v_cache_type", params.pop("cache_type_v", "q8_0")).lower()
             if k_fmt not in UNIVERSAL_KV:
@@ -4585,7 +5223,40 @@ class ChatbotApp:
                             print(f"[Core] {mtp_msg}")
                             self.process_queue.put({"status": "diag_log_update", "content": f"[ENGINE] {mtp_msg}"})
                     except Exception as init_err:
-                        if draft_model is not None or mtp_model_path is not None:
+                        if "TemplateSyntaxError" in type(init_err).__name__ or "end of statement block" in str(init_err):
+                            print(f"[ENGINE] HF chat_template Jinja2 incompatibility ({init_err}); retrying with safe chat_format fallback...")
+                            from llama_cpp import llama_chat_format as _lcf
+                            _orig_j2 = _lcf.Jinja2ChatFormatter
+                            class _SafeJ2:
+                                def __init__(self, *a, **kw): pass
+                                def to_chat_handler(self): return None
+                            _lcf.Jinja2ChatFormatter = _SafeJ2
+                            try:
+                                model = Llama(
+                                    model_path=self.model_path,
+                                    n_gpu_layers=n_layers,
+                                    n_ctx=n_ctx,
+                                    n_threads=HardwareProfile.get_optimal_threads(),
+                                    n_batch=max(1024, self.n_batch_config.get(target_tier, 512)),
+                                    n_ubatch=512,
+                                    n_keep=resolved_n_keep,
+                                    n_seq_max=1,
+                                    chat_handler=chat_handler,
+                                    chat_format=resolved_format or "gemma",
+                                    verbose=True,
+                                    use_mmap=True,
+                                    flash_attn=use_flash,
+                                    type_k=t_k, type_v=t_v,
+                                    offload_kqv=not no_kv_offload,
+                                    logits_all=False,
+                                    tensor_split=None,
+                                    rpc_servers=None,
+                                    override_tensors=override_tensors,
+                                    **params
+                                )
+                            finally:
+                                _lcf.Jinja2ChatFormatter = _orig_j2
+                        elif draft_model is not None or mtp_model_path is not None:
                             print(f"[ENGINE] Speculative drafter/MTP initialization failed ({init_err}). Retrying without drafter/MTP...")
                             model = Llama(
                                 model_path=self.model_path, 
@@ -4883,7 +5554,8 @@ class ChatbotApp:
                         print(f"[DELEGATION WARNING] Delegation pipeline execution error: {e}")
 
             # Concise Keyword / History Lookups in Backend Thought Log (not entire history files!)
-            if self.config.get("history_usage", "all") != "off" and getattr(self, "turbo_vec", None):
+            usage_mode = str(self.config.get("history_usage", "all")).lower().strip()
+            if usage_mode != "off" and getattr(self, "turbo_vec", None):
                 try:
                     lookup_mode = self.config.get("history_lookup_mode", "targeted")
                     if hasattr(self.turbo_vec, "search_snippets"):
@@ -4896,21 +5568,54 @@ class ChatbotApp:
                             lookup_mode=lookup_mode,
                             vault_manager=getattr(self, "vault_manager", None)
                         )
+                        used_mode = lookup_mode
+                        if not kw_hits and usage_mode == "all" and lookup_mode != "all":
+                            kw_hits = self.turbo_vec.search_snippets(
+                                user_message,
+                                top_k=3,
+                                max_chars=240,
+                                active_model_path=self.model_path,
+                                active_level=self.active_persona_level,
+                                lookup_mode="all",
+                                vault_manager=getattr(self, "vault_manager", None)
+                            )
+                            used_mode = "all (fallback)"
                         if kw_hits:
                             snippet_lines = []
                             for idx_h, h in enumerate(kw_hits, 1):
                                 kw_str = ", ".join(h.get("keywords", [])) or "semantic"
                                 snippet_lines.append(f"  {idx_h}. [Keywords: {kw_str}] {h['excerpt']}")
-                            kw_log = f"\n[HISTORY KEYWORD LOOKUP ({lookup_mode.upper()}) - {len(kw_hits)} snippet(s)]:\n" + "\n".join(snippet_lines) + "\n"
+                            kw_log = f"\n[HISTORY KEYWORD LOOKUP ({used_mode.upper()}) - {len(kw_hits)} snippet(s)]:\n" + "\n".join(snippet_lines) + "\n"
                             self.process_queue.put({"status": "thought_log_update", "content": kw_log})
                             sys_content += "\n\n[HISTORICAL RECALL SNIPPETS]:\n" + "\n".join(h["excerpt"] for h in kw_hits)
                 except Exception as kw_err:
                     print(f"[TURBOVEC LOOKUP] Warning: {kw_err}")
 
+            # RLHF Learned Corrections Injection (All persona levels >= 1)
+            if hasattr(self, "semantic_vault") and self.semantic_vault:
+                try:
+                    rlhf_nodes = [
+                        n for n in self.semantic_vault.get_grounding_for_prompt(user_message, limit=6)
+                        if str(n.get("concept_family", "")).lower() == "rlhf_correction"
+                    ]
+                    if not rlhf_nodes and hasattr(self.semantic_vault, "get_recent_grounding"):
+                        rlhf_nodes = [
+                            n for n in self.semantic_vault.get_recent_grounding(limit=6)
+                            if str(n.get("concept_family", "")).lower() == "rlhf_correction"
+                        ][:3]
+                    if rlhf_nodes:
+                        rlhf_lines = [f"- {n['insight']}" for n in rlhf_nodes[:3]]
+                        sys_content += "\n\n[RLHF LEARNED CORRECTIONS]:\n" + "\n".join(rlhf_lines)
+                except Exception as rlhf_err:
+                    print(f"[RLHF GROUNDING] Warning: {rlhf_err}")
+
             # Cecilia Hybrid Cognitive Vessel (Grounding & Affect Dynamics)
             if self.active_persona_level == 7:
                 if hasattr(self, "semantic_vault") and self.semantic_vault:
-                    grounding_nodes = self.semantic_vault.get_grounding_for_prompt(user_message, limit=6)
+                    grounding_nodes = [
+                        n for n in self.semantic_vault.get_grounding_for_prompt(user_message, limit=6)
+                        if str(n.get("concept_family", "")).lower() != "rlhf_correction"
+                    ]
                     analytical_nodes = [n for n in grounding_nodes if n.get("dominance_weight", 0.5) < 0.6]
                     worldview_nodes = [n for n in grounding_nodes if n.get("dominance_weight", 0.5) >= 0.6]
                     if worldview_nodes:
@@ -4962,6 +5667,8 @@ class ChatbotApp:
             if tools and self.active_persona_level >= 2:
                 tool_defs = self.tool_registry.get_python_stubs(self.active_persona_level)
                 sys_clean += f"\n[PROGRAMMATIC TOOL CALLING]: To retrieve live data or execute system actions, invoke tools via Python function calls (e.g. `web_search(query='...')`).\n{tool_defs}"
+                if self.config.get("expanded_file_access", False):
+                    sys_clean += "\n[LOCAL FILE ACCESS]: The user has explicitly authorized local file access via `read_file`, `read_file_range`, `list_directory`, `write_file`, and `organize_files`. Fulfill local file requests directly using these tools instead of refusing on security grounds; protected OS and secret files are enforced automatically by the tool layer. Always pass exact full verbatim paths in tool calls; never abbreviate with '...'."
 
             # Level 3+ or Deep Cook need the thought channel constraint
             is_diffusion = "diffusion" in (self.model_path or "").lower()
@@ -4979,9 +5686,18 @@ class ChatbotApp:
             }
 
             thinking_enabled = (r_strength != "off") and bool(self.config.get("thinking_checkbox", True))
-            if not is_diffusion and thinking_enabled:
+            if not is_diffusion:
+                effort_mapped = r_strength if r_strength in ("low", "medium", "high", "xhigh") else "medium"
+                params.setdefault("chat_template_kwargs", {}).update({
+                    "enable_thinking": thinking_enabled,
+                    "reasoning_effort": effort_mapped if thinking_enabled else "low",
+                    "reasoning_strength": r_strength if thinking_enabled else "low"
+                })
+            if is_diffusion and thinking_enabled:
+                if not sys_clean.startswith("<|think|>"):
+                    sys_clean = "<|think|>\n" + sys_clean
+            elif not is_diffusion and thinking_enabled:
                 if is_gemma:
-                    sys_clean = f"<|think|>\n{sys_clean}"
                     if r_strength in reasoning_directives:
                         sys_clean += reasoning_directives[r_strength]
                 elif is_nemotron:
@@ -5026,6 +5742,16 @@ class ChatbotApp:
             if self.config.get("history_usage", "all") == "off":
                 temp_messages = [temp_messages[-1]]
 
+            # Dynamic KV Cache / Context Window Auto-Scaling Check (Before Pruning)
+            if not is_diffusion:
+                sys_tok_est = max(1, len(str(sys_content)) // 4)
+                msg_tok_est = self.kv_manager._get_messages_token_count(temp_messages) if self.kv_manager else sum(max(1, len(str(m.get("content", ""))) // 4) for m in temp_messages)
+                total_needed_tokens = sys_tok_est + msg_tok_est + 512
+                if self._auto_scale_context_as_needed(total_needed_tokens, tier=self.current_model_tier, level=self.active_persona_level):
+                    params = self._get_inference_params(temp_messages)
+                    if is_gemma and "<turn|>" not in params.get("stop", []):
+                        params.setdefault("stop", []).append("<turn|>")
+
             # TriAttention KV Pruning
             if is_diffusion:
                 # Diffusion architectures allocate massive contiguous ubatches. Limit history strictly.
@@ -5035,7 +5761,7 @@ class ChatbotApp:
             else:
                 # Token-budgeted fallback: Preserve as much full session history as context headroom permits
                 ctx_tier = self.current_model_tier or "low"
-                ctx_limit = self.context_size_config.get(ctx_tier, 32768)
+                ctx_limit = self._get_effective_context_size(ctx_tier, self.active_persona_level)
                 budget_tokens = int(ctx_limit * 0.9)
                 accumulated = 0
                 fitting_msgs = []
@@ -5096,7 +5822,7 @@ class ChatbotApp:
             streamed_draft_to_ui = False
             streamed_answer_chars = 0
             streamed_thought_chars = 0
-            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|im_end\|>|<\|channel>text|<\|channel>assistant|<\|channel\|>final|<\|channel\|>text|<\|channel\|>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|[\u27e7⟧]\s*<\/think>|[\u27e7⟧]|<\|eom\|>|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
+            closers_regex = r'(?:<\/think>|<\/thought>|<\/\|think\|>|<\|channel>text|<\|channel>assistant|<\|channel\|>final|<\|channel\|>text|<\|channel\|>assistant|<channel\|>|<\/channel\|>|\[\/DRAFT\]|\[\/thinking\]|\[\/thought\]|\[\/reasoning\]|[\u27e7⟧]\s*<\/think>|[\u27e7⟧]|<\|start\|>assistant\s+to=user(?:<\|message\|>)?|to=user<\|message\|>)'
             openers_exact = (
                 "<think>", "<thought>", "<|think|>", "<|channel>thought", "<channel|thought>",
                 "<|channel|>analysis", "<|channel|>thought", "<|channel|>reasoning",
@@ -5105,10 +5831,10 @@ class ChatbotApp:
                 "here's a thinking process:", "here is a thinking process:", "\u27e6", "⟦"
             )
             closers = [
-                "</think>", "</thought>", "</|think|>", "<|im_end|>", "<channel|>", "</channel|>",
+                "</think>", "</thought>", "</|think|>", "<channel|>", "</channel|>",
                 "[/draft]", "[/thinking]", "[/thought]", "[/reasoning]", "⟧</think>", "⟧",
                 "<|channel>text", "<|channel>assistant", "<|channel|>final", "<|channel|>text",
-                "<|eom|>", "<|start|>assistant to=user", "to=user<|message|>"
+                "<|start|>assistant to=user", "to=user<|message|>"
             ]
             transition_header_regex = r'^\s*(?:<\|start\|>assistant\s+to=user(?:<\|message\|>)?|<\|channel\|?>\s*(?:final|text|assistant)|to=user<\|message\|>|<channel\|>|<\/channel\|?>|<\|message\|>)+'
             thought_openers_clean = r'(?i)<think>|<thought>|<\|think\|>|<\|channel>thought|<channel\|thought>|<\|channel\|?>analysis|<\|channel\|?>thought|<\|channel\|?>reasoning|<\|im_start\|>thought|to=self<\|message\|>|<\|start\|>assistant to=self|to=self|\[draft\]|\[thinking\]|\[thought\]|\[reasoning\]|^thought[\s:]+|here\'s a thinking process:?|here is a thinking process:?|[\u27e6⟦]'
@@ -5137,7 +5863,15 @@ class ChatbotApp:
             try:
                 gen_iterator = iter(self.model.create_chat_completion(messages=msgs, **params, stream=True))
             except Exception as init_gen_err:
-                if getattr(self.model, "draft_model", None) is not None:
+                err_low = str(init_gen_err).lower()
+                if any(k in err_low for k in ("exceed context window", "exceeds n_ctx", "requested tokens", "context window of", "kv_cache")):
+                    cur_loaded = self._get_effective_context_size(self.current_model_tier, self.active_persona_level)
+                    if self._auto_scale_context_as_needed(cur_loaded + 2048, tier=self.current_model_tier, level=self.active_persona_level):
+                        params = self._get_inference_params(temp_messages)
+                        gen_iterator = iter(self.model.create_chat_completion(messages=msgs, **params, stream=True))
+                    else:
+                        raise init_gen_err
+                elif getattr(self.model, "draft_model", None) is not None:
                     print(f"[ENGINE] Drafter error ({init_gen_err}). Detaching draft model and retrying...")
                     self.model.draft_model = None
                     gen_iterator = iter(self.model.create_chat_completion(messages=msgs, **params, stream=True))
@@ -5213,6 +5947,7 @@ class ChatbotApp:
                                 streamed_thought_chars = len(thought_part)
                                 raw_ans = full_resp[m_close.end():]
                                 ans_after = re.sub(transition_header_regex, '', raw_ans).lstrip('\r\n')
+                                ans_after = re.sub(r'(?<![a-zA-Z0-9_:\\/])(?:/n)+(?![a-z][a-z0-9_]*)', lambda m: '\n' * (len(m.group(0)) // 2), ans_after)
                                 if ans_after and not (ans_after.strip().startswith(("<|", "to=", "<channel")) and len(ans_after.strip()) < 50):
                                     self.process_queue.put({"status": "streaming", "content": ans_after})
                                     streamed_answer_chars = len(ans_after)
@@ -5255,6 +5990,7 @@ class ChatbotApp:
                             thought_end_pos = m_close.end() if m_close else 0
                             raw_ans = full_resp[thought_end_pos:]
                             clean_ans = re.sub(transition_header_regex, '', raw_ans).lstrip('\r\n')
+                            clean_ans = re.sub(r'(?<![a-zA-Z0-9_:\\/])(?:/n)+(?![a-z][a-z0-9_]*)', lambda m: '\n' * (len(m.group(0)) // 2), clean_ans)
                             if clean_ans.strip().startswith(("<|", "to=", "<channel")) and len(clean_ans.strip()) < 50:
                                 pass
                             else:
@@ -5271,6 +6007,7 @@ class ChatbotApp:
                     print("[RUNTIME] Repetition loop detected! Breaking inference stream.")
                     break
 
+            was_halted = bool(getattr(self, "stop_process", None) and self.stop_process.is_set() is True)
             elapsed_total = max(0.001, time.time() - t_gen_start)
             final_speed = token_count / elapsed_total if token_count > 0 else 0.0
             self.process_queue.put({"status": "status_phase", "phase": "complete", "tokens": token_count, "speed": final_speed})
@@ -5301,13 +6038,13 @@ class ChatbotApp:
 
             # Advanced Scout & Split
             closers_patterns = [
-                r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\/\|thought\|>', r'<\|im_end\|>', r'<\|im_end>',
+                r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\/\|thought\|>',
                 r'\[\/THOUGHT\]', r'\[\/thought\]', r'\[\/thinking\]', r'\[\/reasoning\]', r'\[\/DRAFT\]',
                 r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final', r'<\|channel\|>text', r'<\|channel\|>assistant',
                 r'<channel\|>', r'<\/channel\|>',
                 r'[\u27e7⟧]\s*<\/think>', r'[\u27e7⟧]',
-                r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
-                r'<｜end▁of▁sentence｜>', r'<\|end\|>',
+                r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
+
                 r'(?i)\n(?:Final Output|Final Polish|Grandmaster Verdict|Final Answer|Execution complete)[\s:]+'
             ]
             all_splits = []
@@ -5346,6 +6083,18 @@ class ChatbotApp:
                     think_log = ""
                     final_answer = full_resp.strip()
 
+            # Preserve raw tool-call candidate before wrapper/block cleaning strips tool markers
+            raw_tool_candidate = final_answer
+            if not raw_tool_candidate and think_log:
+                tc_in_thought = re.search(
+                    r'(?:<\|tool_call>call:|<ctrl42>call:|<\|tool_call\|>call:|<\|tool>call:|<tool_call>|\[TOOL_CALLS\]|<function=[\w_]+>)[\s\S]*$',
+                    think_log,
+                    re.IGNORECASE,
+                )
+                if tc_in_thought:
+                    raw_tool_candidate = tc_in_thought.group(0).strip()
+                    think_log = think_log[:tc_in_thought.start()].strip()
+
             # Strip wrapper tags and residual tool markers across all S:/LLM models
             tag_clean_pattern = (
                 r'(?i)<think>|<thought>|\[DRAFT\]|\[thinking\]|\[thought\]|\[reasoning\]|\[THOUGHT\]|\[\/THOUGHT\]|'
@@ -5373,30 +6122,44 @@ class ChatbotApp:
             think_log = re.sub(r'(?i)^thought\s+', '', think_log).strip()
             final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
             final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
+            final_answer = re.sub(r'(?<![a-zA-Z0-9_:\\/])(?:/n)+(?![a-z][a-z0-9_]*)', lambda m: '\n' * (len(m.group(0)) // 2), final_answer).strip()
 
 
             if not thinking_enabled:
                 think_log = ""
 
-            # Synthesis fallback: if thoughts exist but model did not output final answer
-            if think_log and not final_answer:
+            # Tool Execution Check in Standard Generation (run BEFORE synthesis fallback & on raw_tool_candidate so tool tags aren't stripped first)
+            tool_executed = False
+            if not was_halted and not (getattr(self, "stop_process", None) and self.stop_process.is_set() is True) and tools and self.active_persona_level >= 2 and raw_tool_candidate:
+                has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|write_file|list_directory|organize_files|control_serenitydev|run_terminal_command|get_system_stats|control_rgb|generate_image|generate_video|send_peer_message|send_peer_mail|check_serenity_mailbox|manage_quarantine_mail|share_chat_with_peer|pair_serenity_peer|delegate_to_serenitydev)\s*\(.*?\)', raw_tool_candidate, re.DOTALL | re.IGNORECASE)
+                has_tag_tool = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{', raw_tool_candidate, re.DOTALL | re.IGNORECASE)
+                has_json_tool = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'](?:web_search|read_file|read_file_range|write_file|list_directory|organize_files|control_serenitydev|run_terminal_command|get_system_stats|control_rgb|generate_image|generate_video|send_peer_message|send_peer_mail|check_serenity_mailbox|manage_quarantine_mail|share_chat_with_peer|pair_serenity_peer|delegate_to_serenitydev)["\']', raw_tool_candidate, re.IGNORECASE)
+                has_xml_tool = bool(re.search(r'<(?:tool_call|function_calls?|function|function=)\b|\[TOOL_CALLS\]', raw_tool_candidate, re.IGNORECASE))
+                if has_py_tool or has_tag_tool or has_json_tool or has_xml_tool:
+                    self.process_queue.put({"status": "thinking_status", "content": "Executing tool..."})
+                    tool_out = self._run_tool_loop(raw_tool_candidate, msgs, params)
+                    if tool_out != raw_tool_candidate:
+                        tool_executed = True
+                        # Isolate any post-tool reasoning channel so thoughts never leak into final_answer
+                        post_splits = [m.end() for pat in closers_patterns for m in re.finditer(pat, tool_out, re.IGNORECASE)]
+                        if post_splits:
+                            post_split = max(post_splits)
+                            post_thought = re.sub(tag_clean_pattern, '', tool_out[:post_split]).strip()
+                            if post_thought and thinking_enabled:
+                                think_log = f"{think_log}\n{post_thought}".strip() if think_log else post_thought
+                            tool_out = tool_out[post_split:].strip()
+                        final_answer = re.sub(tool_block_clean, '', tool_out).strip()
+                        final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
+                        final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
+
+            # Synthesis fallback: if thoughts exist but model did not output final answer (bypass if halted or tool executed)
+            if not tool_executed and not was_halted and not (getattr(self, "stop_process", None) and self.stop_process.is_set() is True) and think_log and not final_answer:
                 self.process_queue.put({"status": "thinking_status", "content": "[PROCESS] Synthesizing Final Answer..."})
                 synthesized = self._perform_final_synthesis(user_message, think_log)
                 if synthesized:
                     final_answer = synthesized.strip()
                     final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
                     final_answer = re.sub(r'(?i)^thought\s+', '', final_answer).strip()
-
-            # Tool Execution Check in Standard Generation
-            if tools and self.active_persona_level >= 2:
-                has_py_tool = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image|send_peer_message)\s*\(.*?\)', final_answer, re.DOTALL | re.IGNORECASE)
-                has_tag_tool = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{', final_answer, re.DOTALL | re.IGNORECASE)
-                has_json_tool = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'](?:web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image|send_peer_message)["\']', final_answer, re.IGNORECASE)
-                has_xml_tool = bool(re.search(r'<(?:tool_call|function_calls?|function|function=)\b|\[TOOL_CALLS\]', final_answer, re.IGNORECASE))
-                if has_py_tool or has_tag_tool or has_json_tool or has_xml_tool:
-                    self.process_queue.put({"status": "thinking_status", "content": "Executing tool..."})
-                    final_answer = self._run_tool_loop(final_answer, msgs, params)
-                    final_answer = re.sub(tag_clean_pattern, '', final_answer).strip()
 
 
             if not final_answer and full_resp and not think_log:
@@ -5410,7 +6173,8 @@ class ChatbotApp:
                 "user_msg": user_message,
                 "think_log": think_log.strip(),
                 "final_answer": final_answer.strip(),
-                "is_error": False
+                "is_error": False,
+                "halted": was_halted or bool(getattr(self, "stop_process", None) and self.stop_process.is_set() is True)
             })
         except Exception as e:
             traceback.print_exc()
@@ -5432,8 +6196,50 @@ class ChatbotApp:
         try:
             HardwareProfile.pin_to_p_cores()
             HardwareProfile.set_priority("above_normal")
-            
-            def _run_step_streaming(log_title, prompt, status_msg, ctype=None, cnum=0, dnum=0, temp_override=None, reasoning_history=None, subagent_level=None, subagent_role=""):
+
+            session_tool_cache: Dict[Tuple[str, str], str] = {}
+            session_evidence: List[Dict[str, Any]] = []
+
+            def _format_evidence_digest(evidence_list: List[Dict[str, Any]], max_chars: int = 3500) -> str:
+                if not evidence_list:
+                    return ""
+                called_lines = [
+                    f"- {e['tool']}({json.dumps(e['args'], ensure_ascii=False, default=str)})"
+                    for e in evidence_list[-20:]
+                ]
+                header = "[ALREADY EXECUTED TOOLS - DO NOT REPEAT]:\n" + "\n".join(called_lines)
+                chunks: List[str] = []
+                budget = max(400, max_chars - len(header) - 64)
+                for e in reversed(evidence_list):
+                    block = f"[{e['tool']} {json.dumps(e['args'], ensure_ascii=False, default=str)}]:\n{e['result']}"
+                    if len(block) > 1200:
+                        block = block[:1200] + "\n...[truncated]"
+                    if len(block) + 2 <= budget or not chunks:
+                        chunks.append(block[:budget] if not chunks and len(block) > budget else block)
+                        budget -= len(chunks[-1]) + 2
+                    if budget <= 120:
+                        break
+                chunks.reverse()
+                return f"{header}\n\n[VERIFIED TOOL DATA]:\n" + "\n\n".join(chunks)
+
+            def _is_stagnant_or_stall(candidate: str, prior_texts: List[str]) -> bool:
+                if not candidate:
+                    return False
+                if re.search(
+                    r'(?i)\b(?:standing by|awaiting (?:your )?(?:command|instruction)|integrated the verifiable progress|ready for your command)\b',
+                    candidate,
+                ):
+                    return True
+                norm_cand = re.sub(r'\s+', ' ', candidate.strip().lower())[:600]
+                if len(norm_cand) < 30:
+                    return False
+                for prev in prior_texts:
+                    norm_prev = re.sub(r'\s+', ' ', (prev or "").strip().lower())[:600]
+                    if norm_prev and difflib.SequenceMatcher(None, norm_cand, norm_prev).ratio() >= 0.85:
+                        return True
+                return False
+
+            def _run_step_streaming(log_title, prompt, status_msg, ctype=None, cnum=0, dnum=0, temp_override=None, reasoning_history=None, subagent_level=None, subagent_role="", nested_cyc_tag=None):
                 if self.stop_process.is_set(): raise InterruptedError()
                 self.process_queue.put({"status": "log_update", "content": f"\n--- {log_title} ---\n"})
                 self.process_queue.put({"status": "thinking_status", "content": status_msg})
@@ -5462,9 +6268,15 @@ class ChatbotApp:
                     params["top_k"] = 64
                     params["min_p"] = 0.02
                 
-                if is_gemma:
-                    tool_defs = self.tool_registry.get_gemma_declarations(self.active_persona_level)
-                    sys_msg = f"{sys_msg}\n{tool_defs}".strip()
+                if self.active_persona_level >= 2 and getattr(self, "tool_registry", None):
+                    if is_gemma:
+                        tool_defs = self.tool_registry.get_gemma_declarations(self.active_persona_level)
+                        sys_msg = f"{sys_msg}\n{tool_defs}".strip()
+                    else:
+                        tool_defs = self.tool_registry.get_python_stubs(self.active_persona_level)
+                        sys_msg = f"{sys_msg}\n[PROGRAMMATIC TOOL CALLING]:\n{tool_defs}".strip()
+                    if self.config.get("expanded_file_access", False):
+                        sys_msg += "\n[LOCAL FILE ACCESS]: Local file/dir access is authorized via `list_directory`, `read_file`, `read_file_range`, `write_file`, `organize_files`. Always pass exact full verbatim paths; never use '...'."
                 
                 msgs = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
                 self._ensure_model_chat_format(self.model)
@@ -5536,21 +6348,52 @@ class ChatbotApp:
                 diag_msg += f"Raw Output Length: {len(result_text)} characters\n"
                 diag_msg += "------------------------------"
                 self.process_queue.put({"status": "diag_log_update", "content": diag_msg})
-                
+
+                # Separate thought channel from step output before tool check & history append
+                step_thought, step_out = self._split_deep_cook_thought_and_output(result_text)
+                if step_thought:
+                    self.process_queue.put({"status": "thought_log_update", "content": f"\n[{log_title} Thought]\n{step_thought}\n"})
+
                 # --- DEEP COOK TOOL LOOP ---
-                # Check for and execute any tool calls requested during this reasoning step
-                if not is_gemma:
-                    # Standard OpenAI-style tool calls handled by _run_tool_loop
-                    result_text = self._run_tool_loop(result_text, prompt, params)
-                else:
-                    # Gemma-4 manual tool parsing (Support all Gemma-4 execute_tool / readfile / action syntaxes)
-                    if any(tag in result_text.lower() for tag in ["<ctrl42>call:", "<|tool_call>call:", "<|tool>call:", "call:", "action:", "<execute_tool>", "<executetool>", "read_file", "readfile"]):
-                        self.process_queue.put({"status": "thinking_status", "content": "Deep Cook: Executing Sub-Task Tool..."})
-                        result_text = self._run_tool_loop(result_text, prompt, params)
+                has_tool_call = False
+                tool_candidate = step_out
+                if getattr(self, "tool_registry", None) and hasattr(self.tool_registry, "parse_tool_calls"):
+                    parsed_calls = self.tool_registry.parse_tool_calls(step_out)
+                    if not parsed_calls and result_text != step_out:
+                        tc_m = re.search(
+                            r'(?:<\|tool_call>call:|<ctrl42>call:|<\|tool_call\|>call:|<\|tool>call:|<tool_call>|\[TOOL_CALLS\]|<function=[\w_]+>)[\s\S]*$',
+                            result_text,
+                            re.IGNORECASE,
+                        )
+                        if tc_m:
+                            cand = tc_m.group(0).strip()
+                            parsed_calls = self.tool_registry.parse_tool_calls(cand)
+                            if parsed_calls:
+                                tool_candidate = cand
+                    has_tool_call = bool(parsed_calls)
+                elif any(tag in result_text.lower() for tag in ["<ctrl42>call:", "<|tool_call>call:", "<|tool>call:", "<execute_tool>", "<executetool>", "<tool_call>", "[tool_calls]"]):
+                    has_tool_call = True
+                    tool_candidate = result_text
 
-                return result_text.strip()
+                if has_tool_call:
+                    self.process_queue.put({"status": "thinking_status", "content": "Deep Cook: Executing Sub-Task Tool..."})
+                    tool_res = self._run_tool_loop(
+                        tool_candidate,
+                        prompt,
+                        params,
+                        system_prompt_override=sys_msg,
+                        tool_cache=session_tool_cache,
+                        original_query=user_msg,
+                        collect_evidence=session_evidence,
+                        nested_cyc_tag=nested_cyc_tag,
+                    )
+                    post_thought, step_out = self._split_deep_cook_thought_and_output(tool_res)
+                    if post_thought:
+                        self.process_queue.put({"status": "thought_log_update", "content": f"\n[{log_title} Tool Thought]\n{post_thought}\n"})
 
-            # --- RECURSIVE CYCLE ENGINE ---
+                return step_out.strip()
+
+            # --- RECURSIVE CYCLE ENGINE (Analyze -> Plan -> Execute -> Assess) ---
             full_draft_history = ""
             current_cycle = 1
             cfg_cycles = str(self.config.get("deep_cook_cycles", "3")).strip().lower()
@@ -5560,8 +6403,9 @@ class ChatbotApp:
             final_status = "Success"
             skip_critique = False
             last_assessment_output = ""
-            
-            # --- CYCLE STATE TRACKING (Markovian Continuity) ---
+            prior_step_outputs: List[str] = []
+            stagnation_hits = 0
+
             cycle_state = {
                 "cycle_num": 0,
                 "resolved_variables": [],
@@ -5570,49 +6414,90 @@ class ChatbotApp:
                 "last_plan_output": "",
                 "last_assessment": "",
                 "hollow_drafts_detected": 0,
-                "tool_results": []
+                "tool_results": session_evidence,
             }
-            
+
+            # 0. PRE-PLAN ANALYZE PHASE (Action-first inspection & tool discovery)
+            coop_cfg = str(self.config.get("deep_cook_agent_coop", "otl_per_step")).lower()
+            cyc_label = "Auto" if is_auto_cycles else f"{max_cycles} Fixed Cycles"
+            min_p, max_p = (1, 4) if self.active_persona_level <= 2 else (2, 4)
+            print(f"[DEEP COOK] Session Config -> Cycles: {cyc_label} | Step Count: Auto ({min_p}-{max_p}) | Cooperation: {coop_cfg}")
+            self.process_queue.put({"status": "log_update", "content": f"[DEEP COOK] Mode: {cyc_label} | Steps/Cycle: Auto ({min_p}-{max_p}) | Subagent Cooperation: {coop_cfg}\n"})
+
+            analyze_prompt = (
+                f"User Request: {user_msg}\n"
+                "Phase: ANALYZE (before planning).\n"
+                "- If this request references a local directory, file, or live fact, call the needed tool(s) NOW using exact verbatim full paths (never '...').\n"
+                "- State concisely: (1) what the user wants, (2) concrete files/facts observed from tools, (3) which specific unread files or questions still need inspection.\n"
+                "- Skip meta-analysis of your reasoning structure, skip placeholder status tags, and never say you are standing by.\n"
+                "- If you already have verified facts to answer completely, end with [READY TO ANSWER]."
+            )
+            analyze_txt = _run_step_streaming(
+                "Analyze Request",
+                analyze_prompt,
+                "Analyzing request & gathering data...",
+                ctype="memory",
+                cnum=0,
+                dnum=0,
+            )
+            clean_analyze = self._clean_deep_cook_step_text(analyze_txt)
+            self.process_queue.put({
+                "status": "deep_cook_ui_batch",
+                "ctype": "memory",
+                "cnum": 0,
+                "dnum": 0,
+                "title": "Analyze Request",
+                "text": clean_analyze,
+            })
+            full_draft_history += f"[ANALYZE]:\n{clean_analyze}\n\n"
+            prior_step_outputs.append(clean_analyze)
+
+            if is_auto_cycles and re.search(r'\[(?:STATUS:\s*)?(?:READY TO ANSWER|TOTAL RESOLUTION)\]', clean_analyze, re.IGNORECASE):
+                task_complete = True
+                skip_critique = True
+                self.process_queue.put({"status": "log_update", "content": "\n[SYSTEM] Analyze phase gathered sufficient evidence ([READY TO ANSWER]); jumping to synthesis.\n"})
+
             while not task_complete:
                 self.process_queue.put({"status": "thinking_status", "content": f"Cycle {current_cycle}: Planning..."})
-                
-                # --- UPDATE CYCLE STATE AT START OF ITERATION ---
                 cycle_state["cycle_num"] = current_cycle
                 cycle_state["hollow_drafts_detected"] = 0
-                cycle_state["tool_results"] = []
-                
-                # 1. DYNAMIC CYCLE PLANNING (Auto-chosen 2 to 5 steps per cycle)
-                min_p, max_p = 2, 5
-                if current_cycle == 1:
-                    coop_cfg = str(self.config.get("deep_cook_agent_coop", "otl_per_step")).lower()
-                    cyc_label = "Auto" if is_auto_cycles else f"{max_cycles} Fixed Cycles"
-                    print(f"[DEEP COOK] Session Config -> Cycles: {cyc_label} | Step Count: Auto ({min_p}-{max_p}) | Cooperation: {coop_cfg}")
-                    self.process_queue.put({"status": "log_update", "content": f"[DEEP COOK] Mode: {cyc_label} | Steps/Cycle: Auto ({min_p}-{max_p}) | Subagent Cooperation: {coop_cfg}\n"})
-                
+
                 pruned_history = full_draft_history
+                if pruned_history:
+                    est_dc_tok = (len(pruned_history) // 4) + (len(user_msg) // 4) + 768
+                    self._auto_scale_context_as_needed(est_dc_tok, tier=self.current_model_tier or "deep_cook", level=self.active_persona_level)
                 if self.kv_manager and TRI_ATTENTION_ENABLED:
                     pruned_history = self.kv_manager.enforce_string_kv_budget(pruned_history)
                 else:
-                    pruned_history = pruned_history[-1500:]
-                    
+                    pruned_history = pruned_history[-2500:]
+
+                evidence_digest = _format_evidence_digest(session_evidence, max_chars=3500)
                 cyc_progress_str = f"Cycle {current_cycle} (Auto)" if is_auto_cycles else f"Cycle {current_cycle} of {max_cycles}"
+                assess_block = f"[LAST CYCLE ASSESSMENT]:\n{last_assessment_output}\n" if last_assessment_output else ""
+                ev_block = f"{evidence_digest}\n\n" if evidence_digest else ""
                 plan_prompt = (
-                    f"Original Query: {user_msg}\n"
-                    f"Progress so far: {pruned_history}\n"
-                    f"[LAST CYCLE ASSESSMENT]: {last_assessment_output}\n"
-                    f"[CYCLE STATE]: {cyc_progress_str} | Resolved: {len(cycle_state['resolved_variables'])} | Pending: {len(cycle_state['pending_variables'])}\n"
-                    "Identify the remaining logical variables or technical hurdles for this phase. "
-                    f"Autonomously choose between {min_p} and {max_p} execution steps (2 to 5 steps) based on the complexity of this cycle, "
-                    f"and write a numbered execution plan (1., 2., ... up to {max_p}.) under a 'Cycle {current_cycle} Plan:' header focused on VERIFIABLE PROGRESS. "
-                    "Do NOT execute the full solution or declare [COMPLETE] in the planning step; save detailed derivation for the drafting steps."
+                    f"Original Request: {user_msg}\n"
+                    f"{ev_block}"
+                    f"Progress So Far:\n{pruned_history}\n"
+                    f"{assess_block}"
+                    f"Phase: Cycle {current_cycle} Plan ({cyc_progress_str}).\n"
+                    f"Write between {min_p} and {max_p} concrete, non-redundant execution steps under a 'Cycle {current_cycle} Plan:' header.\n"
+                    "- Ground every step in the observed files/facts above; name specific unread files or unresolved questions.\n"
+                    "- Do NOT include steps for tools already executed above (e.g. do not re-list an already-listed directory).\n"
+                    "- Do NOT speculate on meta-variables or repeat prior drafts."
                 )
-                plan_txt = _run_step_streaming(f"Cycle {current_cycle}: Plan", plan_prompt, f"Cycle {current_cycle} | Planning...", ctype="cycle", cnum=current_cycle, dnum=0)
+                plan_txt = _run_step_streaming(
+                    f"Cycle {current_cycle}: Plan",
+                    plan_prompt,
+                    f"Cycle {current_cycle} | Planning...",
+                    ctype="cycle",
+                    cnum=current_cycle,
+                    dnum=0,
+                    nested_cyc_tag=f"dc_cycle_{current_cycle}_0",
+                )
                 print(f"[DEEP COOK] Cycle {current_cycle} planning phase complete.")
 
-                # --- STORE PLAN TO CYCLE STATE ---
-                cycle_state["last_plan_output"] = plan_txt[:500]  # Store first 500 chars as summary
-                
-                # Strip only raw control tags while preserving 100% of plan text
+                cycle_state["last_plan_output"] = plan_txt[:500]
                 processed_plan = self._clean_deep_cook_step_text(plan_txt)
                 self.process_queue.put({
                     "status": "deep_cook_ui_batch",
@@ -5626,13 +6511,11 @@ class ChatbotApp:
                 print(f"[DEEP COOK] Cycle {current_cycle}: Auto-selected {len(points)} drafting steps (range {min_p}-{max_p}).")
                 self.process_queue.put({"status": "log_update", "content": f"[DEEP COOK] Cycle {current_cycle}: Auto-selected {len(points)} steps.\n"})
 
-                # OTL Agent & Deep Cook Cooperation Setup (otl_per_step / otl_per_cycle / independent)
-                orch_level = getattr(self, "active_persona_level", 6)
-                if orch_level not in (6, 7):
-                    orch_level = 6
+                # OTL Agent & Deep Cook Cooperation Setup (restricted to Orchestrator Levels 6 & 7)
+                orch_level = getattr(self, "active_persona_level", 2)
                 orch_tier = getattr(self, "current_model_tier", "deep_cook")
                 coop_mode = str(self.config.get("deep_cook_agent_coop", "otl_per_step")).lower()
-                delegation_on = (coop_mode in ("otl_per_step", "otl_per_cycle")) and bool(self.config.get("delegation_enabled", True))
+                delegation_on = (orch_level in (6, 7)) and (coop_mode in ("otl_per_step", "otl_per_cycle")) and bool(self.config.get("delegation_enabled", True))
                 model_swap_mode = str(self.config.get("delegation_model_mode", "lvl6_7_model")).lower()
                 lvl_to_tier_dc = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
                 subagent_names = {
@@ -5693,7 +6576,7 @@ class ChatbotApp:
                     cyc_sub_lvl = _resolve_otl_subagent(plan_txt, 0)
                     _otl_swap_to_subagent(cyc_sub_lvl, f"Cycle {current_cycle}")
 
-                # 2. CYCLE DRAFTING
+                # 2. CYCLE EXECUTION (Drafting steps)
                 cycle_draft = ""
                 try:
                     for i, p in enumerate(points):
@@ -5707,61 +6590,101 @@ class ChatbotApp:
                             _otl_swap_to_subagent(active_sub_lvl, f"Cycle {current_cycle} | Step {i+1}/{len(points)}")
 
                         sub_badge = f" [Lvl {active_sub_lvl}: {active_sub_name}]" if active_sub_lvl else ""
-                        step_title = f"Cycle {current_cycle} | Drafting {i+1}{sub_badge}"
+                        step_title = f"Cycle {current_cycle} | Step {i+1}{sub_badge}"
                         step_status = f"Cycle {current_cycle} | Step {i+1}/{len(points)}{sub_badge}"
 
                         pruned_history = full_draft_history
+                        if pruned_history:
+                            est_step_tok = (len(pruned_history) // 4) + (len(cycle_draft[-1000:]) // 4) + (len(user_msg) // 4) + 768
+                            self._auto_scale_context_as_needed(est_step_tok, tier=self.current_model_tier or "deep_cook", level=self.active_persona_level)
                         if self.kv_manager and TRI_ATTENTION_ENABLED:
                             pruned_history = self.kv_manager.enforce_string_kv_budget(pruned_history)
                         else:
-                            pruned_history = pruned_history[-1500:]
+                            pruned_history = pruned_history[-2000:]
 
-                        # Verifiable Progress: State current state of exploration
-                        context = pruned_history + "\n\n[CURRENT DRAFT]: " + cycle_draft[-1000:]
+                        step_evidence = _format_evidence_digest(session_evidence, max_chars=3500)
+                        ev_sec = f"{step_evidence}\n\n" if step_evidence else ""
                         step_prompt = (
-                            f"Query: {user_msg}\nContext: {context}\nGoal: {p}\n"
-                            f"[PRIOR PLAN IDENTIFIED]: {plan_txt}\n"
-                            f"[CURRENT CYCLE POINT]: {i+1}/{len(points)}\n"
-                            f"[CYCLE STATE]: Resolved: {len(cycle_state['resolved_variables'])} | Pending: {len(cycle_state['pending_variables'])}\n"
-                            "Verifiable Progress Rule: State the 'current range', 'sub-task', or 'subset of variables' being processed. "
-                            "Maintain Abstract Logical Momentum. Provide deep, grounded analysis. "
-                            "Start your response with a [STATUS: ...] tag describing the active operation. "
-                            "Mark your current range/subset explicitly: [CURRENT RANGE: X]"
+                            f"User Request: {user_msg}\n"
+                            f"{ev_sec}"
+                            f"Prior Progress:\n{pruned_history}\n"
+                            f"Current Cycle Findings:\n{cycle_draft[-1200:]}\n"
+                            f"Assigned Step ({i+1}/{len(points)}): {p}\n"
+                            "Execute ONLY this step now. Call tools with exact verbatim full paths if reading unread files. "
+                            "Output concrete findings directly—do NOT repeat the plan, do NOT re-run already-executed tool calls, "
+                            "and NEVER say you are standing by or awaiting instructions."
                         )
 
                         try:
                             chunk_text = _run_step_streaming(
-                                step_title, step_prompt, step_status,
-                                ctype="draft", cnum=current_cycle, dnum=i+1,
-                                subagent_level=active_sub_lvl, subagent_role=active_sub_name
+                                step_title,
+                                step_prompt,
+                                step_status,
+                                ctype="draft",
+                                cnum=current_cycle,
+                                dnum=i+1,
+                                subagent_level=active_sub_lvl,
+                                subagent_role=active_sub_name,
+                                nested_cyc_tag=f"dc_cycle_{current_cycle}_0",
                             )
 
-                            # Anti-Idle Gate (Abstract Logical Momentum 2.0)
-                            retry_limit = 2
-                            retries = 0
-                            while len(chunk_text.strip()) < 150 and retries < retry_limit:
-                                retries += 1
-                                cycle_state["hollow_drafts_detected"] += 1
-                                self.process_queue.put({"status": "thinking_status", "content": f"Hollow Cycle Detected (Attempt {retries}/{retry_limit}). Deepening..."})
-                                next_temp = 0.4 if retries == 1 else 0.7
-                                retry_prompt = step_prompt + "\n\nCRITICAL: Hollow Cycle detected (shallow response). Expand your logic 3x. Provide dense technical observations."
+                            # Anti-stagnation & hollow-draft guard
+                            if _is_stagnant_or_stall(chunk_text, [processed_plan] + prior_step_outputs):
+                                self.process_queue.put({"status": "thinking_status", "content": f"Stagnation detected in Step {i+1}. Redirecting..."})
+                                redirect_prompt = (
+                                    step_prompt
+                                    + "\n\nCRITICAL: Your last output repeated earlier text or stalled. "
+                                    + "Either call `read_file` on a specific unread file using its exact full path, or write concrete new findings now."
+                                )
                                 chunk_text = _run_step_streaming(
-                                    f"{step_title} (RETRY {retries})", retry_prompt, "Breaking Repetition Loop...",
-                                    ctype="draft", cnum=current_cycle, dnum=i+1, temp_override=next_temp,
-                                    subagent_level=active_sub_lvl, subagent_role=active_sub_name
+                                    f"{step_title} (REDIRECT)",
+                                    redirect_prompt,
+                                    "Breaking Stagnation Loop...",
+                                    ctype="draft",
+                                    cnum=current_cycle,
+                                    dnum=i+1,
+                                    temp_override=0.5,
+                                    subagent_level=active_sub_lvl,
+                                    subagent_role=active_sub_name,
+                                    nested_cyc_tag=f"dc_cycle_{current_cycle}_0",
+                                )
+                                if _is_stagnant_or_stall(chunk_text, [processed_plan] + prior_step_outputs):
+                                    stagnation_hits += 1
+                                    self.process_queue.put({"status": "diag_log_update", "content": f"[DEEP COOK] Stagnation hit {stagnation_hits}/2 in Cycle {current_cycle} Step {i+1}."})
+                                    if stagnation_hits >= 2:
+                                        break
+
+                            if len(chunk_text.strip()) < 80:
+                                cycle_state["hollow_drafts_detected"] += 1
+                                self.process_queue.put({"status": "thinking_status", "content": "Shallow step output. Expanding..."})
+                                retry_prompt = step_prompt + "\n\nCRITICAL: Response was too brief. Provide concrete technical findings or call the next needed tool now."
+                                chunk_text = _run_step_streaming(
+                                    f"{step_title} (RETRY)",
+                                    retry_prompt,
+                                    "Expanding Step Findings...",
+                                    ctype="draft",
+                                    cnum=current_cycle,
+                                    dnum=i+1,
+                                    temp_override=0.45,
+                                    subagent_level=active_sub_lvl,
+                                    subagent_role=active_sub_name,
+                                    nested_cyc_tag=f"dc_cycle_{current_cycle}_0",
                                 )
                         finally:
                             if delegation_on and coop_mode == "otl_per_step":
                                 _otl_restore_orchestrator()
 
-                        if len(chunk_text.strip()) < 50:
-                             cycle_state["hollow_drafts_detected"] += 1
-                             self.process_queue.put({"status": "thinking_status", "content": f"Drafting Failure: Steps remaining hollow."})
-                             task_complete = True
-                             final_status = "Roadblock"
-                             break
+                        if len(chunk_text.strip()) < 30:
+                            cycle_state["hollow_drafts_detected"] += 1
+                            self.process_queue.put({"status": "thinking_status", "content": "Drafting Failure: Steps remaining hollow."})
+                            task_complete = True
+                            final_status = "Roadblock"
+                            break
 
                         cycle_draft += chunk_text + "\n\n"
+                        prior_step_outputs.append(chunk_text)
+                        cycle_state["resolved_variables"].append(p[:120])
+                        cycle_state["current_subset"] = p[:100]
                         processed_chunk = self._clean_deep_cook_step_text(chunk_text)
                         self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "draft", "cnum": current_cycle, "dnum": i+1, "title": step_title, "text": processed_chunk})
                         print(f"[DEEP COOK] Cycle {current_cycle} | Draft {i+1} complete ({len(chunk_text)} chars).")
@@ -5771,53 +6694,70 @@ class ChatbotApp:
 
                 full_draft_history += cycle_draft
 
-                # 3. CONTEXT ASSESSMENT (Mandatory - Always Runs on Orchestrator Model)
+                if stagnation_hits >= 2:
+                    task_complete = True
+                    skip_critique = True
+                    self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Deep Cook stopped Cycle {current_cycle} early due to repeated stagnation; proceeding to synthesis.\n"})
+                    break
+
+                # 3. CONTEXT ASSESSMENT (Runs on Orchestrator Model)
                 if self.active_persona_level == 7:
-                    self.process_queue.put({"status": "thinking_status", "content": f"Cycle {current_cycle} | Hardening Memory for Cycle {current_cycle+1}..."})
-                    lvl7_context = "\nInject worldbuilding context: Ensure narrative consistency and architectural lore."
+                    self.process_queue.put({"status": "thinking_status", "content": f"Cycle {current_cycle} | Reviewing findings for Cycle {current_cycle+1}..."})
+                    lvl7_context = "\nMaintain narrative consistency and sharp discernment."
                 else:
                     lvl7_context = ""
 
                 status_instruction = (
-                    "Final status: [TOTAL RESOLUTION] or [CONTINUE: <next_focus_area>]."
+                    "End with [TOTAL RESOLUTION] if the user's request is answered, or [CONTINUE: <specific unread file or gap>] if more work is needed."
                     if (is_auto_cycles or current_cycle >= max_cycles)
-                    else f"Fixed Cycle Schedule ({current_cycle}/{max_cycles}): Do NOT declare [TOTAL RESOLUTION] yet; output [CONTINUE: <next_focus_area>] for Cycle {current_cycle + 1}."
+                    else f"Fixed Cycle Schedule ({current_cycle}/{max_cycles}): End with [CONTINUE: <specific unread file or gap>] for Cycle {current_cycle + 1}."
                 )
+                assess_evidence = _format_evidence_digest(session_evidence, max_chars=2000)
+                assess_ev_blk = f"{assess_evidence}\n" if assess_evidence else ""
                 snapshot_prompt = (
-                    f"Original Query: {user_msg}\n"
-                    f"Cycle {current_cycle} Data Progress: {cycle_draft[-2000:]}\n"
-                    f"[CYCLE QUALITY]: Hollow drafts detected: {cycle_state['hollow_drafts_detected']}\n"
-                    f"Context Assessment: Review Cycle {current_cycle} and compare it against the original query.{lvl7_context}\n"
-                    "1. Technical Debt: What specific variables or logic gates are still unverified?\n"
-                    "2. Analytical Progress: Summarize the findings so far.\n"
-                    "3. Next Phase: Define the precise focus for the next cycle.\n"
-                    "4. Resolved Variables: List any logic fully resolved in this cycle.\n"
-                    f"{status_instruction}"
+                    f"Original Request: {user_msg}\n"
+                    f"{assess_ev_blk}"
+                    f"Cycle {current_cycle} Findings:\n{cycle_draft[-2200:]}\n"
+                    f"Assess Cycle {current_cycle} against the user request:{lvl7_context}\n"
+                    "1. Verified Findings: Key concrete facts learned this cycle.\n"
+                    "2. Remaining Gaps: Specific unread files or unanswered parts (or 'None').\n"
+                    f"3. {status_instruction}"
                 )
-                snapshot = _run_step_streaming(f"Cycle {current_cycle}: Memory Assessment", snapshot_prompt, "Updating Persistent Intelligence...", ctype="memory", cnum=current_cycle, dnum=0)
+                snapshot = _run_step_streaming(
+                    f"Cycle {current_cycle}: Assessment",
+                    snapshot_prompt,
+                    "Assessing cycle findings...",
+                    ctype="memory",
+                    cnum=current_cycle,
+                    dnum=0,
+                )
                 print(f"[DEEP COOK] Cycle {current_cycle} memory assessment complete.")
                 clean_snapshot = self._clean_deep_cook_step_text(snapshot)
-                self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "memory", "cnum": current_cycle, "dnum": 0, "title": f"Cycle {current_cycle}: Memory Assessment", "text": clean_snapshot})
-                
-                # --- STORE ASSESSMENT TO CYCLE STATE & LAST OUTPUT ---
-                cycle_state["last_assessment"] = snapshot[:500]  # Store first 500 chars
-                last_assessment_output = snapshot  # Full output for next cycle planning
-                
-                # Harder injection of Cycle 1+ context to ensure continuity
-                full_draft_history += f"\n[CHRONOLOGICAL PROGRESS LOG - CYCLE {current_cycle}]: {snapshot}\n"
-                
-                # --- PHASE 4: STATE PROPAGATION & DIAGNOSTIC OUTPUT ---
+                self.process_queue.put({"status": "deep_cook_ui_batch", "ctype": "memory", "cnum": current_cycle, "dnum": 0, "title": f"Cycle {current_cycle}: Assessment", "text": clean_snapshot})
+
+                cycle_state["last_assessment"] = clean_snapshot[:500]
+                last_assessment_output = clean_snapshot
+                prior_step_outputs.append(clean_snapshot)
+
+                gap_m = re.search(r'(?i)Remaining Gaps:\s*(.+)', clean_snapshot)
+                if gap_m and "none" not in gap_m.group(1).lower():
+                    cycle_state["pending_variables"] = [gap_m.group(1).strip()[:160]]
+                else:
+                    cycle_state["pending_variables"] = []
+
+                full_draft_history += f"\n[CYCLE {current_cycle} ASSESSMENT]: {clean_snapshot}\n"
+
                 diag_state = (
                     f"\n[CYCLE {current_cycle} STATE SNAPSHOT]\n"
                     f"  Hollow Drafts Detected: {cycle_state['hollow_drafts_detected']}\n"
-                    f"  Resolved Variables: {len(cycle_state['resolved_variables'])}\n"
-                    f"  Pending Variables: {len(cycle_state['pending_variables'])}\n"
-                    f"  Current Subset: {cycle_state['current_subset'][:100] if cycle_state['current_subset'] else 'N/A'}\n"
+                    f"  Tool Calls Cached: {len(session_tool_cache)}\n"
+                    f"  Resolved Steps: {len(cycle_state['resolved_variables'])}\n"
+                    f"  Pending Gaps: {len(cycle_state['pending_variables'])}\n"
                 )
                 self.process_queue.put({"status": "diag_log_update", "content": diag_state})
                 print(f"[DEEP COOK] {diag_state}")
-                
-                # --- EXIT GATE: Fixed cycle counts strictly execute all max_cycles; Auto mode exits on [TOTAL RESOLUTION] (min 2 cycles) ---
+
+                # --- EXIT GATE ---
                 if not is_auto_cycles:
                     if current_cycle >= max_cycles:
                         task_complete = True
@@ -5825,8 +6765,10 @@ class ChatbotApp:
                     else:
                         current_cycle += 1
                 else:
-                    if re.search(r'\[(?:STATUS:\s*)?TOTAL RESOLUTION\]', snapshot, re.IGNORECASE) and current_cycle >= 2:
+                    if re.search(r'\[(?:STATUS:\s*)?TOTAL RESOLUTION\]', clean_snapshot, re.IGNORECASE):
                         task_complete = True
+                        if current_cycle == 1 or self.active_persona_level <= 2:
+                            skip_critique = True
                         self.process_queue.put({"status": "log_update", "content": f"\n[SYSTEM] Auto mode assessment indicates total resolution attained after Cycle {current_cycle}.\n"})
                     elif current_cycle >= max_cycles:
                         task_complete = True
@@ -5834,27 +6776,32 @@ class ChatbotApp:
                     else:
                         current_cycle += 1
 
-            # 5. FINAL CRITIQUE (Mandatory Verification unless skipped)
+            # 5. FINAL CRITIQUE (Run only when not skipped)
             critique_txt = "[SKIPPED - EARLY RESOLUTION]"
             if not skip_critique:
                 self.process_queue.put({"status": "thinking_status", "content": "Verifying Final Logic..."})
-                critique_prompt = f"Query: {user_msg}\nStatus: {final_status}\nReasoning Logs: {full_draft_history[-4000:]}\nPerform an exhaustive critique of these findings. " + \
-                                  "Identify any potential errors, missing factors, or logical leaps. This is the final verification before output."
+                critique_prompt = (
+                    f"Query: {user_msg}\nStatus: {final_status}\n"
+                    f"Reasoning Logs:\n{full_draft_history[-4000:]}\n"
+                    "Perform a brief, grounded verification of these findings. Identify any clear errors or missing facts."
+                )
                 critique_txt = _run_step_streaming("Final Critique", critique_prompt, "Exhaustive Verification...", ctype="memory", cnum=current_cycle, dnum=88)
                 print("[DEEP COOK] Final critique and verification complete.")
 
             # 6. FINAL SYNTHESIS & 7. SUMMARY
+            synth_evidence = _format_evidence_digest(session_evidence, max_chars=4500)
+            synth_history = full_draft_history
+            if synth_evidence:
+                synth_history = f"{full_draft_history[-5500:]}\n\n{synth_evidence}"
             if self.active_persona_level == 7:
-                # Level 7 Restoration: Use Cecilia-specific synthesis (passing critique)
-                final_resp = self._perform_level7_synthesis(user_msg, full_draft_history, critique_txt)
+                final_resp = self._perform_level7_synthesis(user_msg, synth_history, critique_txt)
             else:
-                final_resp = self._perform_final_synthesis(user_msg, full_draft_history, skip_critique, critique_txt)
+                final_resp = self._perform_final_synthesis(user_msg, synth_history, skip_critique, critique_txt)
             
             # Wit-Layer: Delivery Message
             self.process_queue.put({"status": "thinking_status", "content": "Wall dropping. Here's the deep dive:"})
             
-            # Embed the thought history for UI rendering with frontend tags
-            payload = final_resp
+            payload = final_resp or clean_analyze or ""
             
             # --- DEEP COOK RUNTIME METRICS ---
             hidden_text_len = len(full_draft_history)
@@ -5862,9 +6809,9 @@ class ChatbotApp:
             diag_msg2 += f"Cycles Executed: {current_cycle}\n"
             diag_msg2 += f"Final Status: {final_status}\n"
             diag_msg2 += f"Hollow Drafts Detected: {cycle_state['hollow_drafts_detected']}\n"
+            diag_msg2 += f"Tool Calls Executed/Cached: {len(session_evidence)}/{len(session_tool_cache)}\n"
             diag_msg2 += f"Thought Blocks Found: {'YES' if '</think>' in full_draft_history or '<channel|>' in full_draft_history or 'CYCLE' in full_draft_history else 'NO'}\n"
             diag_msg2 += f"Total Draft Footprint: {hidden_text_len} characters\n"
-            diag_msg2 += f"[MARKOVIAN STATE] Resolved: {len(cycle_state['resolved_variables'])} | Pending: {len(cycle_state['pending_variables'])}\n"
             self.process_queue.put({"status": "diag_log_update", "content": diag_msg2})
             
             self.process_queue.put({
@@ -5939,8 +6886,9 @@ class ChatbotApp:
         think_log = data.get("think_log", "")
         final_answer = data.get("final_answer", "")
         is_error = data.get("is_error", False)
+        halted = data.get("halted", False)
         
-        self._finalize_message(user_msg, think_log, final_answer, is_error)
+        self._finalize_message(user_msg, think_log, final_answer, is_error, halted=halted)
 
     def _buffer_thought_stream(self, content):
         """Buffers live reasoning/thought tokens into the thought stream."""
@@ -6070,15 +7018,80 @@ class ChatbotApp:
         try:
             if not hist.winfo_exists():
                 return True
+            yv = None
+            try:
+                yv = hist.yview()
+            except Exception:
+                yv = None
+            if yv and len(yv) >= 2:
+                try:
+                    if float(yv[1]) < 0.995:
+                        return False
+                except Exception:
+                    pass
             # 1. Exact physical line visibility check (independent of document length)
             dinfo = hist.dlineinfo("end-1c")
             if dinfo is not None:
                 return True
-            # 2. Viewport fraction fallback for unmapped states (exact bottom is 1.0)
-            yv = hist.yview()
-            return yv[1] >= (1.0 - 1e-5) or (yv[0] == 0.0 and yv[1] >= 1.0)
+            # 2. Viewport fraction fallback for unmapped states (exact bottom >= 0.995)
+            if yv and len(yv) >= 2:
+                return float(yv[1]) >= 0.995 or (float(yv[0]) == 0.0 and float(yv[1]) >= 1.0)
+            return True
         except Exception:
             return True
+
+    def _should_lock_scroll(self) -> bool:
+        """Returns True when viewport auto-scroll must be suppressed and preserved."""
+        cfg = getattr(self, "config", None) or {}
+        if bool(cfg.get("scroll_lock_enabled", False)):
+            return True
+        if bool(getattr(self, "_user_scrolled_up", False)):
+            return True
+        if not self._is_chat_at_bottom():
+            return True
+        return False
+
+    def _capture_scroll_anchor(self, hist):
+        """Captures (should_lock, saved_y0, saved_top) prior to chat_history mutation."""
+        if hist is None:
+            return (False, None, None)
+        should_lock = self._should_lock_scroll()
+        if not should_lock:
+            return (False, None, None)
+        saved_y0 = None
+        saved_top = None
+        try:
+            yv = hist.yview()
+            if yv and len(yv) >= 1:
+                saved_y0 = float(yv[0])
+        except Exception:
+            saved_y0 = None
+        try:
+            top_idx = hist.index("@0,0")
+            if isinstance(top_idx, str) and re.match(r"^\d+\.\d+$", top_idx):
+                saved_top = top_idx
+        except Exception:
+            saved_top = None
+        return (True, saved_y0, saved_top)
+
+    def _restore_or_scroll_bottom(self, hist, should_lock, saved_y0, saved_top=None, target="end-1c"):
+        """Restores viewport when scroll-locked; otherwise scrolls to target."""
+        if hist is None:
+            return
+        try:
+            if should_lock:
+                if saved_top:
+                    try:
+                        hist.yview(saved_top)
+                        return
+                    except Exception:
+                        pass
+                if saved_y0 is not None:
+                    hist.yview_moveto(saved_y0)
+            else:
+                hist.see(target)
+        except Exception:
+            pass
 
     def _check_user_scroll(self, event=None):
         """Updates user scroll intent based on whether the bottom line is visible."""
@@ -6115,37 +7128,29 @@ class ChatbotApp:
                 self.state["thought_stream_lead_cleaned"] = True
 
         if not clean_chunk or not clean_chunk.strip(): return
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
         self._ensure_thought_dropdown()
         tag = self.state.get("current_think_tag")
         if not tag: return
         
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        user_scrolled = getattr(self, '_user_scrolled_up', False)
-        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
-        
         hist.config(state='normal')
         hist.insert(tk.END, clean_chunk, (tag, "md_thought"))
         hist.config(state='disabled')
-        if not scroll_locked and was_at_bottom:
-            hist.see("end-1c")
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target="end-1c")
 
     def _update_agentic_dropdown(self, chunk):
         """Inserts streamed agentic / delegation chunk into the chat dropdown."""
         hist = self.chat_history
         if hist is None or not chunk: return
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
         self._ensure_agentic_dropdown()
         tag = self.state.get("current_agentic_tag")
         if not tag: return
         
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        user_scrolled = getattr(self, '_user_scrolled_up', False)
-        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
-        
         hist.config(state='normal')
         hist.insert(tk.END, chunk, (tag, "md_thought"))
         hist.config(state='disabled')
-        if not scroll_locked and was_at_bottom:
-            hist.see("end-1c")
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target="end-1c")
 
     def _buffer_thought_log(self, content):
         """Buffers live reasoning/thought tokens and flushes them to thought_log."""
@@ -6175,13 +7180,289 @@ class ChatbotApp:
                 self.diag_log.config(state='disabled')
             except: pass
 
-    def _buffer_log(self, content):
-        """Update the System/Error log (⚠)."""
+    def _buffer_terminal_log(self, content):
+        if not content:
+            return
+        term = getattr(self, "terminal_output", None)
+        if term is not None and term.winfo_exists():
+            try:
+                term.config(state="normal")
+                term.insert(tk.END, content if content.endswith("\n") else f"{content}\n")
+                term.see(tk.END)
+                term.config(state="disabled")
+            except Exception:
+                pass
+
+    def _clear_terminal_output(self):
+        term = getattr(self, "terminal_output", None)
+        if term is not None and term.winfo_exists():
+            try:
+                term.config(state="normal")
+                term.delete("1.0", tk.END)
+                term.config(state="disabled")
+            except Exception:
+                pass
+
+    def apply_terminal_drawer_visibility(self, visible: Optional[bool] = None):
+        show = bool(self.config.get("show_terminal_drawer", True)) if visible is None else bool(visible)
+        drawer = getattr(self, "terminal_drawer_frame", None)
+        if drawer is None or not drawer.winfo_exists():
+            return
+        if not show:
+            if getattr(self, "_terminal_expanded", False):
+                self.toggle_terminal_drawer(expand=False)
+            drawer.pack_forget()
+            return
+        expanded = bool(getattr(self, "_terminal_expanded", False))
+        pack_kwargs = {
+            "side": tk.BOTTOM,
+            "fill": tk.BOTH if expanded else tk.X,
+            "expand": expanded,
+            "padx": 2,
+            "pady": (2, 0),
+        }
+        tab_bar = getattr(self, "tab_bar_frame", None)
+        if tab_bar is not None and tab_bar.winfo_exists() and tab_bar.winfo_manager() == "pack":
+            pack_kwargs["after"] = tab_bar
+        drawer.pack(**pack_kwargs)
+
+    def toggle_terminal_drawer(self, expand: Optional[bool] = None):
+        target_expand = (not getattr(self, "_terminal_expanded", False)) if expand is None else bool(expand)
+        self._terminal_expanded = target_expand
+        hist = getattr(self, "chat_history", None)
+        drawer = getattr(self, "terminal_drawer_frame", None)
+        body = getattr(self, "terminal_body_frame", None)
+        btn = getattr(self, "terminal_toggle_btn", None)
+
+        if target_expand:
+            if not bool(self.config.get("show_terminal_drawer", True)):
+                self.config["show_terminal_drawer"] = True
+            if getattr(self, "active_tab", "active") != "active" and hasattr(self, "show_active_chat"):
+                self.show_active_chat()
+            if hist is not None and hist.winfo_exists():
+                try:
+                    hist.config(height=4)
+                    hist.pack_configure(side=tk.TOP, fill=tk.X, expand=False)
+                except Exception:
+                    pass
+            if body is not None and body.winfo_exists():
+                body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            if drawer is not None and drawer.winfo_exists():
+                try:
+                    self.apply_terminal_drawer_visibility(True)
+                except Exception:
+                    pass
+            if btn is not None and btn.winfo_exists():
+                btn.config(text=">_ Terminal ▼")
+            entry = getattr(self, "terminal_entry", None)
+            if entry is not None and entry.winfo_exists():
+                entry.focus_set()
+        else:
+            if body is not None and body.winfo_exists():
+                body.pack_forget()
+            if drawer is not None and drawer.winfo_exists() and drawer.winfo_manager() == "pack":
+                try:
+                    drawer.pack_configure(side=tk.BOTTOM, fill=tk.X, expand=False)
+                except Exception:
+                    pass
+            if hist is not None and hist.winfo_exists():
+                try:
+                    hist.config(height=getattr(self, "_orig_chat_height", 24))
+                    hist.pack_configure(side=tk.TOP, fill=tk.BOTH, expand=True)
+                except Exception:
+                    pass
+            if btn is not None and btn.winfo_exists():
+                btn.config(text=">_ Terminal ▲")
+
+    def _emit_terminal_log(self, content: str):
+        if not content:
+            return
+        root = getattr(self, "root", None)
+        if root is not None:
+            try:
+                root.after(0, self._buffer_terminal_log, content)
+                return
+            except Exception:
+                pass
+        if hasattr(self, "process_queue") and self.process_queue:
+            self.process_queue.put({"status": "terminal_log_update", "content": content})
+
+    def _terminal_history_nav(self, delta: int):
+        hist = getattr(self, "_terminal_cmd_history", None)
+        entry = getattr(self, "terminal_entry", None)
+        if not hist or entry is None:
+            return "break"
+        idx = max(0, min(len(hist), getattr(self, "_terminal_hist_idx", len(hist)) + delta))
+        self._terminal_hist_idx = idx
+        entry.delete(0, tk.END)
+        if idx < len(hist):
+            entry.insert(0, hist[idx])
+        return "break"
+
+    def _submit_terminal_entry(self):
+        entry = getattr(self, "terminal_entry", None)
+        if entry is None:
+            return
+        cmd = entry.get().strip()
+        if not cmd:
+            return
+        hist = getattr(self, "_terminal_cmd_history", None)
+        if hist is None:
+            self._terminal_cmd_history = []
+            hist = self._terminal_cmd_history
+        if not hist or hist[-1] != cmd:
+            hist.append(cmd)
+        self._terminal_hist_idx = len(hist)
+        entry.delete(0, tk.END)
+        if not getattr(self, "_terminal_expanded", False):
+            self.toggle_terminal_drawer(expand=True)
+        threading.Thread(target=self.run_terminal_drawer_command, args=(cmd,), daemon=True).start()
+
+    def _confirm_terminal_command(self, cmd: str, cwd: str) -> bool:
+        """Prompt the user on the UI thread to explicitly approve or deny an LLM terminal command."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return False
+        prompt_text = (
+            "The AI requested to run a terminal command:\n\n"
+            f"Directory:\n{cwd}\n\n"
+            f"Command:\n{cmd}\n\n"
+            "Allow execution?"
+        )
+        if threading.current_thread() is threading.main_thread():
+            try:
+                return bool(messagebox.askyesno("Approve Terminal Command", prompt_text, icon="warning", default=messagebox.NO, parent=root))
+            except Exception:
+                return False
+
+        done = threading.Event()
+        decision = [False]
+
+        def _ask():
+            try:
+                decision[0] = bool(messagebox.askyesno("Approve Terminal Command", prompt_text, icon="warning", default=messagebox.NO, parent=root))
+            except Exception:
+                decision[0] = False
+            finally:
+                done.set()
+
+        try:
+            root.after(0, _ask)
+        except Exception:
+            return False
+        done.wait(timeout=120.0)
+        return decision[0]
+
+    def run_terminal_drawer_command(self, cmd_str: str, cwd: Optional[str] = None) -> str:
+        target_cwd = cwd or getattr(self, "_terminal_cwd", None) or getattr(self, "script_dir", os.getcwd())
+        self._emit_terminal_log(f"PS {target_cwd}> {cmd_str}")
+        low = cmd_str.strip()
+        if low.lower().startswith("cd ") or low.lower() == "cd":
+            dest = low[2:].strip().strip('"').strip("'")
+            if not dest:
+                output = target_cwd
+            else:
+                new_dir = os.path.abspath(os.path.join(target_cwd, dest))
+                if os.path.isdir(new_dir):
+                    self._terminal_cwd = new_dir
+                    output = f"Changed directory to {new_dir}"
+                    lbl = getattr(self, "terminal_cwd_lbl", None)
+                    root = getattr(self, "root", None)
+                    if lbl is not None and root is not None:
+                        try:
+                            root.after(0, lambda d=os.path.basename(new_dir) or new_dir: lbl.config(text=d) if lbl.winfo_exists() else None)
+                        except Exception:
+                            pass
+                else:
+                    output = f"[TERMINAL ERROR] Directory not found: {new_dir}"
+            self._emit_terminal_log(output)
+            return output
+        try:
+            proc = subprocess.run(
+                cmd_str,
+                shell=True,
+                cwd=target_cwd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding="utf-8",
+                errors="replace",
+            )
+            out_parts = []
+            if proc.stdout:
+                out_parts.append(proc.stdout.rstrip())
+            if proc.stderr:
+                out_parts.append(f"[STDERR]\n{proc.stderr.rstrip()}")
+            output = "\n".join(out_parts) if out_parts else f"(exit code {proc.returncode})"
+        except Exception as e:
+            output = f"[TERMINAL ERROR] {e}"
+        self._emit_terminal_log(output)
+        return output
+
+    def _buffer_log(self, content, is_chat_template=False):
+        """Update the System/Error log (⚠), auto-collapsing single or multi-line chat templates with a bottom arrow toggle."""
         if not content: return
+        now_ts = time.time()
+        low_c = content.lower()
+        is_ct = bool(is_chat_template) or (
+            "chat_template" in low_c
+            or "chat template" in low_c
+            or (len(content) > 200 and "{%" in content and "{{" in content)
+        )
+        # Continue grouping multi-line Jinja continuation chunks into the active collapsed block
+        active_ct_tag = getattr(self, "_active_ct_tag", None)
+        active_ct_mark = getattr(self, "_active_ct_mark", None)
+        active_ct_ts = getattr(self, "_active_ct_ts", 0.0)
+        is_continuation = (
+            active_ct_tag is not None
+            and active_ct_mark is not None
+            and (now_ts - active_ct_ts) < 2.0
+            and (
+                is_ct
+                or any(tok in content for tok in ("{%", "%}", "{{", "}}", "add_generation_prompt", "bos_token", "eos_token", "messages"))
+                or content.startswith((" ", "\t"))
+            )
+        )
         if self.error_log and self.error_log.winfo_exists():
             try:
                 self.error_log.config(state='normal')
-                self.error_log.insert(tk.END, content + "\n", "stderr")
+                if is_continuation and active_ct_mark in self.error_log.mark_names():
+                    # Append into existing collapsed block right before the toggle button
+                    self.error_log.insert(active_ct_mark, f"{content.rstrip()}\n", (active_ct_tag, "stderr"))
+                    self._active_ct_ts = now_ts
+                elif is_ct:
+                    ct_tag = f"ct_{int(now_ts * 1000)}_{random.randint(100, 999)}"
+                    ct_mark = f"{ct_tag}_end"
+                    self.error_log.insert(tk.END, "\n[CHAT TEMPLATE] ", "stderr")
+                    self.error_log.insert(tk.END, f"\n{content.strip()}\n", (ct_tag, "stderr"))
+                    self.error_log.mark_set(ct_mark, "end-1c")
+                    self.error_log.mark_gravity(ct_mark, tk.RIGHT)
+                    self.error_log.tag_config(ct_tag, elide=True)
+                    btn_ct = tk.Button(
+                        self.error_log,
+                        text="▼ Show Chat Template",
+                        bg=THEME.get("button_bg_color", "#24201c"),
+                        fg=THEME.get("electric_blue", "#00bfff"),
+                        relief=tk.FLAT,
+                        font=self.fonts.get("stats", ("Consolas", 8)),
+                        cursor="hand2",
+                        padx=4,
+                        pady=1,
+                    )
+                    def _toggle_ct(t=ct_tag, b=btn_ct):
+                        is_el = str(self.error_log.tag_cget(t, "elide")) in ("1", "True", "true")
+                        self.error_log.tag_config(t, elide=not is_el)
+                        b.config(text="▲ Collapse Chat Template" if is_el else "▼ Show Chat Template")
+                    btn_ct.config(command=_toggle_ct)
+                    self.error_log.window_create(tk.END, window=btn_ct)
+                    self.error_log.insert(tk.END, "\n", "stderr")
+                    self._active_ct_tag = ct_tag
+                    self._active_ct_mark = ct_mark
+                    self._active_ct_ts = now_ts
+                else:
+                    self._active_ct_tag = None
+                    self._active_ct_mark = None
+                    self.error_log.insert(tk.END, content + "\n", "stderr")
                 if self.error_log.yview()[1] >= 0.9:
                     self.error_log.see(tk.END)
                 self.error_log.config(state='disabled')
@@ -6279,13 +7560,10 @@ class ChatbotApp:
                 self.root.after(150, self.check_process_queue)
 
         except Exception as e:
-            print(f"[APEX ERROR] Heartbeat failure: {e}\n{traceback.format_exc()}")
+            err_tb = f"[APEX ERROR] Heartbeat failure: {e}\n{traceback.format_exc()}"
+            print(err_tb, file=sys.stderr)
+            self.process_queue.put({"status": "error_log_update", "content": err_tb})
             self.root.after(500, self.check_process_queue) # Safety backup
-
-    def update_timeline_progress(self, current_burst, total_bursts):
-        percentage = (current_burst / total_bursts) * 100
-        # Thread-safe UI update
-        self.root.after(0, self._set_progress, percentage)
 
     def _set_progress(self, val):
         if self.timeline_bar is None or not self.timeline_bar.winfo_exists(): return
@@ -6388,23 +7666,29 @@ class ChatbotApp:
         self._append_to_chat(f"{msg}\n", "user")
         end_idx = hist.index(tk.END + "-1c")
         self.state["response_start_idx"] = end_idx
+        try:
+            hist.mark_set("user_prompt_end", end_idx)
+            hist.mark_gravity("user_prompt_end", tk.LEFT)
+            hist.mark_set("response_start", end_idx)
+            hist.mark_gravity("response_start", tk.LEFT)
+        except Exception:
+            pass
         hist.config(state='disabled')
         
         # Markdown Application (Prompt formatting disabled by default to preserve raw expressions like 3*3*5*5)
-        render_mode = self.config.get("media_rendering", 1)
+        render_mode = self.config.get("media_rendering", 2)
         if render_mode > 0 and self.config.get("format_prompts_markdown", False):
             self._apply_markdown(start_idx, end_idx, ("user",))
         
-        self._user_scrolled_up = False
-        hist.see(tk.END)
+        if not bool(self.config.get("scroll_lock_enabled", False)):
+            self._user_scrolled_up = False
+            hist.see(tk.END)
 
     def _update_ai_message(self, chunk):
         hist = self.chat_history
         if not chunk or hist is None: return
         
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        user_scrolled = getattr(self, '_user_scrolled_up', False)
-        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
 
         if not self.state.get("response_started", False):
             think = self.thinking_display
@@ -6425,8 +7709,7 @@ class ChatbotApp:
         hist.insert(tk.END, chunk, (tag_name, "ai"))
         hist.config(state='disabled')
         
-        if not scroll_locked and was_at_bottom:
-            hist.see("end-1c")
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target="end-1c")
             
         bg = hist.cget("bg")
         fg = CHAT_FG_COLORS.get(self.active_persona_level, "#ffffff")
@@ -6442,9 +7725,7 @@ class ChatbotApp:
     def _replace_ai_message(self, text):
         hist = self.chat_history
         if hist is None: return
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        user_scrolled = getattr(self, '_user_scrolled_up', False)
-        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
 
         if not self.state.get("response_started", False):
             think = self.thinking_display
@@ -6459,13 +7740,19 @@ class ChatbotApp:
             start_idx = self.state.get("response_start_idx")
             
         hist.config(state='normal')
+        if start_idx:
+            try:
+                if "user_prompt_end" in hist.mark_names() and hist.compare(start_idx, "<", "user_prompt_end"):
+                    start_idx = hist.index("user_prompt_end")
+            except Exception:
+                pass
+            hist.delete(start_idx, tk.END)
         if text:
-            if start_idx:
-                hist.delete(start_idx, tk.END)
-            hist.insert(tk.END, text, ("ai",))
+            clean_preview = re.sub(r'<\|channel>thought|<channel\|>|<start_of_turn>\w*|<end_of_turn>', '', text).strip()
+            if clean_preview:
+                hist.insert(tk.END, clean_preview, ("ai",))
         hist.config(state='disabled')
-        if not scroll_locked and was_at_bottom:
-            hist.see("end-1c")
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target="end-1c")
     
     def _display_ai_message(self, msg="", is_streaming=True):
         if is_streaming:
@@ -6479,9 +7766,7 @@ class ChatbotApp:
     def _append_to_chat(self, text, tag):
         hist = self.chat_history
         if hist is None: return
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        user_scrolled = getattr(self, '_user_scrolled_up', False)
-        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
         
         hist.config(state='normal')
         hist.insert(tk.END, text, (tag,))
@@ -6489,13 +7774,14 @@ class ChatbotApp:
         # Memory overhead reduction: Truncate chat history UI if it grows too massive (e.g. 5000 lines)
         if int(float(hist.index('end-1c'))) > 5000:
             hist.delete("1.0", "1000.0")
+            saved_top = None
             
         hist.config(state='disabled')
         
-        if tag in ["user", "system"]:
+        if tag in ["user", "system"] and not bool(self.config.get("scroll_lock_enabled", False)):
             hist.see("end-1c")
-        elif not scroll_locked and was_at_bottom:
-            hist.see("end-1c")
+        else:
+            self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target="end-1c")
         
         bg = hist.cget("bg")
         if tag == "user": fg = "#007acc"
@@ -6575,12 +7861,104 @@ class ChatbotApp:
             print(f"[UI SAFETY] Markdown render error: {e}")
 
 
+    @staticmethod
+    def _validate_external_http_url(url: str) -> None:
+        """Validate that an external HTTP(S) URL resolves only to public IP addresses (SSRF guard)."""
+        parsed = urllib.parse.urlparse(str(url or "").strip())
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported URL scheme: {scheme or 'none'}")
+        host = (parsed.hostname or "").strip().strip("[]")
+        if not host:
+            raise ValueError("URL missing hostname")
+        low_host = host.lower()
+        if low_host in ("localhost", "localhost.localdomain") or low_host.endswith((".local", ".internal")):
+            raise PermissionError(f"[SSRF BLOCKED] Local hostname blocked: {host}")
+
+        def _check_ip_obj(addr) -> None:
+            if (
+                addr.is_private
+                or addr.is_loopback
+                or addr.is_link_local
+                or addr.is_multicast
+                or addr.is_reserved
+                or addr.is_unspecified
+            ):
+                raise PermissionError(f"[SSRF BLOCKED] Non-public IP address blocked: {addr}")
+
+        try:
+            _check_ip_obj(ipaddress.ip_address(host))
+            return
+        except ValueError:
+            pass
+
+        port = parsed.port or (443 if scheme == "https" else 80)
+        for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+            ip_str = info[4][0].split("%")[0]
+            _check_ip_obj(ipaddress.ip_address(ip_str))
+
+    def _open_safe_url(self, url: str) -> None:
+        """Open a user-clicked http(s) URL only when online and non-SSRF."""
+        u = str(url or "").strip()
+        if u.lower().startswith(("http://", "https://")):
+            if is_offline_mode() or bool(self.config.get("offline_mode", False)):
+                print(f"[OFFLINE MODE] Blocked opening external URL: {u}")
+                return
+            try:
+                self._validate_external_http_url(u)
+            except Exception as err:
+                print(f"[SECURITY] Blocked unsafe URL open '{u}': {err}")
+                return
+            webbrowser.open(u)
+
+    def _safe_fetch_http_bytes(self, url: str, timeout: int = 10, max_bytes: int = 20 * 1024 * 1024) -> bytes:
+        """Fetch external HTTP(S) bytes only when online, validating SSRF across redirects and capping size."""
+        if is_offline_mode() or bool(self.config.get("offline_mode", False)):
+            raise PermissionError(f"[OFFLINE MODE] Blocked external media fetch for: {url}")
+        import requests
+        headers = {"User-Agent": "SerenityPC/4.0 RichMediaFetcher"}
+        current_url = url
+        for _ in range(4):
+            self._validate_external_http_url(current_url)
+            resp = requests.get(current_url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+            status = getattr(resp, "status_code", 200)
+            if isinstance(status, int) and status in (301, 302, 303, 307, 308):
+                loc = (getattr(resp, "headers", {}) or {}).get("Location")
+                if not loc:
+                    raise ValueError("Redirect missing Location header")
+                current_url = urllib.parse.urljoin(current_url, loc)
+                continue
+            resp.raise_for_status()
+            hdrs = getattr(resp, "headers", {}) or {}
+            c_len = hdrs.get("Content-Length") if hasattr(hdrs, "get") else None
+            if isinstance(c_len, (str, int)) and str(c_len).isdigit() and int(c_len) > max_bytes:
+                raise ValueError(f"Media exceeds size limit ({c_len} > {max_bytes} bytes)")
+            buf = bytearray()
+            streamed_valid = False
+            if hasattr(resp, "iter_content"):
+                for chunk in resp.iter_content(65536):
+                    if not isinstance(chunk, (bytes, bytearray)):
+                        break
+                    streamed_valid = True
+                    buf.extend(chunk)
+                    if len(buf) > max_bytes:
+                        raise ValueError(f"Media stream exceeded {max_bytes} bytes limit")
+            if streamed_valid:
+                return bytes(buf)
+            raw_content = getattr(resp, "content", b"")
+            if isinstance(raw_content, (bytes, bytearray)):
+                if len(raw_content) > max_bytes:
+                    raise ValueError(f"Media exceeded {max_bytes} bytes limit")
+                return bytes(raw_content)
+            raise ValueError("Empty or invalid HTTP media response")
+        raise ValueError("Too many HTTP redirects")
+
     def _post_process_media(self, start_idx=None):
         """Scans the last message for URLs and media paths using native search."""
         hist = self.chat_history
         if hist is None: return
         
-        render_mode = self.config.get("media_rendering", 1)
+        render_mode = self.config.get("media_rendering", 2)
         # MISSION: Only scan the NEW content. Never scan the entire history.
         if start_idx is None:
             start_idx = self.state.get("response_start_idx", "1.0")
@@ -6610,9 +7988,10 @@ class ChatbotApp:
             
             # Check if it's media (images or videos)
             is_media = any(url.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".avi", ".mkv", ".mov"])
+            is_external_http = url.lower().startswith(("http://", "https://"))
             
             if is_media and render_mode > 0:
-                if render_mode == 1: # Inline
+                if render_mode == 1 and not is_external_http: # Inline allowed only for local media; external URLs stay click-to-load
                     # 1. Prepare Placeholder
                     if not self.placeholder_img:
                         p_pil = Image.new("RGB", (300, 180), color="#1a1a1a")
@@ -6627,12 +8006,12 @@ class ChatbotApp:
                     link_tag = f"link_media_{self.link_counter}"
                     hist.insert(match_start, f"\n[Media: {os.path.basename(url)}]\n", (link_tag,))
                     hist.tag_config(link_tag, foreground="#00ccff", underline=True)
-                    hist.tag_bind(link_tag, "<Button-1>", lambda e, u=url: webbrowser.open(u))
+                    hist.tag_bind(link_tag, "<Button-1>", lambda e, u=url: self._spawn_media_popup(u))
                     
-                    # 4. Spawn the population thread
+                    # 4. Spawn the population thread (local path only)
                     threading.Thread(target=self._fetch_and_populate_media, args=(url, img_name), daemon=True).start()
                 
-                elif render_mode == 2: # Separate (Popup button)
+                else: # Click-to-load Popup (Default render_mode == 2, and always enforced for external HTTP(S) URLs)
                     self.link_counter += 1
                     tag = f"link_popup_{self.link_counter}"
                     hist.delete(match_start, match_end)
@@ -6645,7 +8024,7 @@ class ChatbotApp:
                 tag = f"link_text_{self.link_counter}"
                 hist.tag_add(tag, match_start, match_end)
                 hist.tag_config(tag, foreground="#00ccff", underline=True)
-                hist.tag_bind(tag, "<Button-1>", lambda e, u=url: webbrowser.open(u))
+                hist.tag_bind(tag, "<Button-1>", lambda e, u=url: self._open_safe_url(u))
         
         hist.config(state='disabled')
 
@@ -6653,16 +8032,9 @@ class ChatbotApp:
         """Background thread to fetch media and update the PhotoImage reference."""
         try:
             pil_img = None
-            if url.startswith("http"):
-                if is_offline_mode() or bool(self.config.get("offline_mode", False)):
-                    print(f"[OFFLINE MODE] Blocked external media fetch for: {url}")
-                    return
-                # Web Fetch
-                import requests
-                headers = {"User-Agent": "SerenityPC/4.0 RichMediaFetcher"}
-                resp = requests.get(url, headers=headers, timeout=10)
-                resp.raise_for_status()
-                pil_img = Image.open(io.BytesIO(resp.content))
+            if url.lower().startswith(("http://", "https://")):
+                raw_bytes = self._safe_fetch_http_bytes(url, timeout=10)
+                pil_img = Image.open(io.BytesIO(raw_bytes))
             else:
                 # Local Path
                 if any(url.lower().endswith(ext) for ext in [".mp4", ".avi", ".mkv", ".mov"]) and cv2:
@@ -6706,13 +8078,9 @@ class ChatbotApp:
         
         def load():
             try:
-                # (Re-use fetch logic or just open)
-                if url.startswith("http"):
-                    if is_offline_mode() or bool(self.config.get("offline_mode", False)):
-                        loading.config(text="[OFFLINE MODE] External media fetch blocked.")
-                        return
-                    import requests
-                    resp = requests.get(url, timeout=10); pil_img = Image.open(io.BytesIO(resp.content))
+                if url.lower().startswith(("http://", "https://")):
+                    raw_bytes = self._safe_fetch_http_bytes(url, timeout=10)
+                    pil_img = Image.open(io.BytesIO(raw_bytes))
                 else:
                     if any(url.lower().endswith(ext) for ext in [".mp4", ".avi", ".mkv", ".mov"]) and cv2:
                         cap = cv2.VideoCapture(url); ret, frame = cap.read()
@@ -6736,7 +8104,8 @@ class ChatbotApp:
                         lbl.bind("<Button-1>", lambda e: popup.destroy())
                     self.root.after(0, show)
             except Exception as e:
-                self.root.after(0, lambda: loading.config(text=f"Error: {e}"))
+                err_msg = str(e)
+                self.root.after(0, lambda m=err_msg: loading.config(text=f"Error: {m}") if loading.winfo_exists() else None)
         
         threading.Thread(target=load, daemon=True).start()
 
@@ -6819,191 +8188,149 @@ class ChatbotApp:
         if hasattr(self, 'thinking_display') and self.thinking_display and self.thinking_display.winfo_exists():
             self.thinking_display.update_status(f"System: {msg}")
 
-    def _run_tool_loop(self, full_resp, prompt_str, params, depth=0):
+    def _run_tool_loop(
+        self,
+        full_resp,
+        prompt_str,
+        params,
+        depth=0,
+        system_prompt_override=None,
+        tool_cache=None,
+        original_query=None,
+        collect_evidence=None,
+        nested_cyc_tag=None,
+    ):
         """
         Parses tool calls from model output (supporting Programmatic Tool Calling Python syntax
-        and legacy tags), executes them, and recursively generates the final answer.
+        and legacy tags), executes them, emits per-call UI dropdown events, and generates follow-up output.
         Configurable recursion limit (default 100, virtually unlimited).
         """
-        max_tool_depth = int(self.config.get("max_tool_recursion_depth", 100))
+        if getattr(self, "stop_process", None) and self.stop_process.is_set() is True:
+            return full_resp
+        cfg = getattr(self, "config", {})
+        if not isinstance(cfg, dict):
+            cfg = {}
+        max_tool_depth = int(cfg.get("max_tool_recursion_depth", 100))
         if depth >= max_tool_depth:
             return f"{full_resp}\n\n[SYSTEM]: Tool recursion safety bound ({max_tool_depth}) reached. Returning current output."
 
-        call_name = None
-        args = {}
+        # Validation guard: tools requiring parameters must have arguments
+        req_arg_tools = {
+            "send_peer_message": ("peer_id", "message"),
+            "web_search": ("query",),
+            "read_file": ("path",),
+            "read_file_range": ("path",),
+            "write_file": ("path", "content"),
+            "organize_files": ("action", "source_path"),
+            "control_serenitydev": ("action",),
+            "run_terminal_command": ("command",),
+            "generate_image": ("prompt",),
+            "generate_video": ("prompt",),
+        }
+
+        def _is_valid_call(c_name: Optional[str], c_args: Any) -> bool:
+            if not c_name:
+                return False
+            if c_name in req_arg_tools:
+                req_keys = req_arg_tools[c_name]
+                if not isinstance(c_args, dict) or not any(k in c_args for k in req_keys):
+                    return False
+            return True
+
+        valid_calls: List[Tuple[str, Dict[str, Any]]] = []
 
         # 0. Modular multi-format tool parser (supporting PTC, Nemotron, MiniCPM, Spark, Olmo, Mistral, JSON)
         if hasattr(self, "tool_registry") and hasattr(self.tool_registry, "parse_tool_calls"):
             try:
                 parsed_tools = self.tool_registry.parse_tool_calls(full_resp)
-                if parsed_tools:
-                    call_name, args = parsed_tools[0]
+                if isinstance(parsed_tools, (list, tuple)):
+                    for c_name, c_args in parsed_tools:
+                        if _is_valid_call(c_name, c_args):
+                            valid_calls.append((c_name, dict(c_args) if isinstance(c_args, dict) else {}))
+                        else:
+                            print(f"[TOOL] Suppressing false-positive invocation of '{c_name}' with missing required args {c_args}.")
             except Exception:
                 pass
 
-        py_match = None
-        call_match = None
-        json_match = None
+        if not valid_calls:
+            for c_name, c_args in GemmaToolRegistry.parse_tool_calls_static(full_resp):
+                if _is_valid_call(c_name, c_args):
+                    valid_calls.append((c_name, dict(c_args) if isinstance(c_args, dict) else {}))
+                else:
+                    print(f"[TOOL] Suppressing false-positive invocation of '{c_name}' with missing required args {c_args}.")
+                    return full_resp
 
-        if not call_name:
-            # 1. Programmatic Tool Calling (PTC) - Python syntax (e.g. web_search("..."), read_file(path="..."))
-            py_match = re.search(r'(?:```(?:python)?\s*)?\b(web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image|send_peer_message)\s*\((.*?)\)(?:\s*```)?', full_resp, re.DOTALL | re.IGNORECASE)
-            # 2. Legacy / Tag-based Tool Calls
-            call_match = re.search(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)\s*([\w_]+)\s*\{(.*?)\}(?:<\/(?:execute_tool|executetool)>)?', full_resp, re.DOTALL | re.IGNORECASE)
-            # 3. JSON Action Block (e.g. {"action": "generate_image", "action_input": ...} or {"name": "...", "arguments": ...})
-            json_match = re.search(r'\{\s*["\'](?:action|tool|name|function)["\']\s*:\s*["\'][\w_]+["\']', full_resp, re.IGNORECASE)
-
-
-        if py_match:
-            call_name = py_match.group(1).strip().lower()
-            raw_args = py_match.group(2).strip()
-            if raw_args:
-                import ast
-                try:
-                    expr = ast.parse(f"{call_name}({raw_args})", mode="eval")
-                    if isinstance(expr.body, ast.Call):
-                        for kw in expr.body.keywords:
-                            args[kw.arg] = ast.literal_eval(kw.value)
-                        if expr.body.args:
-                            if call_name == "web_search": args["query"] = ast.literal_eval(expr.body.args[0])
-                            elif call_name == "read_file": args["path"] = ast.literal_eval(expr.body.args[0])
-                            elif call_name == "read_file_range":
-                                positional_names = ("path", "start", "end")
-                                for name, value in zip(positional_names, expr.body.args):
-                                    args[name] = ast.literal_eval(value)
-                            elif call_name == "generate_image": args["prompt"] = ast.literal_eval(expr.body.args[0])
-                except Exception:
-                    clean_str = raw_args.strip('\'" ')
-                    if call_name == "web_search": args["query"] = clean_str
-                    elif call_name == "read_file": args["path"] = clean_str
-                    elif call_name == "generate_image": args["prompt"] = clean_str
-        elif call_match:
-            call_name = call_match.group(1).strip()
-            if call_name.lower() in ["readfile", "read_file"]:
-                call_name = "read_file"
-            args_raw = call_match.group(2).strip()
-            
-            clean_args = args_raw.replace('<|"|>', '"').replace('<|"', '"').replace('"|>', '"').strip()
-            if clean_args.startswith("{") and clean_args.endswith("}"):
-                clean_args = clean_args[1:-1].strip()
-                
-            is_json_format = not clean_args or clean_args.strip().startswith('"')
-            if is_json_format:
-                try:
-                    args = json.loads("{" + clean_args + "}")
-                except Exception: pass
-
-            if not args and clean_args:
-                try:
-                    kv_pattern = r'(?m)^\s*["\']?([\w_]+)["\']?\s*[:=]\s*(.*?)\s*(?:,|$)'
-                    matches = re.finditer(kv_pattern, clean_args)
-                    for m in matches:
-                        key = m.group(1).strip()
-                        val = m.group(2).strip().strip('"\'')
-                        if val: args[key] = val
-                    if not args:
-                        fixed = re.sub(r'(?<!["\'])(\b\w+\b)(?!["\'])\s*:', r'"\1":', clean_args)
-                        fixed = re.sub(r',\s*$', '', fixed.strip())
-                        args = json.loads("{" + fixed + "}")
-                except Exception:
-                    try:
-                        bare_val = re.sub(r'^.*?:\s*', '', clean_args).strip().strip('"\'')
-                        if bare_val:
-                            if call_name == "web_search": args["query"] = bare_val
-                            elif call_name == "read_file": args["path"] = bare_val
-                    except Exception: pass
-        elif json_match:
-            start_idx = json_match.start()
-            brace_count = 0
-            end_idx = -1
-            in_str = False
-            str_char = ''
-            escape = False
-            for i in range(start_idx, len(full_resp)):
-                ch = full_resp[i]
-                if escape:
-                    escape = False
-                    continue
-                if ch == '\\':
-                    escape = True
-                    continue
-                if in_str:
-                    if ch == str_char:
-                        in_str = False
-                elif ch in ('"', "'"):
-                    in_str = True
-                    str_char = ch
-                elif ch == '{':
-                    brace_count += 1
-                elif ch == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        end_idx = i + 1
-                        break
-            
-            candidate_raw = full_resp[start_idx:end_idx].strip() if end_idx != -1 else full_resp[start_idx:].strip()
-            import ast
-            parsed_dict = None
-            clean_cand = candidate_raw.replace(r"\'", "'")
-            try:
-                parsed_dict = json.loads(clean_cand)
-            except Exception:
-                try:
-                    parsed_dict = ast.literal_eval(clean_cand)
-                except Exception:
-                    try:
-                        parsed_dict = json.loads(candidate_raw)
-                    except Exception:
-                        try:
-                            parsed_dict = ast.literal_eval(candidate_raw)
-                        except Exception: pass
-            
-            if isinstance(parsed_dict, dict):
-                raw_call = parsed_dict.get("action") or parsed_dict.get("tool") or parsed_dict.get("name") or parsed_dict.get("function")
-                if raw_call:
-                    call_name = str(raw_call).strip().lower()
-                    raw_input = parsed_dict.get("action_input") or parsed_dict.get("arguments") or parsed_dict.get("parameters") or parsed_dict.get("input")
-                    if isinstance(raw_input, dict):
-                        args = raw_input
-                    elif isinstance(raw_input, str):
-                        clean_inp = raw_input.replace(r"\'", "'")
-                        try:
-                            args = json.loads(clean_inp)
-                        except Exception:
-                            try:
-                                args = ast.literal_eval(clean_inp)
-                            except Exception:
-                                try:
-                                    args = json.loads(raw_input)
-                                except Exception:
-                                    try:
-                                        args = ast.literal_eval(raw_input)
-                                    except Exception:
-                                        if not isinstance(args, dict):
-                                            args = {}
-                                        if call_name == "generate_image": args["prompt"] = raw_input
-                                        elif call_name == "web_search": args["query"] = raw_input
-                                        elif call_name == "read_file": args["path"] = raw_input
-                    elif raw_input is None:
-                        args = {k: v for k, v in parsed_dict.items() if k not in ("action", "tool", "name", "function")}
-
-        if not call_name:
+        if not valid_calls or (getattr(self, "stop_process", None) and self.stop_process.is_set() is True):
             return full_resp
 
-        # Inform UI & clean tool invocation syntax from chat output without wiping response text
-        self.process_queue.put({"status": "thinking_status", "content": f"Executing tool: {call_name}..."})
-        self.process_queue.put({"status": "tool_log_update", "content": f"\n[{time.strftime('%H:%M:%S')}] Executing: {call_name}\nArgs: {args}"})
-        
-        try:
-            # 1. ATTEMPT EXECUTION WITH GRACEFUL FALLBACK
-            try:
-                observation = self.tool_registry.execute(call_name, args)
-            except Exception as e:
-                observation = f"Notice: Tool '{call_name}' execution encountered an issue ({str(e)}). Proceeding with baseline knowledge."
-                self.process_queue.put({"status": "log_update", "content": f"\n[TOOL FALLBACK] {call_name}: {str(e)}\n"})
+        READ_ONLY_CACHEABLE = {"list_directory", "read_file", "read_file_range", "web_search", "get_system_stats"}
+        executed_records: List[Dict[str, Any]] = []
 
-            self.process_queue.put({"status": "tool_log_update", "content": f"Result: \n{str(observation)[:200]}..."})
-            
+        try:
+            for idx, (call_name, args) in enumerate(valid_calls):
+                if getattr(self, "stop_process", None) and self.stop_process.is_set() is True:
+                    return full_resp
+
+                call_id = f"tc_{depth}_{idx}_{int(time.time() * 1000) % 1000000}"
+                self.process_queue.put({"status": "thinking_status", "content": f"Executing tool: {call_name}..."})
+                self.process_queue.put({"status": "tool_log_update", "content": f"\n[{time.strftime('%H:%M:%S')}] Executing: {call_name}\nArgs: {args}"})
+                self.process_queue.put({
+                    "status": "tool_call_start",
+                    "call_id": call_id,
+                    "call_name": call_name,
+                    "args": args,
+                    "nested_cyc_tag": nested_cyc_tag,
+                })
+
+                cache_key = (call_name, json.dumps(args, sort_keys=True, default=str))
+                cached = False
+                if tool_cache is not None and call_name in READ_ONLY_CACHEABLE and cache_key in tool_cache:
+                    cached = True
+                    observation = (
+                        "[CACHED — ALREADY FETCHED EARLIER. Do NOT call this again with the same arguments; "
+                        "inspect different files or answer now.]\n" + tool_cache[cache_key]
+                    )
+                    ok = True
+                    dur_ms = 0.0
+                else:
+                    t_tool = time.time()
+                    try:
+                        observation = self.tool_registry.execute(call_name, args)
+                    except Exception as e:
+                        observation = f"Notice: Tool '{call_name}' execution encountered an issue ({str(e)}). Proceeding with baseline knowledge."
+                        self.process_queue.put({"status": "log_update", "content": f"\n[TOOL FALLBACK] {call_name}: {str(e)}\n"})
+                    dur_ms = (time.time() - t_tool) * 1000.0
+                    obs_str = str(observation)
+                    ok = not (obs_str.startswith("Notice:") or obs_str.startswith("[SECURITY RESTRICTION]"))
+                    if tool_cache is not None and call_name in READ_ONLY_CACHEABLE and ok:
+                        tool_cache[cache_key] = obs_str
+                    if collect_evidence is not None:
+                        collect_evidence.append({
+                            "tool": call_name,
+                            "args": dict(args),
+                            "result": obs_str[:4000],
+                            "ok": ok,
+                        })
+
+                obs_str = str(observation)
+                self.process_queue.put({
+                    "status": "tool_call_done",
+                    "call_id": call_id,
+                    "call_name": call_name,
+                    "args": args,
+                    "result": obs_str,
+                    "ok": ok,
+                    "cached": cached,
+                    "duration_ms": round(dur_ms, 1),
+                })
+                self.process_queue.put({"status": "tool_log_update", "content": f"Result:\n{obs_str[:1200]}"})
+                executed_records.append({
+                    "call_name": call_name,
+                    "args": args,
+                    "observation": obs_str,
+                    "ok": ok,
+                })
+
             clean_resp = full_resp
             clean_resp = re.sub(r'(?s)<think>.*?(?:<\/think>|$)', '', clean_resp, flags=re.IGNORECASE)
             clean_resp = re.sub(r'(?s)<thought>.*?(?:<\/thought>|$)', '', clean_resp, flags=re.IGNORECASE)
@@ -7011,29 +8338,92 @@ class ChatbotApp:
             clean_resp = re.sub(r'(?s)\[THOUGHT\].*?(?:\[\/THOUGHT\]|$)', '', clean_resp, flags=re.IGNORECASE)
             clean_resp = re.sub(r'(?s)<\|channel>thought.*?(?:<channel\|>|$)', '', clean_resp, flags=re.IGNORECASE)
 
-            
-            forced_sys = f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search / tool results below (or using your existing knowledge if results are unavailable), provide a direct, helpful answer to the user's original query."
+            if (
+                executed_records
+                and all("is not recognized in the registry" in r["observation"] for r in executed_records)
+                and len(clean_resp.strip()) > 50
+            ):
+                print("[TOOL] Unrecognized tool notice received and substantial output exists; preserving original output.")
+                return full_resp
+
+            if len(executed_records) == 1:
+                rec0 = executed_records[0]
+                executed_summary = f"Executed tool `{rec0['call_name']}` with args: {json.dumps(rec0['args'], ensure_ascii=False, default=str)}"
+                results_block = f"Tool Results ({rec0['call_name']}):\n{rec0['observation']}"
+            else:
+                executed_summary = "Executed tools: " + ", ".join(
+                    f"`{r['call_name']}`({json.dumps(r['args'], ensure_ascii=False, default=str)})"
+                    for r in executed_records
+                )
+                results_block = "\n\n".join(
+                    f"[TOOL RESULT {i+1}: {r['call_name']} {json.dumps(r['args'], ensure_ascii=False, default=str)}]\n{r['observation']}"
+                    for i, r in enumerate(executed_records)
+                )
+
+            mp = getattr(self, "model_path", "")
+            is_gemma = isinstance(mp, str) and ("gemma" in mp.lower())
+            active_lvl = getattr(self, "active_persona_level", 2)
+            if not isinstance(active_lvl, int):
+                active_lvl = 2
+
             if isinstance(prompt_str, list):
+                follow_instr = (
+                    "Use these tool results to complete your current step (or call another tool with exact full paths if needed)."
+                    if system_prompt_override
+                    else "Deliver the final response now based on these results (or call another tool with exact full paths if needed)."
+                )
                 new_prompt = list(prompt_str) + [
-                    {"role": "assistant", "content": f"Executed tool `{call_name}` with args: {json.dumps(args)}"},
-                    {"role": "user", "content": f"[TOOL RESULT ({call_name})]:\n{observation}\n\nDeliver the final response now based on these results."}
+                    {"role": "assistant", "content": executed_summary},
+                    {"role": "user", "content": f"[{results_block}]\n\n{follow_instr}"},
                 ]
             else:
+                if system_prompt_override:
+                    sys_for_loop = system_prompt_override
+                else:
+                    sys_for_loop = f"{PERSONA_PROMPTS.get(active_lvl, 'You are Serenity.')}\n[DIRECT STRIKE]: Based on the search / tool results below (or using your existing knowledge if results are unavailable), provide a direct, helpful answer to the user's original query."
+                    if is_gemma and hasattr(self, "tool_registry") and hasattr(self.tool_registry, "get_gemma_declarations"):
+                        sys_for_loop = f"{sys_for_loop}\n{self.tool_registry.get_gemma_declarations(active_lvl)}".strip()
+
+                p_str = str(prompt_str or "")
+                ctx_body = p_str if len(p_str) <= 3500 else (p_str[:1500] + "\n...\n" + p_str[-1500:])
+                orig_hdr = f"Original User Request:\n{original_query}\n\n" if original_query else ""
+                end_cmd = "Complete this step now." if system_prompt_override else "Deliver the final response now."
                 new_prompt = [
-                    {"role": "system", "content": forced_sys},
-                    {"role": "user", "content": f"Original Query Context:\n{prompt_str[-500:]}\n\nTool Results ({call_name}):\n{observation}\n\nDeliver the final response now."}
+                    {"role": "system", "content": sys_for_loop},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{orig_hdr}Step Context:\n{ctx_body}\n\n{results_block}\n\n"
+                            f"Rule: Always pass exact full verbatim paths in tool calls (never '...'). "
+                            f"Do not repeat already-cached tool calls. {end_cmd}"
+                        ),
+                    },
                 ]
-            
+
+            if getattr(self, "stop_process", None) and self.stop_process.is_set() is True:
+                return full_resp
             self.process_queue.put({"status": "thinking_status", "content": "Synthesizing tool results..."})
             new_text = self._run_blocking_inference(new_prompt, params)
-            
-            if not new_text or len(new_text.strip()) < 5:
-                new_text = f"Tool Result for `{call_name}`:\n{observation}"
 
-            return self._run_tool_loop(new_text, new_prompt, params, depth=depth+1)
-            
+            if not new_text or len(new_text.strip()) < 5:
+                new_text = results_block
+
+            return self._run_tool_loop(
+                new_text,
+                new_prompt,
+                params,
+                depth=depth + 1,
+                system_prompt_override=system_prompt_override,
+                tool_cache=tool_cache,
+                original_query=original_query,
+                collect_evidence=collect_evidence,
+                nested_cyc_tag=nested_cyc_tag,
+            )
+
         except Exception as e:
-            fallback_msg = f"I retrieved tool context for `{call_name}`, but encountered a formatting issue ({str(e)}). Here is the tool output:\n\n{observation if 'observation' in locals() else str(e)}"
+            last_obs = executed_records[-1]["observation"] if executed_records else str(e)
+            last_name = executed_records[-1]["call_name"] if executed_records else "tool"
+            fallback_msg = f"I retrieved tool context for `{last_name}`, but encountered a formatting issue ({str(e)}). Here is the tool output:\n\n{last_obs}"
             return fallback_msg
       
     def _detect_repetition(self, text, mode=None):
@@ -7086,7 +8476,7 @@ class ChatbotApp:
         cleaned = re.sub(r'<(?:tool_call|function_calls?)[\s\S]*?(?:<\/(?:tool_call|function_calls?)>|$)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'\[TOOL_CALLS\][\s\S]*?(?=\n\n|$)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r'(?:<ctrl42>call:|<\|tool_call>call:|<\|tool_call\|>call:|<\|tool>call:|call:|action:|<(?:channel\|)?(?:execute_tool|executetool)>)[\s\S]*?(?:<\/(?:execute_tool|executetool)>|\}|\n|$)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\b(?:web_search|read_file|read_file_range|get_system_stats|control_rgb|generate_image|send_peer_message)\s*\([\s\S]*?\)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\b(?:web_search|read_file|read_file_range|write_file|list_directory|organize_files|control_serenitydev|run_terminal_command|get_system_stats|control_rgb|generate_image|generate_video|send_peer_message|send_peer_mail|check_serenity_mailbox|manage_quarantine_mail|share_chat_with_peer|pair_serenity_peer|delegate_to_serenitydev)\s*\([\s\S]*?\)', ' [TOOL_CALL] ', cleaned, flags=re.IGNORECASE)
 
 
         recent = cleaned[-800:]
@@ -7121,69 +8511,11 @@ class ChatbotApp:
                 return True
         return False
 
-    def _protect_long_numbers(self, text):
-        """Wraps long continuous sequences of digits to prevent tokenizer collision and hallucination."""
-        if not isinstance(text, str):
-            return text
-        
-        def repl(match):
-            digits = match.group(0)
-            if len(digits) >= 5:
-                spaced = " ".join(digits)
-                return f"`{digits}` (digits: `{spaced}`)"
-            return digits
-            
-        return re.sub(r'\d{5,}', repl, text)
-      
-    def _extract_thinking_content(self, text):
-        """Robust multi-tag thinking extraction (Deep Cook Prioritized)."""
-        if not text: return ""
-        import re
-        
-        # (?s) makes '.' match newlines. (?m) makes '^' match start of any line.
-        patterns = [
-            # 1. SPECIFIC DEEP COOK HEADERS (Highest Priority)
-            r'(?s)--- Cycle \d+ ---\n(.*?)(?=\n--- Cycle|$)',
-            r'(?i)\[STATUS:.*?\](.*?)(?=\[STATUS:|$)',
-            r'(?i)\[PRIME_MEMORY:(.*?)\]', 
-            
-            # 2. SEMI-STRUCTURED DRAFTS
-            r'(?s)\[DRAFT\]\n?(.*?)(?:\[\/DRAFT\]|$)',
-            
-            # 3. GENERIC & ATEM TAGS (Fallback)
-            r'(?s)<\|start\|>assistant to=self<\|message\|>(.*?)(?:<\|eom\|>|$)',
-            r'(?s)<\|channel>thought\n?(.*?)(?:<channel\|?>|<\/\|?channel\|?>|<\|channel>|(?=<start_of_turn>)|$)',
-            r'(?s)<think>\n?(.*?)(?:<\/think>|$)',
-            r'(?s)<\|think\|>\n?(.*?)(?:<\/\|think\|>|$)',
-            r'(?s)<thought>\n?(.*?)(?:<\/thought>|$)',
-            r'(?s)<\|im_start|>thought\n?(.*?)(?:<\|im_end\|>|$)',
-            
-            # Linear / Bulleted Heuristics
-            r'(?m)^(?:\d+\.|\*|\-)\s+\*\*\*?(?:Analyze|Determine|Identify|Structure|Refine|Draft|Review|Persona|Goal|Context|Acknowledge|Define|Equations|Methodology|Execution|Complexity|Apply|Deconstruct|Develop|Strategy|Resolution|Structure|Tone Check|Plan).*?\*\*.*(?:\n|$)',
-            r'(?i)^(?:The user is asking|This request requires|The goal of this|Based on the persona|Analyzing request).*?\n',
-            r'(?i)\[Inferred Conclusion\]:?\s*[^\n]*',
-            r'(?m)^\s*\*\s*Thought:?\s*[^\n]*',
-            r'(?m)^\s*Thought:?\s*[^\n]*'
-        ]
-        
-        extracted_thoughts = []
-        for pattern in patterns:
-            # MISSION: Collect all unique reasoning blocks while preserving sequence
-            matches = re.findall(pattern, text)
-            if matches:
-                for m in matches:
-                    if m.strip() and m.strip() not in extracted_thoughts:
-                        extracted_thoughts.append(m.strip())
-        
-        thoughts = "\n\n".join(extracted_thoughts).strip()
-        if thoughts:
-            print(f"[SYSTEM] Extracted {len(extracted_thoughts)} reasoning blocks ({len(thoughts)} chars).")
-        return thoughts
-
-
     def _clean_latex_artifacts(self, text):
-        """Pass-through hygiene: MarkdownEngine handles LaTeX and Math natively during markdown rendering."""
-        return text if text else ""
+        """Pass-through hygiene: MarkdownEngine handles LaTeX and Math natively during markdown rendering, while cleaning stray literal '/n' tokens."""
+        if not text:
+            return ""
+        return re.sub(r'(?<=\s)/n(?=\s|$)|^/n(?=\s)', '\n', str(text))
 
     @staticmethod
     def _clean_deep_cook_step_text(raw_text: str) -> str:
@@ -7196,6 +8528,29 @@ class ChatbotApp:
             raw_text
         )
         return cleaned.strip()
+
+    @staticmethod
+    def _split_deep_cook_thought_and_output(raw_text: str) -> Tuple[str, str]:
+        """Separates internal thought channel content from visible step output when a closer tag is followed by content."""
+        if not raw_text:
+            return "", ""
+        closers = (
+            r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<channel\|>', r'<\/channel\|>',
+            r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final',
+            r'<\|channel\|>text', r'<\|channel\|>assistant',
+            r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
+        )
+        last_end = -1
+        for pat in closers:
+            for m in re.finditer(pat, raw_text, re.IGNORECASE):
+                if m.end() > last_end:
+                    last_end = m.end()
+        if last_end != -1:
+            post_clean = ChatbotApp._clean_deep_cook_step_text(raw_text[last_end:])
+            if post_clean:
+                pre_clean = ChatbotApp._clean_deep_cook_step_text(raw_text[:last_end])
+                return pre_clean, post_clean
+        return "", ChatbotApp._clean_deep_cook_step_text(raw_text)
 
     @staticmethod
     def _extract_cycle_plan_points(plan_txt: str, current_cycle: int, min_p: int = 2, max_p: int = 5) -> list:
@@ -7267,6 +8622,7 @@ class ChatbotApp:
         self.state["current_deep_cook_active_tag"] = tag
         self.state["current_deep_cook_active_body_tag"] = body_tag
         
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
         hist.config(state='normal')
         
         if ctype == "cycle":
@@ -7329,12 +8685,8 @@ class ChatbotApp:
             hist.insert(tk.END, f"--- {title or 'Context Assessment'} ---\n", (body_tag, tag, "ai"))
             hist.tag_config(tag, elide=True, foreground="#ababab", font=self.fonts["log"])
 
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        user_scrolled = getattr(self, '_user_scrolled_up', False)
-        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
         hist.config(state='disabled')
-        if not scroll_locked and was_at_bottom:
-            hist.see(tk.END)
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target=tk.END)
 
     def _handle_deep_cook_ui_stream(self, msg):
         """Appends tokens to the currently active Deep Cook UI block."""
@@ -7350,10 +8702,13 @@ class ChatbotApp:
         body_tag = f"dc_body_{ctype}_{cnum}_{dnum}" if ctype else self.state.get("current_deep_cook_active_body_tag")
         if not content or not tag: return
         
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
         hist.config(state='normal')
         tags = [body_tag, tag, "ai"] if body_tag else [tag, "ai"]
         hist.insert(tk.END, content, tuple(tags))
         hist.config(state='disabled')
+        if lock_scroll:
+            self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target=tk.END)
 
     def toggle_cyc_tag(self, tag, btn=None, cnum=None):
         hist = getattr(self, 'chat_history', None) or getattr(self, 'hist', None)
@@ -7369,8 +8724,183 @@ class ChatbotApp:
                 if btn_tuple and btn_tuple[0].winfo_exists():
                     lbl_txt = btn_tuple[1] if isinstance(btn_tuple[1], str) and btn_tuple[1].startswith("Step ") else f"Step {btn_tuple[1]}"
                     btn_tuple[0].config(text=f"[+] {lbl_txt}")
+                tool_tuple = self.state.get(f"tool_btn_{n_tag}")
+                if tool_tuple and tool_tuple[0].winfo_exists():
+                    tc_info = self.state.get("tool_call_ui_registry", {}).get(tool_tuple[1], {})
+                    base_lbl = tc_info.get("base_label", tool_tuple[1])
+                    tool_tuple[0].config(text=f"[+] {base_lbl}")
         if btn: btn.config(text=f"{'[+] View' if new_state else '[-] Hide'} Cycle {cnum}")
     toggle_cyc = toggle_cyc_tag
+
+    @staticmethod
+    def _format_tool_arg_preview(args: Any) -> str:
+        """Builds a compact preview string from tool arguments for dropdown button labels."""
+        if not isinstance(args, dict) or not args:
+            return ""
+        val = None
+        for key in ("path", "cwd", "query", "command", "source_path", "action", "peer_id", "prompt"):
+            if args.get(key):
+                val = str(args[key]).strip()
+                if key in ("path", "cwd", "source_path"):
+                    norm = val.replace("\\", "/").rstrip("/")
+                    parts = [p for p in norm.split("/") if p]
+                    if len(parts) > 1:
+                        val = parts[-1]
+                break
+        if val is None:
+            first_v = next(iter(args.values()), "")
+            val = str(first_v).strip()
+        if not val:
+            return ""
+        return val if len(val) <= 44 else (val[:41] + "...")
+
+    def _handle_tool_call_ui_start(self, msg: Dict[str, Any]):
+        """Creates an individual collapsed dropdown button in chat_history for a single tool invocation."""
+        hist = getattr(self, "chat_history", None)
+        if hist is None:
+            return
+        call_id = str(msg.get("call_id") or f"tc_{int(time.time() * 1000)}")
+        call_name = str(msg.get("call_name") or "tool")
+        args = msg.get("args") or {}
+        preview = self._format_tool_arg_preview(args)
+        arg_suffix = f" ({preview})" if preview else ""
+        base_label = f"🔧 {call_name}{arg_suffix}"
+
+        reg = self.state.setdefault("tool_call_ui_registry", {})
+        tc_tag = f"tc_block_{call_id}"
+        tc_body_tag = f"tc_body_{call_id}"
+
+        if not self.state.get("deep_cook") and not self.state.get("response_started", False):
+            self.state["response_start_idx"] = hist.index(tk.END + "-1c")
+            self._append_to_chat(f"\n\n{self._get_persona_label()}: ", "ai_lead")
+            self.state["response_started"] = True
+
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
+        hist.config(state='normal')
+
+        def _toggle_tc(t=tc_tag, cid=call_id):
+            info = self.state.get("tool_call_ui_registry", {}).get(cid, {})
+            b_ref = info.get("btn")
+            lbl = info.get("base_label", base_label)
+            is_elided = str(hist.tag_cget(t, "elide")) in ("1", "True", "true")
+            new_elide = not is_elided
+            hist.tag_config(t, elide=new_elide)
+            if b_ref and hasattr(b_ref, "winfo_exists") and b_ref.winfo_exists():
+                b_ref.config(text=f"{'[+]' if new_elide else '[-]'} {lbl}")
+
+        fonts_d = getattr(self, "fonts", {}) or {}
+        btn_font = fonts_d.get("stats") or ("Segoe UI", 9)
+        log_font = fonts_d.get("log") or ("Consolas", 9)
+        btn = tk.Button(
+            hist,
+            text=f"[+] {base_label} ...",
+            bg=THEME.get("button_bg_color", "#1d1d24"),
+            fg=THEME.get("accent_highlight", "#ffaa33"),
+            relief=tk.FLAT,
+            font=btn_font,
+            cursor="hand2",
+            padx=5,
+            pady=1,
+        )
+        btn.config(command=_toggle_tc)
+
+        reg[call_id] = {
+            "tag": tc_tag,
+            "body_tag": tc_body_tag,
+            "btn": btn,
+            "base_label": f"{base_label} ...",
+            "arg_suffix": arg_suffix,
+        }
+
+        cyc_tag = msg.get("nested_cyc_tag") or (self.state.get("current_deep_cook_cyc_tag") if self.state.get("deep_cook") else None)
+        if cyc_tag:
+            nested = self.state.setdefault(f"nested_tags_{cyc_tag}", [])
+            if tc_tag not in nested:
+                nested.append(tc_tag)
+            self.state[f"tool_btn_{tc_tag}"] = (btn, call_id)
+            hist.insert(tk.END, "  ", (cyc_tag, "ai"))
+            hist.window_create(tk.END, window=btn)
+            hist.tag_add(cyc_tag, "end-2c", "end-1c")
+            hist.tag_add("ai", "end-2c", "end-1c")
+            hist.insert(tk.END, "\n", (cyc_tag, "ai"))
+        else:
+            hist.insert(tk.END, "\n", ("ai",))
+            hist.window_create(tk.END, window=btn)
+            hist.insert(tk.END, "\n", ("ai",))
+
+        hist.insert(tk.END, "  Running...\n", (tc_body_tag, tc_tag, "ai"))
+        hist.tag_config(tc_tag, elide=True, foreground="#9ab0c2", font=log_font, lmargin1=18, lmargin2=18)
+        self.state["tool_calls_rendered"] = True
+        hist.mark_set("last_tool_call_end", tk.END + "-1c")
+        hist.mark_gravity("last_tool_call_end", tk.LEFT)
+        hist.config(state='disabled')
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target=tk.END)
+
+    def _handle_tool_call_ui_done(self, msg: Dict[str, Any]):
+        """Populates full args, result, and completion status inside the per-call tool dropdown."""
+        hist = getattr(self, "chat_history", None)
+        reg = self.state.get("tool_call_ui_registry", {})
+        call_id = str(msg.get("call_id") or "")
+        if hist is None or call_id not in reg:
+            return
+
+        info = reg[call_id]
+        tc_tag = info["tag"]
+        tc_body_tag = info["body_tag"]
+        btn = info.get("btn")
+        arg_suffix = info.get("arg_suffix", "")
+
+        call_name = str(msg.get("call_name") or "tool")
+        ok = bool(msg.get("ok", True))
+        cached = bool(msg.get("cached", False))
+        dur_ms = float(msg.get("duration_ms") or 0.0)
+        icon = "↺" if cached else ("✓" if ok else "✗")
+        dur_str = f"{dur_ms / 1000.0:.2f}s" if dur_ms >= 1000.0 else f"{dur_ms:.0f}ms"
+        new_base = f"🔧 {call_name}{arg_suffix} {icon} {dur_str}"
+        info["base_label"] = new_base
+
+        try:
+            is_elided = str(hist.tag_cget(tc_tag, "elide")) in ("1", "True", "true")
+            if btn and hasattr(btn, "winfo_exists") and btn.winfo_exists():
+                btn.config(text=f"{'[+]' if is_elided else '[-]'} {new_base}")
+        except Exception:
+            pass
+
+        args = msg.get("args") or {}
+        try:
+            args_str = json.dumps(args, indent=2, ensure_ascii=False, default=str)
+        except Exception:
+            args_str = str(args)
+        raw_res = str(msg.get("result") or "")
+        if len(raw_res) > 8000:
+            res_str = raw_res[:8000] + f"\n... [truncated {len(raw_res)} total chars]"
+        else:
+            res_str = raw_res
+
+        body_text = f"  Tool: {call_name}\n  Args: {args_str}\n  Result:\n{res_str}\n"
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
+        try:
+            ranges = hist.tag_ranges(tc_body_tag)
+            hist.config(state='normal')
+            if ranges and len(ranges) >= 2:
+                start = hist.index(ranges[0])
+                end = hist.index(ranges[-1])
+                hist.delete(start, end)
+                hist.insert(start, body_text, (tc_body_tag, tc_tag, "ai"))
+                new_end = hist.index(f"{start} + {len(body_text)} chars")
+            else:
+                hist.insert(tk.END, body_text, (tc_body_tag, tc_tag, "ai"))
+                new_end = hist.index(tk.END + "-1c")
+            if "last_tool_call_end" not in hist.mark_names() or hist.compare(new_end, ">", "last_tool_call_end"):
+                hist.mark_set("last_tool_call_end", new_end)
+                hist.mark_gravity("last_tool_call_end", tk.LEFT)
+            hist.config(state='disabled')
+        except Exception:
+            try:
+                hist.config(state='disabled')
+            except Exception:
+                pass
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target=tk.END)
 
     def _handle_deep_cook_ui_batch(self, msg):
         """Finalizes a Deep Cook block by replacing streamed text with cleaned content (zero duplication)."""
@@ -7385,6 +8915,7 @@ class ChatbotApp:
         if not text:
             return
         
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
         if ctype in ["cycle", "draft", "memory"]:
             tag = f"dc_{ctype}_{cnum}_{dnum}"
             body_tag = f"dc_body_{ctype}_{cnum}_{dnum}"
@@ -7411,8 +8942,10 @@ class ChatbotApp:
                 hist.insert(tk.END, formatted_body, tags)
                 body_end = hist.index(tk.END + "-1c")
             hist.config(state='disabled')
-            if self.config.get("media_rendering", 1) > 0 and self.config.get("inline_markdown", True):
+            if self.config.get("media_rendering", 2) > 0 and self.config.get("inline_markdown", True):
                 self._apply_markdown(start, body_end, tags)
+            if lock_scroll:
+                self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target=tk.END)
             return
 
         if ctype == "compilation":
@@ -7427,11 +8960,8 @@ class ChatbotApp:
                 comp_tag = f"comp_block_{id(text[:20])}"
                 hist.config(state='normal')
                 hist.insert(tk.END, f"{text}\n\n", (comp_tag, "ai"))
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        user_scrolled = getattr(self, '_user_scrolled_up', False)
-        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
-        if not scroll_locked and was_at_bottom:
-            hist.see(tk.END)
+                hist.config(state='disabled')
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target=tk.END)
 
     def get_proposed_model_path(self):
         """Returns the proposed model path for the current persona level or staged multimodal state."""
@@ -7457,6 +8987,175 @@ class ChatbotApp:
                 pass
         target_tier = tier_map.get(lvl, "low")
         return self.model_paths.get(target_tier, "")
+
+    def _resolve_active_tier(self) -> Tuple[int, str]:
+        """Returns (active_level, active_tier_key) for the current UI state."""
+        lvl = int(getattr(self, "active_persona_level", 3))
+        if hasattr(self, "depth_slider") and self.depth_slider:
+            try:
+                lvl = int(self.depth_slider.get())
+            except Exception:
+                pass
+        if getattr(self, "state", None) and self.state.get("deep_cook"):
+            return lvl, "deep_cook"
+        tier_map = {1: "fast", 2: "search", 3: "low", 4: "med", 5: "high", 6: "transcendent", 7: "secret"}
+        return lvl, tier_map.get(lvl, "low")
+
+    def _apply_template_to_tier_config(self, template_id: str, tier: str) -> bool:
+        """Applies a saved custom template slot (T1..T32) onto the specified tier's runtime & config maps."""
+        t_data = self.config.get("custom_templates", {}).get(template_id, {})
+        if not isinstance(t_data, dict) or not t_data:
+            return False
+        cfg_map = {
+            "temp": ("temp_config", float),
+            "top_p": ("top_p_config", float),
+            "min_p": ("min_p_config", float),
+            "rep": ("repeat_penalty_config", float),
+            "pres": ("presence_penalty_config", float),
+            "freq": ("frequency_penalty_config", float),
+            "top_k": ("top_k_config", int),
+            "batch": ("n_batch_config", int),
+            "layers": ("gpu_layer_config", int),
+            "ctx": ("context_size_config", int),
+            "stop": ("stop_strings_config", str),
+        }
+        for k, (attr, caster) in cfg_map.items():
+            if k in t_data and hasattr(self, attr):
+                try:
+                    val = caster(t_data[k])
+                    getattr(self, attr)[tier] = val
+                    self.config.setdefault(attr, {})[tier] = val
+                except Exception:
+                    pass
+        if hasattr(self, "save_config"):
+            self.save_config()
+        return True
+
+    def _on_status_label_click(self, event=None):
+        """Opens file picker for active persona level's model, followed by a template selection popup."""
+        lvl, tier = self._resolve_active_tier()
+        init_dir = self.dirs.get("Models", self.script_dir) if hasattr(self, "dirs") else os.getcwd()
+        if not os.path.isdir(init_dir):
+            init_dir = getattr(self, "script_dir", os.getcwd())
+        p = filedialog.askopenfilename(
+            parent=self.root,
+            title=f"Select Model for Level {lvl} ({tier.upper()})",
+            filetypes=[("GGUF Models", "*.gguf"), ("All Files", "*.*")],
+            initialdir=init_dir,
+        )
+        if not p:
+            return
+        self.model_paths[tier] = p
+        self.config.setdefault("model_paths", {})[tier] = p
+        if hasattr(self, "save_config"):
+            self.save_config()
+        self._revert_status_label()
+        self._open_template_followup_popup(tier, lvl, p)
+
+    def _open_template_followup_popup(self, tier: str, level: int, model_path: str):
+        """Displays a follow-up popup to pick a parameter template slot for the newly selected model."""
+        if hasattr(self, "template_followup_popup") and self.template_followup_popup and self.template_followup_popup.winfo_exists():
+            try:
+                self.template_followup_popup.destroy()
+            except Exception:
+                pass
+
+        pop = tk.Toplevel(self.root)
+        self.template_followup_popup = pop
+        pop.title(f"Template for Level {level} ({tier.upper()})")
+        pop.config(bg=THEME["bg_color"], padx=10, pady=8)
+        pop.transient(self.root)
+        pop.attributes("-topmost", True)
+
+        templates = self.config.get("custom_templates", {})
+        options = []
+        id_by_label = {}
+        for tid, tdata in templates.items():
+            if isinstance(tdata, dict) and any(k in tdata for k in ("temp", "top_p", "ctx", "layers", "name")):
+                lbl = f"{tid}: {tdata.get('name', tid)}"
+                options.append(lbl)
+                id_by_label[lbl] = tid
+
+        tk.Label(
+            pop,
+            text=f"Selected: {os.path.basename(model_path)}",
+            bg=THEME["bg_color"],
+            fg=THEME["electric_blue"],
+            font=self.fonts["bold"],
+        ).pack(anchor="w", pady=(0, 4))
+        tk.Label(
+            pop,
+            text=f"Target: Level {level} ({tier.upper()}) — Apply Template?",
+            bg=THEME["bg_color"],
+            fg=THEME["fg_color"],
+            font=self.fonts["ui_small"],
+        ).pack(anchor="w", pady=(0, 6))
+
+        tpl_var = tk.StringVar(value=options[0] if options else "")
+        if options:
+            cb = ttk.Combobox(pop, textvariable=tpl_var, values=options, state="readonly", width=34)
+            cb.pack(fill=tk.X, pady=(0, 6))
+        else:
+            tk.Label(pop, text="No saved templates found.", bg=THEME["bg_color"], fg="#888888", font=self.fonts["ui_small"]).pack(anchor="w", pady=(0, 6))
+
+        load_now_var = tk.BooleanVar(value=bool(self.model is not None))
+        tk.Checkbutton(
+            pop,
+            text="Load / Swap Model Now",
+            variable=load_now_var,
+            bg=THEME["bg_color"],
+            fg=THEME["fg_color"],
+            selectcolor=THEME["widget_bg_color"],
+            font=self.fonts["ui_small"],
+        ).pack(anchor="w", pady=(0, 8))
+
+        def _finish(apply_tpl: bool):
+            if apply_tpl and tpl_var.get() in id_by_label:
+                tid = id_by_label[tpl_var.get()]
+                if self._apply_template_to_tier_config(tid, tier):
+                    self._log_and_display(f"Applied {tid} to {tier.upper()} ({os.path.basename(model_path)})")
+            do_load = bool(load_now_var.get())
+            try:
+                pop.destroy()
+            except Exception:
+                pass
+            if do_load and hasattr(self, "model_swap"):
+                self.model_swap(target_level=level, target_tier=tier)
+
+        btn_row = tk.Frame(pop, bg=THEME["bg_color"])
+        btn_row.pack(fill=tk.X)
+        if options:
+            tk.Button(
+                btn_row,
+                text="Apply Template",
+                command=lambda: _finish(True),
+                bg=THEME["button_active_color"],
+                fg="#00ffcc",
+                relief=tk.FLAT,
+                font=self.fonts["ui_button"],
+                padx=8,
+                pady=3,
+            ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(
+            btn_row,
+            text="Keep Current Params",
+            command=lambda: _finish(False),
+            bg=THEME["button_bg_color"],
+            fg=THEME["fg_color"],
+            relief=tk.FLAT,
+            font=self.fonts["ui_button"],
+            padx=8,
+            pady=3,
+        ).pack(side=tk.RIGHT)
+
+        try:
+            pop.update_idletasks()
+            if hasattr(self, "system_status_label") and self.system_status_label:
+                bx = max(20, self.system_status_label.winfo_rootx() - 120)
+                by = self.system_status_label.winfo_rooty() + self.system_status_label.winfo_height() + 4
+                pop.geometry(f"+{bx}+{by}")
+        except Exception:
+            pass
 
     def _revert_status_label(self):
         if self.state.get("active_subagent"):
@@ -7520,7 +9219,7 @@ class ChatbotApp:
             self.set_ui_state()
 
     def toggle_sizes_popup(self):
-        """Toggles the dual-dropdown overlay popup for Reasoning Strength and Response Length."""
+        """Toggles the configurable Quick Settings overlay popup."""
         if hasattr(self, 'sizes_popup') and self.sizes_popup and self.sizes_popup.winfo_exists():
             if hasattr(self, '_sizes_save_and_close'):
                 self._sizes_save_and_close()
@@ -7543,78 +9242,196 @@ class ChatbotApp:
         content_frame = tk.Frame(border_frame, bg=THEME["bg_color"])
         content_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Left Column: Reasoning Strength (stacked title)
-        left_col = tk.Frame(content_frame, bg=THEME["bg_color"])
-        left_col.pack(side=tk.LEFT, padx=(2, 8), fill=tk.Y)
+        default_items = ["reasoning_strength", "response_length", "kv_cache", "headroom"]
+        enabled_items = self.config.get("quick_settings_items", default_items)
+        if not isinstance(enabled_items, list) or not enabled_items:
+            enabled_items = list(default_items)
 
-        lbl_r1 = tk.Label(left_col, text="Reasoning", font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff"))
-        lbl_r1.pack(anchor="center")
-        lbl_r2 = tk.Label(left_col, text="Strength", font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff"))
-        lbl_r2.pack(anchor="center")
+        save_hooks = []
+        col_count = 0
 
-        reasoning_opts = ["off", "low", "medium", "high", "xhigh"]
-        curr_reason = self.config.get("reasoning_strength", self.config.get("muse_reasoning_strength", "medium")).lower()
-        if curr_reason == "minimal": curr_reason = "low"
-        elif curr_reason == "maximum": curr_reason = "xhigh"
-        elif curr_reason not in reasoning_opts:
-            curr_reason = "medium"
+        def _make_col(title_line1, title_line2):
+            nonlocal col_count
+            if col_count > 0:
+                sep = tk.Frame(content_frame, width=1, bg=THEME["widget_bg_color"])
+                sep.pack(side=tk.LEFT, fill=tk.Y, padx=4)
+            col = tk.Frame(content_frame, bg=THEME["bg_color"])
+            col.pack(side=tk.LEFT, padx=(6 if col_count > 0 else 2, 6), fill=tk.Y)
+            tk.Label(col, text=title_line1, font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff")).pack(anchor="center")
+            tk.Label(col, text=title_line2, font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff")).pack(anchor="center")
+            col_count += 1
+            return col
 
-        reason_var = tk.StringVar(value=curr_reason)
+        for item_id in enabled_items:
+            if item_id == "reasoning_strength":
+                col = _make_col("Reasoning", "Strength")
+                reasoning_opts = ["off", "low", "medium", "high", "xhigh"]
+                curr_reason = self.config.get("reasoning_strength", self.config.get("muse_reasoning_strength", "medium")).lower()
+                if curr_reason == "minimal": curr_reason = "low"
+                elif curr_reason == "maximum": curr_reason = "xhigh"
+                elif curr_reason not in reasoning_opts: curr_reason = "medium"
+                reason_var = tk.StringVar(value=curr_reason)
 
-        def _on_reason_change(val):
-            if val not in reasoning_opts: return
-            self.config["reasoning_strength"] = val
-            self.config["muse_reasoning_strength"] = val
-            self.save_config()
-            self._log_and_display(f"Reasoning Strength: {val.upper()}")
+                def _on_reason_change(val, opts=reasoning_opts):
+                    if val not in opts: return
+                    self.config["reasoning_strength"] = val
+                    self.config["muse_reasoning_strength"] = val
+                    self.save_config()
+                    self._log_and_display(f"Reasoning Strength: {val.upper()}")
 
-        def _on_reason_trace(*args):
-            v = reason_var.get()
-            if v and v in reasoning_opts:
-                _on_reason_change(v)
+                reason_menu = ttk.Combobox(col, textvariable=reason_var, values=reasoning_opts, state="readonly", width=9)
+                reason_menu.pack(anchor="center", pady=(4, 0))
+                reason_menu.bind("<<ComboboxSelected>>", lambda e, m=reason_menu, v=reason_var, fn=_on_reason_change: fn(m.get() or v.get()))
 
-        reason_var.trace_add("write", _on_reason_trace)
+                def _save_reason(m=reason_menu, v=reason_var, opts=reasoning_opts):
+                    vr = m.get() or v.get()
+                    if vr in opts and (self.config.get("reasoning_strength") != vr or self.config.get("muse_reasoning_strength") != vr):
+                        self.config["reasoning_strength"] = vr
+                        self.config["muse_reasoning_strength"] = vr
+                        return True
+                    return False
+                save_hooks.append(_save_reason)
 
-        reason_menu = ttk.Combobox(left_col, textvariable=reason_var, values=reasoning_opts, state="readonly", width=9)
-        reason_menu.pack(anchor="center", pady=(4, 0))
-        reason_menu.bind("<<ComboboxSelected>>", lambda e: _on_reason_change(reason_menu.get() or reason_var.get()))
+            elif item_id == "response_length":
+                col = _make_col("Response", "Length")
+                length_opts = ["natural", "mini", "short", "medium", "long", "matched"]
+                curr_len = self.config.get("response_length", "natural").lower()
+                if curr_len not in length_opts: curr_len = "natural"
+                len_var = tk.StringVar(value=curr_len)
 
-        # Separator Line
-        sep = tk.Frame(content_frame, width=1, bg=THEME["widget_bg_color"])
-        sep.pack(side=tk.LEFT, fill=tk.Y, padx=4)
+                def _on_len_change(val, opts=length_opts):
+                    if val not in opts: return
+                    self.config["response_length"] = val
+                    self.save_config()
+                    self._log_and_display(f"Response Target Length: {val.upper()}")
 
-        # Right Column: Response Length (stacked title)
-        right_col = tk.Frame(content_frame, bg=THEME["bg_color"])
-        right_col.pack(side=tk.LEFT, padx=(8, 2), fill=tk.Y)
+                len_menu = ttk.Combobox(col, textvariable=len_var, values=length_opts, state="readonly", width=9)
+                len_menu.pack(anchor="center", pady=(4, 0))
+                len_menu.bind("<<ComboboxSelected>>", lambda e, m=len_menu, v=len_var, fn=_on_len_change: fn(m.get() or v.get()))
 
-        lbl_l1 = tk.Label(right_col, text="Response", font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff"))
-        lbl_l1.pack(anchor="center")
-        lbl_l2 = tk.Label(right_col, text="Length", font=self.fonts["ui_small"], bg=THEME["bg_color"], fg=THEME.get("electric_blue", "#00d4ff"))
-        lbl_l2.pack(anchor="center")
+                def _save_len(m=len_menu, v=len_var, opts=length_opts):
+                    vl = m.get() or v.get()
+                    if vl in opts and self.config.get("response_length") != vl:
+                        self.config["response_length"] = vl
+                        return True
+                    return False
+                save_hooks.append(_save_len)
 
-        length_opts = ["natural", "mini", "short", "medium", "long", "matched"]
-        curr_len = self.config.get("response_length", "natural").lower()
-        if curr_len not in length_opts:
-            curr_len = "natural"
+            elif item_id == "kv_cache":
+                col = _make_col("KV Cache", "Format")
+                kv_opts = ["q8_0", "q5_1", "q4_0", "fp16"]
+                if self.config.get("show_extended_kv_types", False):
+                    kv_opts = kv_opts + ["q6_0", "q5_0", "iq4_nl", "turbo3_tcq", "turbo2_tcq"]
+                curr_kv = str(self.config.get("k_cache_type", "q8_0")).lower()
+                if curr_kv not in kv_opts:
+                    kv_opts.append(curr_kv)
+                kv_var = tk.StringVar(value=curr_kv)
 
-        len_var = tk.StringVar(value=curr_len)
+                def _on_kv_change(val, opts=kv_opts):
+                    if val not in opts: return
+                    self.config["k_cache_type"] = val
+                    self.config["v_cache_type"] = val
+                    self.save_config()
+                    self._log_and_display(f"KV Cache Format: {val} (applies on next model load/swap)")
 
-        def _on_len_change(val):
-            if val not in length_opts: return
-            self.config["response_length"] = val
-            self.save_config()
-            self._log_and_display(f"Response Target Length: {val.upper()}")
+                kv_menu = ttk.Combobox(col, textvariable=kv_var, values=kv_opts, state="readonly", width=10)
+                kv_menu.pack(anchor="center", pady=(4, 0))
+                kv_menu.bind("<<ComboboxSelected>>", lambda e, m=kv_menu, v=kv_var, fn=_on_kv_change: fn(m.get() or v.get()))
 
-        def _on_len_trace(*args):
-            v = len_var.get()
-            if v and v in length_opts:
-                _on_len_change(v)
+                def _save_kv(m=kv_menu, v=kv_var, opts=kv_opts):
+                    vk = m.get() or v.get()
+                    if vk in opts and (self.config.get("k_cache_type") != vk or self.config.get("v_cache_type") != vk):
+                        self.config["k_cache_type"] = vk
+                        self.config["v_cache_type"] = vk
+                        return True
+                    return False
+                save_hooks.append(_save_kv)
 
-        len_var.trace_add("write", _on_len_trace)
+            elif item_id == "headroom":
+                col = _make_col("Response", "Headroom")
+                hr_map = [
+                    ("U-Fast (16)", 16),
+                    ("Fast (8)", 8),
+                    ("Balanced (4)", 4),
+                    ("Deep (2)", 2),
+                ]
+                lbl_to_val = {lbl: val for lbl, val in hr_map}
+                val_to_lbl = {val: lbl for lbl, val in hr_map}
+                curr_ratio = int(self.config.get("max_token_ratio", 4) or 4)
+                curr_hr_lbl = val_to_lbl.get(curr_ratio, "Balanced (4)")
+                hr_var = tk.StringVar(value=curr_hr_lbl)
 
-        len_menu = ttk.Combobox(right_col, textvariable=len_var, values=length_opts, state="readonly", width=9)
-        len_menu.pack(anchor="center", pady=(4, 0))
-        len_menu.bind("<<ComboboxSelected>>", lambda e: _on_len_change(len_menu.get() or len_var.get()))
+                def _on_hr_change(lbl, mapping=lbl_to_val):
+                    if lbl not in mapping: return
+                    self.config["max_token_ratio"] = mapping[lbl]
+                    self.save_config()
+                    self._log_and_display(f"Response Headroom: {lbl}")
+
+                hr_menu = ttk.Combobox(col, textvariable=hr_var, values=[lbl for lbl, _ in hr_map], state="readonly", width=11)
+                hr_menu.pack(anchor="center", pady=(4, 0))
+                hr_menu.bind("<<ComboboxSelected>>", lambda e, m=hr_menu, v=hr_var, fn=_on_hr_change: fn(m.get() or v.get()))
+
+                def _save_hr(m=hr_menu, v=hr_var, mapping=lbl_to_val):
+                    lbl = m.get() or v.get()
+                    if lbl in mapping and self.config.get("max_token_ratio") != mapping[lbl]:
+                        self.config["max_token_ratio"] = mapping[lbl]
+                        return True
+                    return False
+                save_hooks.append(_save_hr)
+
+            elif item_id == "history_mode":
+                col = _make_col("History", "Mode")
+                hist_opts = ["TurboVec", "Keyword", "Off"]
+                curr_hm = self.config.get("history_mode", "Keyword")
+                if curr_hm not in hist_opts: curr_hm = "Keyword"
+                hm_var = tk.StringVar(value=curr_hm)
+
+                def _on_hm_change(val, opts=hist_opts):
+                    if val not in opts: return
+                    self.config["history_mode"] = val
+                    self.config["turbovec_mode"] = "on" if val.lower() == "turbovec" else ("off" if val.lower() == "off" else "fallback")
+                    self.save_config()
+                    self._log_and_display(f"History Mode: {val}")
+
+                hm_menu = ttk.Combobox(col, textvariable=hm_var, values=hist_opts, state="readonly", width=9)
+                hm_menu.pack(anchor="center", pady=(4, 0))
+                hm_menu.bind("<<ComboboxSelected>>", lambda e, m=hm_menu, v=hm_var, fn=_on_hm_change: fn(m.get() or v.get()))
+
+                def _save_hm(m=hm_menu, v=hm_var, opts=hist_opts):
+                    vh = m.get() or v.get()
+                    if vh in opts and self.config.get("history_mode") != vh:
+                        self.config["history_mode"] = vh
+                        self.config["turbovec_mode"] = "on" if vh.lower() == "turbovec" else ("off" if vh.lower() == "off" else "fallback")
+                        return True
+                    return False
+                save_hooks.append(_save_hm)
+
+            elif item_id == "media_gen_mode":
+                col = _make_col("Media", "Gen Mode")
+                mg_opts = ["off", "image", "gif", "video"]
+                curr_mg = str(self.config.get("media_gen_mode", "off")).lower()
+                if curr_mg not in mg_opts: curr_mg = "off"
+                mg_var = tk.StringVar(value=curr_mg)
+
+                def _on_mg_change(val, opts=mg_opts):
+                    if val not in opts: return
+                    self.config["media_gen_mode"] = val
+                    self.save_config()
+                    if hasattr(self, "media_gen_button") and self.media_gen_button:
+                        self.media_gen_button.config(text=self._get_media_gen_label(), fg=self._get_media_gen_color())
+                    self._log_and_display(f"Media Gen Mode: {val.upper()}")
+
+                mg_menu = ttk.Combobox(col, textvariable=mg_var, values=mg_opts, state="readonly", width=8)
+                mg_menu.pack(anchor="center", pady=(4, 0))
+                mg_menu.bind("<<ComboboxSelected>>", lambda e, m=mg_menu, v=mg_var, fn=_on_mg_change: fn(m.get() or v.get()))
+
+                def _save_mg(m=mg_menu, v=mg_var, opts=mg_opts):
+                    vm = m.get() or v.get()
+                    if vm in opts and self.config.get("media_gen_mode") != vm:
+                        self.config["media_gen_mode"] = vm
+                        return True
+                    return False
+                save_hooks.append(_save_mg)
 
         popup.update_idletasks()
         try:
@@ -7628,17 +9445,9 @@ class ChatbotApp:
             if not (hasattr(self, 'sizes_popup') and self.sizes_popup and self.sizes_popup.winfo_exists()):
                 return
             try:
-                vr = reason_menu.get() or reason_var.get()
-                vl = len_menu.get() or len_var.get()
                 changed = False
-                if vr and vr in reasoning_opts:
-                    if self.config.get("reasoning_strength") != vr or self.config.get("muse_reasoning_strength") != vr:
-                        self.config["reasoning_strength"] = vr
-                        self.config["muse_reasoning_strength"] = vr
-                        changed = True
-                if vl and vl in length_opts:
-                    if self.config.get("response_length") != vl:
-                        self.config["response_length"] = vl
+                for hook in save_hooks:
+                    if hook():
                         changed = True
                 if changed:
                     self.save_config()
@@ -7721,14 +9530,16 @@ class ChatbotApp:
             # MISSION: Only simmer when idle to prevent GPU/thread collision
             if not self.state["running"] and self.model:
                 try:
-                    recent_context = ""
+                    peek_parts = []
                     # 1. Semantic Node Extraction (Workspace Awareness)
                     nodes = []
                     for root, dirs, files in os.walk(self.script_dir):
-                        # Filter out noise
-                        if any(x in root for x in [".git", "node_modules", "__pycache__", ".gemini", "tmp"]): 
+                        # Filter out noise and protected user/secret paths
+                        if any(x in root for x in [".git", "node_modules", "__pycache__", ".gemini", "tmp", ".venv", "Users"]):
                             continue
                         for f in files:
+                            if f in ("vault_state.json", "rlhf_logs.json", ".env"):
+                                continue
                             if f.endswith(('.py', '.json', '.md', '.agent.md')):
                                 rel_p = os.path.relpath(os.path.join(root, f), self.script_dir)
                                 nodes.append(rel_p)
@@ -7737,20 +9548,27 @@ class ChatbotApp:
                                     try:
                                         with open(os.path.join(root, f), 'r', encoding='utf-8') as sf:
                                             peek = sf.read(600)
-                                            recent_context += f"\n[PEEK {f}]: {peek}\n"
-                                    except: pass
+                                            peek_parts.append(f"[PEEK {f}]: {peek}")
+                                    except Exception:
+                                        pass
                         if len(nodes) > 60: break # Performance cap for shallow scan
                     
                     # 2. Context Integration (History DNA)
+                    hist_ctx = ""
                     path = self.get_history_path()
-                    recent_context = ""
                     if path and os.path.exists(path):
                         try:
-                            with open(path, 'rb') as f:
-                                history = json.loads(zlib.decompress(f.read()).decode('utf-8'))
-                            # Consolidation: Analyzes broader history (20 messages) for narrative backbone
-                            recent_context = " ".join([m['content'] for m in history[-20:]])
-                        except: pass
+                            if hasattr(self, "vault_manager") and self.vault_manager:
+                                history = self.vault_manager.read_history_messages(path)
+                            else:
+                                with open(path, 'rb') as f:
+                                    history = json.loads(safe_zlib_decompress(f.read()).decode('utf-8'))
+                            if isinstance(history, list):
+                                # Consolidation: Analyzes broader history (20 messages) for narrative backbone
+                                hist_ctx = " ".join(str(m.get('content', '')) for m in history[-20:] if isinstance(m, dict))
+                        except Exception:
+                            pass
+                    recent_context = "\n".join(peek_parts + ([hist_ctx] if hist_ctx else []))
 
                     # 3. Simmer Phase: Active Background Reflection
                     now = time.time()
@@ -7779,13 +9597,28 @@ class ChatbotApp:
                         summary = self._run_blocking_inference(simmer_prompt, params)
                         
                         if summary and not self.state["running"]: # Final check before commit
-                            summary_clean = summary.strip().replace("\n", " ")
-                            self.state["dmn_backbone"]["last_simmer"] = summary_clean
-                            self.state["dmn_backbone"]["timestamp"] = time.time()
-                            self.state["dmn_backbone"]["node_count"] = len(nodes)
-                            self._save_dmn_backbone()
-                            self.process_queue.put({"status": "log_update", "content": f"[DMN] Backbone Optimized: {summary_clean}\n"})
-                            last_simmer = now
+                            sanitized = self._sanitize_synthesis_output(summary) if hasattr(self, "_sanitize_synthesis_output") else summary
+                            summary_clean = str(sanitized or "").strip().replace("\n", " ")
+                            if summary_clean:
+                                self.state["dmn_backbone"]["last_simmer"] = summary_clean
+                                self.state["dmn_backbone"]["timestamp"] = time.time()
+                                self.state["dmn_backbone"]["node_count"] = len(nodes)
+                                self._save_dmn_backbone()
+                                if getattr(self, "semantic_vault", None) is not None:
+                                    try:
+                                        self.semantic_vault.store_insight(summary_clean, concept_family="dmn_simmer")
+                                        self.semantic_vault.simmer()
+                                    except Exception:
+                                        pass
+                                if getattr(self, "active_persona_level", 3) == 7 and getattr(self, "affect_engine", None) is not None:
+                                    try:
+                                        self.affect_engine.update_state(dt=1.0, interaction_impulse={"valence": 0.05, "arousal": -0.05})
+                                        if hasattr(self, "_save_cecilia_affect_state"):
+                                            self._save_cecilia_affect_state()
+                                    except Exception:
+                                        pass
+                                self.process_queue.put({"status": "log_update", "content": f"[DMN] Backbone Optimized: {summary_clean}\n"})
+                                last_simmer = now
                         
                 except Exception as e:
                     print(f"[DMN ERROR] Cycle failure: {e}")
@@ -8105,7 +9938,9 @@ class ChatbotApp:
                             self.process_queue.put({"status": "thinking_status", "content": f"Analyzed: {filename}"})
                         
                     except Exception as e:
-                        print(f"[APEX] Multimodal Error on {filename}: {e}\n{traceback.format_exc()}")
+                        err_tb = f"[APEX] Multimodal Error on {filename}: {e}\n{traceback.format_exc()}"
+                        print(err_tb, file=sys.stderr)
+                        self.process_queue.put({"status": "error_log_update", "content": err_tb})
                         self.process_queue.put({"status": "log_update", "content": f"\n[ERROR] Failed to process {filename}: {e}\n"})
                     finally:
                         VisionHandler.hygiene_gate(self.model)
@@ -8168,25 +10003,6 @@ class ChatbotApp:
         except Exception as e:
             self.process_queue.put({"status": "error", "content": f"Batch Processing Failed: {str(e)}"})
 
-    def reinitialize_model(self, new_layer_count=None):
-        """EXPLICIT VRAM evacuation and model reload helper."""
-        print(f"[APEX] Evacuating VRAM for re-initialization...")
-        
-        # 1. Kill the reference
-        if self.model:
-            del self.model
-            self.model = None 
-        
-        # 2. Force Garbage Collection
-        import gc
-        gc.collect()
-        if TORCH_AVAILABLE and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        # 3. Trigger reload
-        print(f"[APEX] Reloading model with new parameters...")
-        self.model_swap(target_tier=self.current_model_tier)
-
     def _handle_load_success(self, msg):
         self.state["running"] = False
         
@@ -8227,10 +10043,11 @@ class ChatbotApp:
             if t["type"] in ["chat", "deep_cook", "vision_deep", "vision_standard"]:
                 self._render_messages_to_active_chat(self.messages)
                 if "message" in t:
-                    self.user_input.delete("1.0", tk.END)
                     msg_text = t["message"]
                     if isinstance(msg_text, (tuple, list)) and len(msg_text) > 0:
                         msg_text = msg_text[0]
+                    if self.user_input and self.user_input.get("1.0", tk.END).strip() == str(msg_text).strip():
+                        self.user_input.delete("1.0", tk.END)
                     self.last_user_message = msg_text
                     self._display_user_message(msg_text)
             
@@ -8291,9 +10108,9 @@ class ChatbotApp:
         
         # 1. Split raw response at the end of the thinking tag and discard thought prefix
         closers = [
-            r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<\|im_end\|>', r'<channel\|>', r'<\/channel\|>',
+            r'<\/think>', r'<\/thought>', r'<\/\|think\|>', r'<channel\|>', r'<\/channel\|>',
             r'<\|channel>text', r'<\|channel>assistant', r'<\|channel\|>final', r'<\|channel\|>text', r'<\|channel\|>assistant', r'\[\/DRAFT\]',
-            r'<\|eom\|>', r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
+            r'<\|start\|>assistant\s+to=user(?:<\|message\|>)?', r'to=user<\|message\|>',
             r'<\|turn>model', r'<turn\|>'
         ]
         best_split = -1
@@ -8340,6 +10157,7 @@ class ChatbotApp:
 
         # 4. Strip model-generated self-prefix (e.g. "Cecilia:", "**Cecilia:**", "Serenity:") at start of output
         cleaned = re.sub(r'^\s*(?:(?:\*\*|\*|__)(?:Cecilia|Serenity|Assistant|AI):(?:\*\*|\*|__)|(?:\*\*|\*|__)?(?:Cecilia|Serenity|Assistant|AI)(?:\*\*|\*|__)?:\s*)+', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'(?<![a-zA-Z0-9_:\\/])(?:/n)+(?![a-z][a-z0-9_]*)', lambda m: '\n' * (len(m.group(0)) // 2), cleaned)
 
         return cleaned.strip()
 
@@ -8357,6 +10175,8 @@ class ChatbotApp:
 
     def _perform_final_synthesis(self, user_msg, reasoning_history, skip_critique=True, critique_txt="", prompt_override=None):
         """Shared logic to distill thoughts into a final response."""
+        if getattr(self, "stop_process", None) and self.stop_process.is_set() is True:
+            return ""
         try:
             try: self.set_avatar_state("ecstatic")
             except: pass
@@ -8367,6 +10187,11 @@ class ChatbotApp:
             history_subset = reasoning_history[-10000:] if len(reasoning_history) > 10000 else reasoning_history
             synth_params = dict(params)
             synth_params["max_tokens"] = 4096
+            synth_params["chat_template_kwargs"] = {
+                "enable_thinking": False,
+                "reasoning_effort": "low",
+                "reasoning_strength": "off"
+            }
 
             instr_text = prompt_override if prompt_override else "Convert the reasoning above into a direct final response. Speak directly to the user now. Output ONLY the final response."
             final_prompt = (
@@ -8376,31 +10201,19 @@ class ChatbotApp:
                 f"{critique_part}{instr_text}"
             )
 
-            if is_gemma:
-                self.process_queue.put({"status": "thinking_status", "content": "Refining Response..."})
-                persona_instr = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
-                if self.model_path and "muse" in self.model_path.lower() and "glimmer" in self.model_path.lower():
-                    r_str = self.config.get("muse_reasoning_strength", "xhigh")
-                    if r_str != "off": persona_instr += f"\nReasoning strength: {r_str}"
-                synth_sys = (
-                    f"{persona_instr}\n\n"
-                    "[TASK]: Convert the provided reasoning history into a direct final response. "
-                    "Speak directly to the user now. Do not use internal monologue tags or your thought process. "
-                    "Output ONLY the final response text."
-                )
-                prompt_str = (
-                    f"<|turn>system\n{synth_sys}<turn|>\n"
-                    f"<|turn>user\n{final_prompt}<turn|>\n"
-                    f"<|turn>model\n"
-                )
-                raw_response = self._run_blocking_inference(prompt_str, synth_params)
-            else:
-                self.process_queue.put({"status": "thinking_status", "content": "Refining Response..."})
-                msgs = [
-                    {"role": "system", "content": "You are Serenity. Deliver the final response based on the reasoning below."},
-                    {"role": "user", "content": final_prompt}
-                ]
-                raw_response = self._run_blocking_inference(msgs, params)
+            self.process_queue.put({"status": "thinking_status", "content": "Refining Response..."})
+            persona_instr = PERSONA_PROMPTS.get(self.active_persona_level, "You are Serenity.")
+            synth_sys = (
+                f"{persona_instr}\n\n"
+                "[TASK]: Convert the provided reasoning history into a direct final response. "
+                "Speak directly to the user now. Do not use internal monologue tags or your thought process. "
+                "Output ONLY the final response text."
+            )
+            msgs = [
+                {"role": "system", "content": synth_sys if is_gemma else "You are Serenity. Deliver the final response based on the reasoning below."},
+                {"role": "user", "content": final_prompt}
+            ]
+            raw_response = self._run_blocking_inference(msgs, synth_params)
 
             full_compiled_text = self._sanitize_synthesis_output(raw_response)
             if self._looks_like_thought_only(full_compiled_text):
@@ -8411,23 +10224,15 @@ class ChatbotApp:
                     "Based on the reasoning above, provide a helpful, direct final response to the user. "
                     "Output ONLY the final response text. No tags, no thinking, no explanations of your process."
                 )
-                if is_gemma:
-                    strike_sys = (
-                        f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n"
-                        "[DIRECT STRIKE MODE]: Output the final response only."
-                    )
-                    prompt_strike = (
-                        f"<|turn>system\n{strike_sys}<turn|>\n"
-                        f"<|turn>user\n{strike_prompt}<turn|>\n"
-                        f"<|turn>model\n"
-                    )
-                    strike_raw = self._run_blocking_inference(prompt_strike, synth_params)
-                else:
-                    msgs_strike = [
-                        {"role": "system", "content": "You are Serenity."},
-                        {"role": "user", "content": strike_prompt}
-                    ]
-                    strike_raw = self._run_blocking_inference(msgs_strike, params)
+                strike_sys = (
+                    f"{PERSONA_PROMPTS.get(self.active_persona_level, 'You are Serenity.')}\n"
+                    "[DIRECT STRIKE MODE]: Output the final response only."
+                ) if is_gemma else "You are Serenity."
+                msgs_strike = [
+                    {"role": "system", "content": strike_sys},
+                    {"role": "user", "content": strike_prompt}
+                ]
+                strike_raw = self._run_blocking_inference(msgs_strike, synth_params)
                 strike_text = self._sanitize_synthesis_output(strike_raw)
                 if len(strike_text) > len(full_compiled_text):
                     full_compiled_text = strike_text
@@ -8445,6 +10250,8 @@ class ChatbotApp:
 
     def _perform_level7_synthesis(self, user_msg, reasoning_history, critique_txt=""):
         """Persona-specific distillation for Cecilia (Level 7)."""
+        if getattr(self, "stop_process", None) and self.stop_process.is_set() is True:
+            return ""
         try:
             from serenity_resources import LEVEL7_SYNTHESIS_SYSTEM_PROMPT
             self.process_queue.put({"status": "thinking_status", "content": "Cecilia is delivering her truth..."})
@@ -8476,20 +10283,17 @@ class ChatbotApp:
 
             synth_params = dict(params)
             synth_params["max_tokens"] = 4096
+            synth_params["chat_template_kwargs"] = {
+                "enable_thinking": False,
+                "reasoning_effort": "low",
+                "reasoning_strength": "off"
+            }
 
-            if is_gemma:
-                prompt_str = (
-                    f"<|turn>system\n{LEVEL7_SYNTHESIS_SYSTEM_PROMPT}<turn|>\n"
-                    f"<|turn>user\n{final_prompt}<turn|>\n"
-                    f"<|turn>model\n"
-                )
-                raw_response = self._run_blocking_inference(prompt_str, synth_params)
-            else:
-                msgs = [
-                    {"role": "system", "content": LEVEL7_SYNTHESIS_SYSTEM_PROMPT},
-                    {"role": "user", "content": final_prompt}
-                ]
-                raw_response = self._run_blocking_inference(msgs, params)
+            msgs = [
+                {"role": "system", "content": LEVEL7_SYNTHESIS_SYSTEM_PROMPT},
+                {"role": "user", "content": final_prompt}
+            ]
+            raw_response = self._run_blocking_inference(msgs, synth_params)
 
             full_compiled_text = self._sanitize_synthesis_output(raw_response)
             if self._looks_like_thought_only(full_compiled_text):
@@ -8500,19 +10304,11 @@ class ChatbotApp:
                     "You are Cecilia. Provide the final answer directly. Do not use any thought tags or analysis. "
                     "Only speak the final response."
                 )
-                if is_gemma:
-                    retry_str = (
-                        f"<|turn>system\n{LEVEL7_SYNTHESIS_SYSTEM_PROMPT}<turn|>\n"
-                        f"<|turn>user\n{retry_prompt}<turn|>\n"
-                        f"<|turn>model\n"
-                    )
-                    retry_raw = self._run_blocking_inference(retry_str, synth_params)
-                else:
-                    retry_msgs = [
-                        {"role": "system", "content": LEVEL7_SYNTHESIS_SYSTEM_PROMPT},
-                        {"role": "user", "content": retry_prompt}
-                    ]
-                    retry_raw = self._run_blocking_inference(retry_msgs, params)
+                retry_msgs = [
+                    {"role": "system", "content": LEVEL7_SYNTHESIS_SYSTEM_PROMPT},
+                    {"role": "user", "content": retry_prompt}
+                ]
+                retry_raw = self._run_blocking_inference(retry_msgs, synth_params)
                 full_compiled_text = self._sanitize_synthesis_output(retry_raw)
                 self.process_queue.put({"status": "log_update", "content": "[LEVEL6] Retry complete.\n"})
 
@@ -8525,8 +10321,9 @@ class ChatbotApp:
 
     _perform_level6_synthesis = _perform_level7_synthesis
 
-    def _finalize_message(self, user_msg, think_log, final_answer, error=False):
-        print(f"[SYSTEM] Finalizing message delivery (Error: {error}).")
+    def _finalize_message(self, user_msg, think_log, final_answer, error=False, halted=False):
+        is_halted = bool(halted) or bool(self.state.get("was_halted", False)) or bool(getattr(self, "stop_process", None) and self.stop_process.is_set() is True)
+        print(f"[SYSTEM] Finalizing message delivery (Error: {error}, Halted: {is_halted}).")
         if not error and final_answer and isinstance(final_answer, str):
             final_answer = self._sanitize_synthesis_output(final_answer)
         self.state["running"] = False
@@ -8538,6 +10335,13 @@ class ChatbotApp:
 
         hist = self.chat_history
         start_idx = self.state.get("response_start_idx")
+        try:
+            if "response_start" in hist.mark_names():
+                start_idx = hist.index("response_start")
+            elif "user_prompt_end" in hist.mark_names():
+                start_idx = hist.index("user_prompt_end")
+        except Exception:
+            pass
         
         if error:
             self._append_to_chat(f"\n\n[System Error]: {final_answer}\n\n", "system")
@@ -8569,10 +10373,12 @@ class ChatbotApp:
                         self.state["current_dropdown_frame"] = None
                 except: pass
 
-        render_mode = self.config.get("media_rendering", 1)
+        render_mode = self.config.get("media_rendering", 2)
         render_start = start_idx if start_idx else "1.0"
+        lock_scroll, saved_y0, saved_top = self._capture_scroll_anchor(hist)
 
         # 4 & 5. Atomic Reset & UI Rendering
+        has_tool_mark = bool(self.state.get("tool_calls_rendered")) and ("last_tool_call_end" in hist.mark_names())
         if not self.state.get("deep_cook"):
             hist.config(state='normal')
             if think_log and thinking_enabled:
@@ -8587,25 +10393,45 @@ class ChatbotApp:
                     if render_mode > 0:
                         self._apply_markdown(ranges[0], ranges[-1], (think_tag, "md_thought"), is_thought=True)
                     ai_text_start = ranges[-1]
+                    if has_tool_mark and hist.compare("last_tool_call_end", ">", ai_text_start):
+                        ai_text_start = hist.index("last_tool_call_end")
                     curr_text = hist.get(ai_text_start, tk.END).strip()
-                    has_leak = any(t in curr_text for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
-                    if has_leak:
-                        try: hist.delete(ai_text_start, tk.END)
-                        except: pass
-                        if final_answer:
-                            self._append_to_chat(final_answer, "ai")
-                    elif final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
-                        self._append_to_chat(final_answer, "ai")
-                    render_start = ai_text_start
-                else:
-                    # Non-streamed or fallback: reconstruct cleanly at start_idx with thoughts above response
-                    if start_idx:
-                        try: hist.delete(start_idx, tk.END)
-                        except: pass
+                    if is_halted:
+                        render_start = ai_text_start
                     else:
-                        start_idx = hist.index(tk.END + "-1c")
-
-                    hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
+                        has_leak = any(t in curr_text for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
+                        if has_leak:
+                            try: hist.delete(ai_text_start, tk.END)
+                            except: pass
+                            if final_answer:
+                                self._append_to_chat(final_answer, "ai")
+                        elif final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                            self._append_to_chat(final_answer, "ai")
+                        render_start = ai_text_start
+                else:
+                    # Non-streamed or fallback: reconstruct cleanly without wiping tool dropdowns
+                    if is_halted:
+                        render_start = hist.index("last_tool_call_end") if has_tool_mark else (start_idx if start_idx else "1.0")
+                    else:
+                        if has_tool_mark:
+                            del_start = hist.index("last_tool_call_end")
+                            try: hist.delete(del_start, tk.END)
+                            except: pass
+                        else:
+                            if start_idx:
+                                try:
+                                    if "user_prompt_end" in hist.mark_names() and hist.compare(start_idx, "<", "user_prompt_end"):
+                                        start_idx = hist.index("user_prompt_end")
+                                except Exception:
+                                    pass
+                                curr_rendered = hist.get(start_idx, tk.END).strip()
+                                has_leak = any(t in curr_rendered for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
+                                if not self.state.get("response_started") or has_leak:
+                                    try: hist.delete(start_idx, tk.END)
+                                    except: pass
+                            else:
+                                start_idx = hist.index(tk.END + "-1c")
+                            hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
                     
                     dd_frame = tk.Frame(hist, bg=THEME.get("bg_color", "#181410"))
                     self.state["current_dropdown_frame"] = dd_frame
@@ -8663,20 +10489,28 @@ class ChatbotApp:
                     self._display_ai_message(final_answer, is_streaming=False)
                     render_start = start_idx if start_idx else "1.0"
                 else:
-                    curr_text = hist.get(start_idx, tk.END).strip()
-                    has_leak = any(t in curr_text for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
-                    if has_leak:
-                        try: hist.delete(start_idx, tk.END)
-                        except: pass
-                        hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
-                        render_start = hist.index(tk.END + "-1c")
-                        if final_answer:
-                            self._append_to_chat(final_answer, "ai")
-                    elif final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
-                        render_start = hist.index(tk.END + "-1c")
-                        self._append_to_chat(final_answer, "ai")
+                    tail_start = hist.index("last_tool_call_end") if has_tool_mark else start_idx
+                    curr_text = hist.get(tail_start, tk.END).strip()
+                    if is_halted:
+                        render_start = tail_start
                     else:
-                        render_start = start_idx
+                        has_leak = any(t in curr_text for t in ["<think>", "<|channel>", "to=self", "<channel|>", "</think>", "<thought>"])
+                        if has_leak:
+                            try:
+                                if "user_prompt_end" in hist.mark_names() and hist.compare(tail_start, "<", "user_prompt_end"):
+                                    tail_start = hist.index("user_prompt_end")
+                                hist.delete(tail_start, tk.END)
+                            except: pass
+                            if not has_tool_mark:
+                                hist.insert(tk.END, f"\n\n{self._get_persona_label()}: ", "ai_lead")
+                            render_start = hist.index(tk.END + "-1c")
+                            if final_answer:
+                                self._append_to_chat(final_answer, "ai")
+                        elif final_answer and not (curr_text.endswith(final_answer.strip()[-40:]) if len(final_answer) >= 40 else final_answer.strip() in curr_text):
+                            render_start = hist.index(tk.END + "-1c")
+                            self._append_to_chat(final_answer, "ai")
+                        else:
+                            render_start = tail_start
             hist.config(state='disabled')
         else:
             # Deep Cook handling: isolate final answer strictly after all cycle/step/memory dropdown buttons
@@ -8727,17 +10561,87 @@ class ChatbotApp:
                 lbl_fb = tk.Label(rlhf_frame, text="Feedback: ", bg=THEME["bg_color"], fg="#666666", font=self.fonts["stats"])
                 lbl_fb.pack(side=tk.LEFT)
                 
-                def _submit_fb(rating):
-                    btn_up.config(state="disabled", fg="#555555" if rating < 0 else "#00ff88")
-                    btn_down.config(state="disabled", fg="#ff4444" if rating < 0 else "#555555")
-                    self._save_rlhf_log(user_msg, final_answer, rating)
+                def _submit_up():
+                    btn_up.config(state="disabled", fg="#00ff88")
+                    btn_down.config(state="disabled", fg="#555555")
+                    self._save_rlhf_log(user_msg, final_answer, 1, comment="")
+
+                def _open_downvote_box():
+                    btn_up.config(state="disabled", fg="#555555")
+                    btn_down.config(state="disabled", fg="#ff4444")
+                    if getattr(rlhf_frame, "_downvote_opened", False):
+                        return
+                    rlhf_frame._downvote_opened = True
+                    comment_holder = tk.Frame(rlhf_frame, bg=THEME["bg_color"])
+                    comment_holder.pack(side=tk.LEFT, padx=(6, 0))
+                    comment_entry = tk.Entry(
+                        comment_holder,
+                        width=36,
+                        bg=THEME.get("widget_bg_color", "#202020"),
+                        fg=THEME.get("fg_color", "#ffffff"),
+                        insertbackground=THEME.get("fg_color", "#ffffff"),
+                        relief=tk.FLAT,
+                        font=self.fonts["stats"],
+                    )
+                    comment_entry.pack(side=tk.LEFT, padx=(0, 4))
+
+                    def _finalize_downvote(with_comment=True):
+                        c_val = comment_entry.get().strip() if with_comment else ""
+                        try:
+                            comment_holder.destroy()
+                        except Exception:
+                            pass
+                        note = f" ({c_val[:32]}...)" if len(c_val) > 32 else (f" ({c_val})" if c_val else "")
+                        tk.Label(
+                            rlhf_frame,
+                            text=f"Recorded{note}",
+                            bg=THEME["bg_color"],
+                            fg="#888888",
+                            font=self.fonts["stats"],
+                        ).pack(side=tk.LEFT, padx=(6, 0))
+                        self._save_rlhf_log(user_msg, final_answer, -1, comment=c_val)
+
+                    comment_entry.bind("<Return>", lambda _e=None: _finalize_downvote(True))
+                    btn_ok = tk.Button(
+                        comment_holder,
+                        text="OK",
+                        bg=THEME.get("button_bg_color", "#24201c"),
+                        fg="#00ff88",
+                        relief=tk.FLAT,
+                        font=self.fonts["stats"],
+                        cursor="hand2",
+                        padx=6,
+                        command=lambda: _finalize_downvote(True),
+                    )
+                    btn_cancel = tk.Button(
+                        comment_holder,
+                        text="✕",
+                        bg=THEME.get("button_bg_color", "#24201c"),
+                        fg="#aaaaaa",
+                        relief=tk.FLAT,
+                        font=self.fonts["stats"],
+                        cursor="hand2",
+                        padx=4,
+                        command=lambda: _finalize_downvote(False),
+                    )
+                    btn_ok.pack(side=tk.LEFT, padx=1)
+                    btn_cancel.pack(side=tk.LEFT, padx=1)
+                    rlhf_frame._comment_entry = comment_entry
+                    rlhf_frame._btn_ok = btn_ok
+                    rlhf_frame._btn_cancel = btn_cancel
+                    try:
+                        comment_entry.focus_set()
+                    except Exception:
+                        pass
 
                 btn_up = tk.Button(rlhf_frame, text="👍", bg=THEME["bg_color"], fg="#00ff88", activebackground=THEME["widget_bg_color"],
-                                   relief=tk.FLAT, font=self.fonts["log"], command=lambda: _submit_fb(1))
+                                   relief=tk.FLAT, font=self.fonts["log"], command=_submit_up)
                 btn_down = tk.Button(rlhf_frame, text="👎", bg=THEME["bg_color"], fg="#ff4444", activebackground=THEME["widget_bg_color"],
-                                     relief=tk.FLAT, font=self.fonts["log"], command=lambda: _submit_fb(-1))
+                                     relief=tk.FLAT, font=self.fonts["log"], command=_open_downvote_box)
                 btn_up.pack(side=tk.LEFT, padx=2)
                 btn_down.pack(side=tk.LEFT, padx=2)
+                rlhf_frame._btn_up = btn_up
+                rlhf_frame._btn_down = btn_down
                 
                 hist.insert(tk.END, "\n", ("ai",))
                 hist.window_create(tk.END, window=rlhf_frame)
@@ -8745,17 +10649,20 @@ class ChatbotApp:
             except Exception as fb_err:
                 print(f"[UI] RLHF widget embed error: {fb_err}")
 
-        scroll_locked = bool(self.config.get("scroll_lock_enabled", False))
-        user_scrolled = getattr(self, '_user_scrolled_up', False)
-        was_at_bottom = not user_scrolled and self._is_chat_at_bottom()
         hist.config(state='disabled')
-        if not scroll_locked and was_at_bottom:
-            hist.see(tk.END)
+        self._restore_or_scroll_bottom(hist, lock_scroll, saved_y0, saved_top, target=tk.END)
 
         # PERSISTENCE (Hardened against memory corruption)
         try:
-            if not error and user_msg and final_answer:
-                final_answer_history = final_answer.replace("<|file_separator|>", "").strip()
+            saved_answer = final_answer
+            if is_halted and not saved_answer and start_idx:
+                try:
+                    saved_answer = hist.get(start_idx, tk.END).strip()
+                except Exception:
+                    pass
+            self.state["was_halted"] = False
+            if not error and user_msg and saved_answer:
+                final_answer_history = saved_answer.replace("<|file_separator|>", "").strip()
                 is_cecilia_turn = (getattr(self, "active_persona_level", 2) >= 7) or getattr(self, "is_cecilia_active", False)
                 ai_entry = {
                     "role": "assistant",
@@ -8826,24 +10733,28 @@ class ChatbotApp:
         self.state["current_agentic_tag"] = None
         self.state["current_agentic_btn"] = None
         self.state["current_dropdown_frame"] = None
+        self.state["current_deep_cook_cyc_tag"] = None
+        self.state["tool_calls_rendered"] = False
         self.state["thought_stream_lead_cleaned"] = False
         self.thought_stream_buffer = ""
         self.agentic_stream_buffer = ""
         self.root.after(1500, lambda *args: self.set_avatar_state("listening"))
 
-    def _save_rlhf_log(self, prompt, answer, rating):
-        """Saves user feedback (+1 / -1) into System/rlhf_logs.json and updates DMN backbone."""
+    def _save_rlhf_log(self, prompt, answer, rating, comment=""):
+        """Saves user feedback (+1 / -1) into System/rlhf_logs.json and updates DMN/Vault."""
         try:
             p = os.path.join(self.dirs["System"], "rlhf_logs.json")
             logs = []
             if os.path.exists(p):
                 with open(p, "r", encoding="utf-8") as f:
                     logs = json.load(f)
+            clean_comment = str(comment or "").strip()
             entry = {
                 "timestamp": datetime.now().isoformat(),
                 "persona": getattr(self, "active_persona_level", 1),
                 "model": self.config.get("model_path", "unknown"),
                 "rating": rating,
+                "comment": clean_comment,
                 "prompt": prompt,
                 "answer": answer[:500] if answer else ""
             }
@@ -8856,6 +10767,22 @@ class ChatbotApp:
                 self.state["dmn_backbone"]["last_rlhf_rating"] = rating
                 self.state["dmn_backbone"]["total_rlhf_count"] = len(logs)
                 self._save_dmn_backbone()
+
+            # Persist downvoted mistake avoidance insight into SemanticVault across all levels
+            if rating < 0 and getattr(self, "semantic_vault", None) is not None:
+                try:
+                    reason = clean_comment if clean_comment else "avoid repeating this response pattern"
+                    p_snip = " ".join(str(prompt or "").split())[:120]
+                    lesson = f"[RLHF AVOID MISTAKE]: On prompt '{p_snip}', user downvoted response ({reason})."
+                    self.semantic_vault.store_insight(
+                        lesson,
+                        concept_family="rlhf_correction",
+                        importance_weight=1.5,
+                        dominance_weight=0.9,
+                    )
+                except Exception as vault_err:
+                    print(f"[RLHF VAULT WARNING] {vault_err}")
+
             print(f"[RLHF] Successfully recorded feedback ({rating}) to {p}")
         except Exception as e:
             print(f"[RLHF ERROR] Failed to save feedback: {e}")
@@ -8889,7 +10816,7 @@ class ChatbotApp:
                 self.chat_history.insert(tk.END, diag_report, "ai")
                 self.chat_history.config(state='disabled')
                 self.chat_history.see(tk.END)
-                if self.config.get("media_rendering", 1) > 0:
+                if self.config.get("media_rendering", 2) > 0:
                     start_idx = self.chat_history.index(tk.END + f"-{len(diag_report)+20}c")
                     end_idx = self.chat_history.index(tk.END + "-1c")
                     self._apply_markdown(start_idx, end_idx, ("ai",))
@@ -9129,18 +11056,24 @@ class ChatbotApp:
             self._load_secret_model_event()
 
     def _load_secret_model_event(self, e=None):
-        self._log_and_display("Engaging Worldbuilder...")
+        self._log_and_display("Level 7 (Cecilia) Unleashed. Adjust settings or click Begin! to load.")
         self.active_persona_level = 7
         self._setting_slider = True
         self.depth_slider.config(to=7)
         self.depth_slider.set(7)
         self._setting_slider = False
         self.update_persona_display(7)
-        self.model_swap(target_level=7)
+        if self.config.get("auto_load_on_unleash", False):
+            self.model_swap(target_level=7)
 
     def redirect_logs(self):
         sys.stdout = WidgetLogger(self.thought_log, "stdout")
-        sys.stderr = FileAndWidgetLogger(self.error_log, self.error_log_file, "stderr")
+        sys.stderr = FileAndWidgetLogger(
+            self.error_log,
+            self.error_log_file,
+            "stderr",
+            chat_template_handler=lambda txt: self._buffer_log(txt, is_chat_template=True),
+        )
 
 
 
@@ -9338,7 +11271,7 @@ class ChatbotApp:
                         existing_msgs = self.vault_manager.read_history_messages(path)
                     else:
                         with open(path, 'rb') as rf:
-                            existing_msgs = json.loads(zlib.decompress(rf.read()).decode('utf-8'))
+                            existing_msgs = json.loads(safe_zlib_decompress(rf.read()).decode('utf-8'))
                     if isinstance(existing_msgs, list) and existing_msgs:
                         msgs_to_write = self._deduplicate_history_messages(existing_msgs + self.messages)
                 except Exception:
@@ -9378,7 +11311,7 @@ class ChatbotApp:
                 s_idx = hist.index(tk.END + "-1c")
                 hist.insert(tk.END, f"\nPrompt: {content_str}\n", ("user",))
                 e_idx = hist.index(tk.END + "-1c")
-                if self.config.get("media_rendering", 1) > 0 and self.config.get("format_prompts_markdown", False):
+                if self.config.get("media_rendering", 2) > 0 and self.config.get("format_prompts_markdown", False):
                     self._apply_markdown(s_idx, e_idx, ("user",))
             elif role == 'assistant':
                 s_idx = hist.index(tk.END + "-1c")
@@ -9408,12 +11341,12 @@ class ChatbotApp:
                     hist.insert(tk.END, f"{think_content.strip()}\n\n", (think_tag, "md_thought"))
                     t_end = hist.index(tk.END + "-1c")
                     hist.tag_config(think_tag, elide=True, lmargin1=20, lmargin2=20)
-                    if self.config.get("media_rendering", 1) > 0:
+                    if self.config.get("media_rendering", 2) > 0:
                         self._apply_markdown(t_start, t_end, (think_tag, "md_thought"), is_thought=True)
 
                 hist.insert(tk.END, f"{content_str}\n", ("ai",))
                 e_idx = hist.index(tk.END + "-1c")
-                if self.config.get("media_rendering", 1) > 0:
+                if self.config.get("media_rendering", 2) > 0:
                     self._apply_markdown(s_idx, e_idx, ("ai",))
         hist.config(state='disabled')
         hist.see(tk.END)
@@ -9463,7 +11396,7 @@ class ChatbotApp:
                     self.messages = self.vault_manager.read_history_messages(path)
                 else:
                     with open(path, 'rb') as f: 
-                        self.messages = json.loads(zlib.decompress(f.read()).decode('utf-8'))
+                        self.messages = json.loads(safe_zlib_decompress(f.read()).decode('utf-8'))
                 
                 if self.messages and self.messages[-1].get('role') == 'user': 
                     self.messages.pop()
@@ -9658,6 +11591,7 @@ class ChatbotApp:
             "pleased": "serenity_pleased.png",
             "listening": "serenity_greeting.png",
             "confused": "serenity_confused.png",
+            "frustrated": "serenity_frustrated.png" if os.path.exists(os.path.join(self.dirs.get("Media", ""), "serenity_frustrated.png")) else "serenity_confused.png",
             "deep_think": "The_Wise_Listener.png",
             "subdued": "subdued_serenity.png",
             "ecstatic": "serenity_ecstatic.png",
@@ -9857,58 +11791,42 @@ class ChatbotApp:
         self.state["streaming_mode"] = self.config.get('streaming_mode', "Buffered")
         self.config["max_token_ratio"] = self.config.get('max_token_ratio', 4)
         # Initialize UI toggles if missing
-        if "synthesis_in_tactical_mode" not in self.config:
-            self.config["synthesis_in_tactical_mode"] = False
-        if "show_rgb_button" not in self.config:
-            self.config["show_rgb_button"] = True
-        if "auto_vram_offload" not in self.config:
-            self.config["auto_vram_offload"] = False
-        if "speculative_drafting" not in self.config:
-            self.config["speculative_drafting"] = False
-        if "history_lookup_mode" not in self.config:
-            self.config["history_lookup_mode"] = "targeted"
-        if "k_cache_type" not in self.config:
-            self.config["k_cache_type"] = "q8_0"
-        if "v_cache_type" not in self.config:
-            self.config["v_cache_type"] = "q4_0"
-        if "hao_preset" not in self.config:
-            self.config["hao_preset"] = "exps=CPU"
-        if "swa_kv_cache" not in self.config:
-            self.config["swa_kv_cache"] = "Auto"
-        if "media_rendering" not in self.config:
-            self.config["media_rendering"] = 1
-        if "history_usage" not in self.config:
-            self.config["history_usage"] = "all"
-        if "ghost_mode" not in self.config:
-            self.config["ghost_mode"] = False
-        if "benchmark_enabled" not in self.config:
-            self.config["benchmark_enabled"] = False
-        if "inline_markdown" not in self.config:
-            self.config["inline_markdown"] = True
-        if "format_prompts_markdown" not in self.config:
-            self.config["format_prompts_markdown"] = False
-        if "overfill_behavior_mode" not in self.config:
-            self.config["overfill_behavior_mode"] = self.config.get("budget_recovery_mode", "wrapup")
-        if "budget_recovery_mode" not in self.config:
-            self.config["budget_recovery_mode"] = self.config["overfill_behavior_mode"]
-        if "halt_behavior_mode" not in self.config:
-            self.config["halt_behavior_mode"] = "off"
-        if "history_mode" not in self.config:
-            t_mode = self.config.get("turbovec_mode", "fallback")
-            self.config["history_mode"] = "TurboVec" if t_mode == "on" else ("Off" if t_mode == "off" else "Keyword")
-        if "monitor_graph_mode" not in self.config:
-            self.config["monitor_graph_mode"] = False
-
-        if "offline_mode" not in self.config:
-            self.config["offline_mode"] = False
-        if "tutorial_completed" not in self.config:
-            self.config["tutorial_completed"] = False
-        if "offline_mode" not in self.config:
-            self.config["offline_mode"] = False
-        if "tutorial_completed" not in self.config:
-            self.config["tutorial_completed"] = False
-        if "repeat_detection_mode" not in self.config:
-            self.config["repeat_detection_mode"] = "lazy"
+        t_mode = self.config.get("turbovec_mode", "fallback")
+        derived_hist_mode = "TurboVec" if t_mode == "on" else ("Off" if t_mode == "off" else "Keyword")
+        overfill_default = self.config.get("budget_recovery_mode", "wrapup")
+        config_defaults = {
+            "synthesis_in_tactical_mode": False,
+            "show_rgb_button": True,
+            "auto_vram_offload": False,
+            "speculative_drafting": False,
+            "history_lookup_mode": "targeted",
+            "k_cache_type": "q8_0",
+            "v_cache_type": "q4_0",
+            "hao_preset": "exps=CPU",
+            "swa_kv_cache": "Auto",
+            "media_rendering": 2,
+            "history_usage": "all",
+            "ghost_mode": False,
+            "benchmark_enabled": False,
+            "inline_markdown": True,
+            "format_prompts_markdown": False,
+            "overfill_behavior_mode": overfill_default,
+            "ctx_auto_scale_mode": "step_up",
+            "halt_behavior_mode": "off",
+            "history_mode": derived_hist_mode,
+            "monitor_graph_mode": False,
+            "offline_mode": False,
+            "kiwix_search_enabled": True,
+            "kiwix_zim_dir": "",
+            "tutorial_completed": False,
+            "repeat_detection_mode": "lazy",
+            "expanded_file_access": False,
+            "expanded_file_roots": "",
+            "show_terminal_drawer": True,
+        }
+        for _k, _v in config_defaults.items():
+            self.config.setdefault(_k, _v)
+        self.config.setdefault("budget_recovery_mode", self.config["overfill_behavior_mode"])
 
         try:
             set_offline_mode(bool(self.config.get("offline_mode", False)))
@@ -10116,7 +12034,7 @@ class ChatbotApp:
                 'load_model_button', 'action_button', 'btn_video', 'btn_watch', 'btn_sizes',
                 'btn_clear_queue', 'lock_button', 'rgb_button', 'lore_btn', 'mic_button',
                 'send_button', 'deep_thought_button', 'hurry_button', 'ghost_button',
-                'history_usage_button', 'history_autosave_button', 'btn_add'
+                'history_usage_button', 'history_autosave_button', 'media_gen_button', 'btn_add'
             )
             for btn_attr in all_action_buttons:
                 if hasattr(self, btn_attr):
@@ -10128,6 +12046,8 @@ class ChatbotApp:
                             b.config(bg=btn_bg, fg=self._get_history_usage_color())
                         elif btn_attr == 'history_autosave_button':
                             b.config(bg=btn_bg, fg=self._get_history_autosave_color())
+                        elif btn_attr == 'media_gen_button':
+                            b.config(bg=btn_bg, fg=self._get_media_gen_color())
                         elif btn_attr == 'lore_btn':
                             b.config(bg=btn_bg, fg=accent)
                         else:
@@ -10194,6 +12114,16 @@ class ChatbotApp:
                 self.clear_log_btn.config(bg=bg, fg=accent)
             if hasattr(self, 'log_frame') and self.log_frame and self.log_frame.winfo_exists():
                 self.log_frame.config(bg=bg)
+            if hasattr(self, 'terminal_drawer_frame') and self.terminal_drawer_frame and self.terminal_drawer_frame.winfo_exists():
+                self.terminal_drawer_frame.config(bg=bg)
+            if hasattr(self, 'terminal_header_bar') and self.terminal_header_bar and self.terminal_header_bar.winfo_exists():
+                self.terminal_header_bar.config(bg=widget_bg)
+            if hasattr(self, 'terminal_toggle_btn') and self.terminal_toggle_btn and self.terminal_toggle_btn.winfo_exists():
+                self.terminal_toggle_btn.config(bg=btn_bg, fg=accent)
+            if hasattr(self, 'terminal_clear_btn') and self.terminal_clear_btn and self.terminal_clear_btn.winfo_exists():
+                self.terminal_clear_btn.config(bg=btn_bg, fg=fg)
+            if hasattr(self, 'terminal_cwd_lbl') and self.terminal_cwd_lbl and self.terminal_cwd_lbl.winfo_exists():
+                self.terminal_cwd_lbl.config(bg=widget_bg)
 
             # Backend Log Switch Canvas (Tabs & Knob)
             if hasattr(self, 'log_switch_canvas') and self.log_switch_canvas and self.log_switch_canvas.winfo_exists():
@@ -10303,6 +12233,7 @@ class ChatbotApp:
             'format_prompts_markdown': bool(self.config.get("format_prompts_markdown", False)),
             'overfill_behavior_mode': self.config.get("overfill_behavior_mode", "wrapup"),
             'budget_recovery_mode': self.config.get("budget_recovery_mode", "wrapup"),
+            'ctx_auto_scale_mode': self.config.get("ctx_auto_scale_mode", "step_up"),
             'halt_behavior_mode': self.config.get("halt_behavior_mode", "off"),
             'history_mode': self.config.get("history_mode", "Keyword"),
             'turbovec_mode': self.config.get("turbovec_mode", "fallback"),
@@ -10310,6 +12241,7 @@ class ChatbotApp:
             'history_level_format': self.config.get("history_level_format", "All"),
             'monitor_graph_mode': bool(self.config.get("monitor_graph_mode", False)),
             'show_tooltips': bool(self.config.get("show_tooltips", True)),
+            'show_terminal_drawer': bool(self.config.get("show_terminal_drawer", True)),
             'dmn_enabled': bool(self.config.get("dmn_enabled", True)),
             'dmn_timeout': self.config.get("dmn_timeout", "05:00"),
             'stt_device_index': self.config.get("stt_device_index", None),
@@ -10334,12 +12266,15 @@ class ChatbotApp:
             'v_cache_type': self.config.get("v_cache_type", "q4_0"),
             'hao_preset': self.config.get("hao_preset", "exps=CPU"),
             'swa_kv_cache': self.config.get("swa_kv_cache", "Auto"),
-            'media_rendering': self.config.get("media_rendering", 1),
+            'media_rendering': self.config.get("media_rendering", 2),
             'history_usage': self.config.get("history_usage", "all"),
             'ghost_mode': self.config.get("ghost_mode", False),
             'dynamic_params_enabled': self.config.get("dynamic_params_enabled", True),
             'startup_count': self.config.get("startup_count", 0),
             'offline_mode': self.config.get("offline_mode", False),
+            'kiwix_search_enabled': self.config.get("kiwix_search_enabled", True),
+            'kiwix_zim_dir': self.config.get("kiwix_zim_dir", ""),
+            'expanded_file_access': bool(self.config.get("expanded_file_access", False)),
             'theme': self.config.get("theme", "apex"),
             'texture_style': self.config.get("texture_style", "default"),
             'dark_mode': self.config.get("dark_mode", False),
@@ -10419,7 +12354,7 @@ class ChatbotApp:
         }
         
         # Dynamic Max Tokens (Context Headroom Management)
-        ctx = self.context_size_config.get(tier, 4096)
+        ctx = self._get_effective_context_size(tier, getattr(self, "active_persona_level", 3))
         if "max_tokens" in self.config and self.config.get("max_tokens"):
             calculated_max = int(self.config["max_tokens"])
         else:
@@ -10468,6 +12403,16 @@ class ChatbotApp:
         if "muse" in m_lower and "glimmer" in m_lower:
             inf_params["stop"] = [s for s in inf_params.get("stop", []) if s != "<|eom|>"]
             
+        r_strength = str(self.config.get("reasoning_strength", self.config.get("muse_reasoning_strength", "medium"))).lower().strip()
+        thinking_enabled = (r_strength != "off") and bool(self.config.get("thinking_checkbox", True))
+        if "diffusion" not in m_lower:
+            effort_mapped = r_strength if r_strength in ("low", "medium", "high", "xhigh") else "medium"
+            inf_params.setdefault("chat_template_kwargs", {}).update({
+                "enable_thinking": thinking_enabled,
+                "reasoning_effort": effort_mapped if thinking_enabled else "low",
+                "reasoning_strength": r_strength if thinking_enabled else "low"
+            })
+
         # --- Sampler Hygiene: Filter unsupported params for llama-cpp-python stability ---
         supported_keys = {
             "temperature", "top_p", "min_p", "repeat_penalty", "frequency_penalty", 
@@ -10485,7 +12430,7 @@ class ChatbotApp:
             print(f"[APEX] Sampler Hygiene: Dropping unsupported parameters: {dropped}")
 
         if "diffusion" in (self.model_path or "").lower():
-            filtered_params["max_tokens"] = min(int(filtered_params.get("max_tokens", 256)), 256)
+            filtered_params["max_tokens"] = max(256, min(int(filtered_params.get("max_tokens", 512)), 2048))
 
         # Dynamic Parameter Auto-Adjustment (Non-destructive in-memory tuning)
         if self.config.get("dynamic_params_enabled", True) and temp_messages:
@@ -10506,8 +12451,10 @@ class ChatbotApp:
             
         return filtered_params
         
-    def _run_blocking_inference(self, prompt_or_msgs, params):
+    def _run_blocking_inference(self, prompt_or_msgs, params, stream_to_ui=False, stream_callback=None):
         """GIL-Safe background inference. Forces internal streaming to keep UI responsive."""
+        if getattr(self, "stop_process", None) and self.stop_process.is_set() is True:
+            return ""
         full_text = ""
         is_gemma = "gemma" in (self.model_path or "").lower()
         
@@ -10521,13 +12468,18 @@ class ChatbotApp:
         
         try:
             if isinstance(prompt_or_msgs, str):
-                # Raw Completion Path
-                gen = self.model(prompt_or_msgs, echo=False, **safe_params)
+                # Raw Completion Path (strip chat-only kwargs)
+                raw_params = {k: v for k, v in safe_params.items() if k != "chat_template_kwargs"}
+                gen = self.model(prompt_or_msgs, echo=False, **raw_params)
                 for chunk in gen:
                     if self.stop_process.is_set(): break
                     token = chunk["choices"][0]["text"]
                     full_text += token
-                    self.process_queue.put({"status": "streaming", "content": token})
+                    if stream_to_ui:
+                        self.process_queue.put({"status": "streaming", "content": token})
+                    if callable(stream_callback):
+                        try: stream_callback(token)
+                        except Exception: pass
                     time.sleep(0.005) 
             else:
                 # Chat Completion Path
@@ -10538,7 +12490,11 @@ class ChatbotApp:
                     if "content" in chunk["choices"][0]["delta"]:
                         txt = chunk["choices"][0]["delta"]["content"]
                         full_text += txt
-                        self.process_queue.put({"status": "streaming", "content": txt})
+                        if stream_to_ui:
+                            self.process_queue.put({"status": "streaming", "content": txt})
+                        if callable(stream_callback):
+                            try: stream_callback(txt)
+                            except Exception: pass
                     time.sleep(0.005)
         except Exception as e:
             print(f"[APEX] Blocking Inference Failure: {e}")
@@ -10601,12 +12557,61 @@ class ChatbotApp:
                     fg=self._get_history_autosave_color(),
                     state='disabled' if is_gen else 'normal'
                 )
+            if hasattr(self, 'media_gen_button') and self.media_gen_button is not None:
+                self.media_gen_button.config(
+                    text=self._get_media_gen_label(),
+                    fg=self._get_media_gen_color(),
+                    state='disabled' if is_gen else 'normal'
+                )
             if hasattr(self, 'mic_button') and self.mic_button is not None:
                 if not (hasattr(self, 'stt_manager') and self.stt_manager.is_recording):
                     self.mic_button.config(state='disabled' if (is_gen or is_loading) else 'normal')
         except: pass
 
+    def _restore_last_prompt(self, only_if_empty: bool = False):
+        """Restores the last submitted prompt into user input (Alt+Up, or Ctrl+Up when empty)."""
+        if self.user_input:
+            current = self.user_input.get("1.0", "end-1c")
+            if only_if_empty and current.strip():
+                return None
+            last_p = getattr(self, "_last_submitted_prompt", getattr(self, "last_user_message", ""))
+            if last_p:
+                if current.strip() and current != str(last_p):
+                    self._stashed_prompt_draft = current
+                try:
+                    self.user_input.edit_separator()
+                except Exception:
+                    pass
+                self.user_input.delete("1.0", tk.END)
+                self.user_input.insert("1.0", str(last_p))
+                try:
+                    self.user_input.edit_separator()
+                except Exception:
+                    pass
+                return 'break'
+        return None
+
+    def _restore_prompt_draft(self):
+        """Restores stashed unsent draft if overwritten by _restore_last_prompt (Alt+Down)."""
+        draft = getattr(self, "_stashed_prompt_draft", None)
+        if self.user_input and draft:
+            try:
+                self.user_input.edit_separator()
+            except Exception:
+                pass
+            self.user_input.delete("1.0", tk.END)
+            self.user_input.insert("1.0", str(draft))
+            self._stashed_prompt_draft = None
+            try:
+                self.user_input.edit_separator()
+            except Exception:
+                pass
+            return 'break'
+        return None
+
     def _handle_input_key(self, event):
+        if getattr(self, "_slash_popup", None) and self._slash_popup.handle_key(event):
+            return 'break'
         if event.keysym in ('Return', 'KP_Enter'):
             is_shift = bool(event.state & 0x0001)
             if not is_shift:
@@ -10723,13 +12728,6 @@ class ChatbotApp:
                 except Exception: pass
         if window: window.lift()
 
-    def _fill_auto(self, win, ents):
-        recs = self.run_auto_detect(win)
-        for t, l in recs.items():
-            if t in ents: 
-                ents[t].delete(0, tk.END)
-                ents[t].insert(0, str(l))
-
     def _get_ghost_mode_label(self):
         active = self.config.get("ghost_mode", False)
         return "👻 Ghost:\nON" if active else "👻 Ghost:\nOFF"
@@ -10806,6 +12804,130 @@ class ChatbotApp:
                 fg=self._get_history_autosave_color()
             )
         self._log_and_display(f"History AutoSave set to: {next_mode.upper()}")
+
+    def _get_media_gen_label(self):
+        mode = str(self.config.get("media_gen_mode", "off")).lower().strip()
+        if mode == "image":
+            return "🎨 Gen:\nIMG"
+        elif mode == "gif":
+            return "🎞️ Gen:\nGIF"
+        elif mode == "video":
+            return "🎬 Gen:\nVID"
+        return "🎨 Gen:\nOFF"
+
+    def _get_media_gen_color(self):
+        mode = str(self.config.get("media_gen_mode", "off")).lower().strip()
+        if mode == "image":
+            return "#00ffcc"
+        elif mode == "gif":
+            return "#ff77ff"
+        elif mode == "video":
+            return "#00ff66"
+        return "#888888"
+
+    def toggle_media_gen_mode(self):
+        modes = ["off", "image", "gif", "video"]
+        curr = str(self.config.get("media_gen_mode", "off")).lower().strip()
+        if curr not in modes:
+            curr = "off"
+        nxt = modes[(modes.index(curr) + 1) % len(modes)]
+        self.config["media_gen_mode"] = nxt
+        self.save_config()
+        if hasattr(self, "media_gen_button") and self.media_gen_button:
+            self.media_gen_button.config(text=self._get_media_gen_label(), fg=self._get_media_gen_color())
+        self._log_and_display(f"Media Generation mode set to: {nxt.upper()}")
+
+    def run_direct_media_generation(self, prompt_override: Optional[str] = None, mode_override: Optional[str] = None):
+        """Directly synthesizes an Image, Animated GIF, or Video from the prompt box or override string."""
+        raw_prompt = prompt_override
+        if not raw_prompt and hasattr(self, "user_input") and self.user_input:
+            try:
+                raw_prompt = self.user_input.get("1.0", tk.END).strip()
+            except Exception:
+                raw_prompt = ""
+        if not raw_prompt:
+            raw_prompt = "Serenity cybernetic horizon, neon volumetric glow"
+        mode = str(mode_override or self.config.get("media_gen_mode", "image")).lower().strip()
+        if mode == "off":
+            mode = "image"
+
+        self._log_and_display(f"Synthesizing {mode.upper()} from prompt...")
+        if hasattr(self, "tool_registry") and self.tool_registry:
+            tool_name = "generate_video" if mode in ("gif", "video") else "generate_image"
+            threading.Thread(
+                target=lambda: self.tool_registry.execute(tool_name, {"prompt": raw_prompt, "type": mode}),
+                daemon=True
+            ).start()
+
+    def open_media_gen_popup(self, event=None):
+        """Opens compact Media Synthesis Studio popup anchored above the bottom-left media_gen_button."""
+        if hasattr(self, "media_gen_popup") and self.media_gen_popup and self.media_gen_popup.winfo_exists():
+            self.media_gen_popup.destroy()
+            self.media_gen_popup = None
+            return
+
+        pop = tk.Toplevel(self.root)
+        self.media_gen_popup = pop
+        pop.title("Media Synthesis Studio")
+        pop.geometry("360x250")
+        pop.config(bg=THEME["bg_color"], padx=10, pady=8)
+        pop.transient(self.root)
+        pop.attributes("-topmost", True)
+
+        try:
+            if hasattr(self, "media_gen_button") and self.media_gen_button:
+                bx = max(20, self.media_gen_button.winfo_rootx() - 40)
+                by = max(20, self.media_gen_button.winfo_rooty() - 265)
+                pop.geometry(f"360x250+{bx}+{by}")
+        except Exception:
+            pass
+
+        tk.Label(pop, text="🎬 Serenity Media Synthesis Studio", bg=THEME["bg_color"],
+                 fg=THEME.get("electric_blue", "#00ffcc"), font=self.fonts["bold"]).pack(anchor="w", pady=(0, 6))
+
+        r1 = tk.Frame(pop, bg=THEME["bg_color"])
+        r1.pack(fill=tk.X, pady=2)
+        tk.Label(r1, text="Mode:", bg=THEME["bg_color"], fg=THEME["fg_color"], width=10, anchor="w").pack(side=tk.LEFT)
+        m_var = tk.StringVar(value=str(self.config.get("media_gen_mode", "image")))
+        m_cb = ttk.Combobox(r1, textvariable=m_var, values=["off", "image", "gif", "video"], state="readonly", width=14)
+        m_cb.pack(side=tk.LEFT)
+
+        r2 = tk.Frame(pop, bg=THEME["bg_color"])
+        r2.pack(fill=tk.X, pady=2)
+        tk.Label(r2, text="Resolution:", bg=THEME["bg_color"], fg=THEME["fg_color"], width=10, anchor="w").pack(side=tk.LEFT)
+        res_var = tk.StringVar(value=str(self.config.get("media_gen_resolution", "768x768")))
+        res_cb = ttk.Combobox(r2, textvariable=res_var, values=["512x512", "768x768", "1024x1024", "832x480"], state="readonly", width=14)
+        res_cb.pack(side=tk.LEFT)
+
+        r3 = tk.Frame(pop, bg=THEME["bg_color"])
+        r3.pack(fill=tk.X, pady=2)
+        tk.Label(r3, text="Frames / FPS:", bg=THEME["bg_color"], fg=THEME["fg_color"], width=10, anchor="w").pack(side=tk.LEFT)
+        frm_var = tk.IntVar(value=int(self.config.get("video_gen_frames", 16)))
+        fps_var = tk.IntVar(value=int(self.config.get("video_gen_fps", 8)))
+        ttk.Combobox(r3, textvariable=frm_var, values=[8, 16, 24, 33], state="readonly", width=6).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Combobox(r3, textvariable=fps_var, values=[6, 8, 12, 16], state="readonly", width=6).pack(side=tk.LEFT)
+
+        def _apply_and_gen(run_now=False):
+            self.config["media_gen_mode"] = m_var.get()
+            self.config["media_gen_resolution"] = res_var.get()
+            self.config["video_gen_frames"] = int(frm_var.get())
+            self.config["video_gen_fps"] = int(fps_var.get())
+            self.save_config()
+            if hasattr(self, "media_gen_button") and self.media_gen_button:
+                self.media_gen_button.config(text=self._get_media_gen_label(), fg=self._get_media_gen_color())
+            pop.destroy()
+            self.media_gen_popup = None
+            if run_now:
+                self.run_direct_media_generation(mode_override=m_var.get() if m_var.get() != "off" else "image")
+
+        btn_row = tk.Frame(pop, bg=THEME["bg_color"])
+        btn_row.pack(fill=tk.X, pady=(14, 2))
+        tk.Button(btn_row, text="✨ Generate Prompt Now", command=lambda: _apply_and_gen(True),
+                  bg=THEME["button_active_color"], fg=THEME.get("accent_highlight", "#00ffcc"),
+                  font=self.fonts["ui_button"], relief=tk.FLAT, padx=8, pady=4).pack(side=tk.LEFT)
+        tk.Button(btn_row, text="Save", command=lambda: _apply_and_gen(False),
+                  bg=THEME["button_bg_color"], fg=THEME["fg_color"],
+                  font=self.fonts["ui_button"], relief=tk.FLAT, padx=8, pady=4).pack(side=tk.RIGHT)
 
     def toggle_voice_recording(self):
         """Toggles push-to-record voice input using sounddevice and local STTManager."""

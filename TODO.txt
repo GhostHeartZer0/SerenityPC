@@ -1,64 +1,35 @@
 # SerenityPC TODO List
 
-Needs Fixing:
-- (None currently pending - all 10 CodeQL alerts #3-#12 resolved)
+## Pending Verification
 
-Completed Log: (Verify)
-- CodeQL Security Hardening & Redundant Folder Pruning (`System/serenity_mail_courier.py`, `System/tests/test_mail_and_courier.py`):
-   - Resolved CodeQL #5-#12 (`py/weak-sensitive-data-hashing`): Removed unkeyed `hashlib.shake_256` stream-cipher fallback in `encrypt_smp` / `decrypt_smp` (enforcing `AESGCM`), and upgraded `.bmb` legacy packet key derivation (`export_legacy_bmb` / `decrypt_legacy_bmb`) from single-pass `hashlib.sha256` to 250,000-iteration `PBKDF2-HMAC-SHA256` (`derive_passphrase_key`).
-   - Resolved CodeQL #3-#4 (`py/bind-socket-all-network-interfaces`): Removed `sock.bind(("0.0.0.0", local_port))` in `CrossStateP2PTransport.discover_wan_endpoint` so outbound UDP STUN requests use OS-assigned ephemeral ports on the route interface; pruned duplicate nested `System/SerenityMail/` directory.
-   - Hardened `verify_envelope_signature` and bounded `zlib` decompression (`_safe_zlib_decompress`, 50 MB cap).
-- Per-Subagent Collapsible Output Dropdowns (`System/orchestration_manager.py`, `System/serenity_p2p_ui_wiring.py`):
-   - Wired `_emit_subagent_dropdown` (`subagent_spawn`, `subagent_stream`, `subagent_done`) across all Level 1-6 subagent steps in `OrchestrationManager.execute_delegation_chain` so each subagent streams its live thoughts and deductions into its own collapsible dropdown block in chat.
-- Level 2 Keyword-Actuated Search Lookup Extraction (`System/orchestration_manager.py`, `System/tool_registry.py`):
-   - Enhanced `extract_search_query` with stopword/bloat distillation and dotted technical identifier preservation (e.g. `llama.cpp`, `v1.8.1`), and wired automatic extraction into `handle_web_search` for long or multi-line queries.
-- History Archive Title Marquee & Tooltips (`main.py`, `System/serenity_p2p_ui_wiring.py`):
-   - Bound `setup_marquee_label` (with full filename tooltip) to history archive card title labels in `_render_history_menu` and added a runtime wrapper in `wire_serenity_app` for `--onedir` builds.
-- Cleaned Special & Tool Tags in Error/Diagnostic Log (`main.py`, `System/vision_handler.py`):
-   - Implemented `_log_cleaned_tags` and `VisionHandler.LAST_CLEANED_TAGS` to capture all stripped reasoning/control/tool tags before removal and emit `[CLEANED TAGS]` entries to `diag_log_update`.
-- Multi-Model Tool Calling & Non-Standard Reasoning Separation for S:/LLM (`System/tool_registry.py`, `main.py`, `System/tests/test_thought_isolation.py`, `System/tests/test_needs_fixing_deep_verify.py`):
-   - Expanded `parse_tool_calls` in `GemmaToolRegistry` to parse across all model families in `S:/LLM`: Python AST PTC, NVIDIA Nemotron XML (`<function=...><parameter=...>`), MiniCPM XML (`<function name=...><param name=...>` / CDATA), Spark-X2.5 XML (`<tool_call>name<arg_key>...<arg_value>`), Olmo-3 JSON (`<function_calls>`), Mistral (`[TOOL_CALLS]`), and legacy tag formats (`<ctrl42>call:`).
-   - Added `tool_block_clean` and enhanced `closers_patterns` / `tag_clean_pattern` in `main.py` and `test_thought_isolation.py` ensuring complete thought/tool isolation and 0% reasoning leakage into response streams.
-- Subagent Vector Grounding, Dynamic Re-invocation & Non-Destructive Tool Calling (`System/orchestration_manager.py`, `System/tool_registry.py`, `main.py`, `System/tests/test_dynamic_dispatch.py`, `System/tests/test_delegation_settings_and_cecilia.py`):
-   - Grounded Subagents 'All' mode into primary intent vectors (logic, tone, factual, speed, coordination) so unaligned subagents are skipped rather than blindly turned on.
-   - Built dynamic execution queue DAG allowing multi-turn re-invocation loops (e.g. `6 -> 5 -> 1 -> 5 -> 6`) and parsed `<delegate:lvlX>` explicit handoff directives.
-- Implemented `extract_search_query` in `orchestration_manager.py` and query length sanitization in `tool_registry.py` stripping code blocks, JNI declarations, and stack traces to prevent HTTP 414 / empty search error traps.
-   - Heightened tool recursion depth limit from 3 to 100 (`max_tool_recursion_depth`) for virtually unlimited tool calls. Verified with 42/42 passing unit tests.
-   - Wired SerenityDev MCP bridge (`port 8002/8443`) with OTL ContextSnapshot handoff, offline fallback staging, and per-subagent collapsible dropdown queue events (`subagent_spawn`, `subagent_stream`, `subagent_done`).
-- Serenity P2P Messaging, Encrypted Mail (.smp/.bmb), Level 2 Courier & V2.3.0 Subagent/MCP Foundation (`System/serenity_mail_courier.py`, `System/tool_registry.py`, `System/serenity_p2p_ui_wiring.py`, `System/settings_tabs.py`, `System/settings_ui.py`, 	`SerenityPC.spec`, `build_exe.bat`, `System/tests/test_mail_and_courier.py`):
-   - Implemented `InterSerenityEnvelope` v1.1, `SerenityMailCrypto` (X25519 ECDH + Ed25519 signing + AES-256-GCM + zlib `.smp`), RFC 5389 STUN discovery (`serenity-peer://`), and backward-compatible Brainuke (`.bmb`) packet exchange.
-   - Built Level 2 Courier agent with Contextual Quarantine Sandbox (`<0.4` auto-admit), 72h profile age gate (`VaultManager.has_full_repo_read_access`), and bounded Cecilia/Level 7 influence weight (`0.25`).
-- Wringer Persona Adherence Benchmark Framework (`benchmarks/wringer/persona_bank.json`, `benchmarks/wringer/Wringer.py`, `System/tests/test_persona_adherence_benchmark.py`):
-   - Created standalone `persona_bank.json` across Serenity 1-5, Serenity Prime, and Cecilia with 5 standard prompts each + 3 long-context drift prompts (both multi-turn chat and padded single context). Zero hardcoded user names.
-   - Implemented `run_persona_evaluation` and `generate_persona_chart` in `Wringer.py` with standalone reports (`persona_reports/{model}_persona_report.md`) and visual breakdown charts, excluded from `analyze.py` overall leaderboard.
-- Continuation Guard & Top-5 Leaderboards (`benchmarks/wringer/Wringer.py`, `benchmarks/wringer/analyze.py`):
-   - Implemented multi-pass continuation guard prompting model to continue when reaching or nearing (>= 90%) max output tokens.
-   - Added Top-5 highscore leaderboards per Level for score percentage and decode speed (t/s).
--Multimodal:
- - Model Chat Handler & Format Recovery: Resolved `KeyError: None` / `LlamaChatCompletionHandlerNotFoundException` when running text turns on models loaded with vision projector (Level 2 / Search tier); ensured automatic resolution of native GGUF
-	`chat_template.default` / fallback chat formats and cached chat handler restoration across multimodal transitions.
-  - Multimodal massdumping resolved: fixed token estimation ballooning and implemented live streaming (thought to thought channel, text to chat)
-  - Status bar overhaul: winfo_exists() safety guards, configurable linger time (status_bar_linger_sec), smart info rotation
-  - Vision log locations verified and standardized (_STRATEGIC_analysis.txt / _MULTIMODAL_analysis.txt + Logs/vision_analysis.txt)
+### 1. Serenity Main GUI (`main.py` / `hud_viewer.py`)
+- [ ] `/testbank` (active-model routing) & `/monitor` (`AgenticMonitor`).
 
-V2.0 Roadmap:
+### 2. Inference, Orchestration & Streaming
+- [ ] Live Deep Cook Lvl 2 directory deep-dive (Analyze-before-Plan speed, tool path resolution, no re-listing loops) & T1 per-call tool dropdown visual collapse/expand check.
+- [ ] Overfill modes (`off` / `respond` / `wrapup` / `autocont`).
+- [ ] Dynamic / Auto KV Cache & Context Scaling under real context-exceeded recovery.
+- [ ] DiffusionGemma visual denoising live across multi-turn conversation.
 
-- V1.9.0 Creature comforts & Polishing
-- Overhaul tool calling, Cross refrence with SerenityDev to control the devserver, Integrate a terminal.
-- When unleashing Lvl 7, don't load the model first, to allow settings to properly populate.
-- Clicking on the status UI button should open the active Lvl's model selection
-   - Integrate Template selections in a follow-up pop-up.
-- Ensure scroll-lock setting / fix current robustly works while response is generating.
-- Overview 'History: All' mode, ensure previous chats used appropriately (remembering)
-- Marquee other areas! history file titles
-- Lvl 2 Refactor.
-- In error log, consider collapsible chat templates with an arrow on bottom.
-- Feedback: RLHF, if user downvotes an interaction, spawn a non-intrusive comment box to describe the issue, give it ok and x buttons. Let's get them to learn from past mistakes.
-- Add a setting, ctx window overflow behavior: auto-increase (with lots of choices), ask first, and manual-only - error notification presented.
+### 3. Wringer & Debate Arena
+- [ ] Wringer `(t/s)` telemetry (prefill/decode/overall), speed outlier detection, speed highscore separation, speed/accuracy weighting, comparison graphs.
+- [ ] Debate Arena (`LoadingSpinner`, Speedy/Simmer pacing, multi-round role alternation).
+
+### 4. Security Hardening & Post-Scrub Manual Actions (v1.9.0)
+- [ ] Manual GUI check: LLM `run_terminal_command` Approve/Deny confirmation popup (approve & deny paths), external media click-to-load popup, and vault-locked profile deletion prompt in Settings.
+
+
+
+Version Roadmap:
 
 - V2.0.0 
    - Stable, Polished & Verified Release (Manual Verification)
+   - Lvl 2 Refactor.
+   - Tier 2 `main.py` modular extraction (~6,400 lines across 7 `System/` controllers).
+   - Serenity Personas reviewed, tested & refined for alignment & performance optimization. Serenity needs to catch up to Cecilia.
+   - Marquee other areas! (beyond history file titles)
    - Personas honed, models cross-refrenced
+   - Fat trimmed from codebase
 
 Beyond V2.0:
 - Auto-verification for minor releases / features
@@ -66,8 +37,9 @@ Beyond V2.0:
 
 V2.1.0: Overview DMN, especially for Lvls 6 & 7
    - As part of DMN, set up a presentation to the user (if simmering) for a reccomended archive cleanup (simmering files into DMN, so those files can be verified & removed once context is confirmed)
+   - Port complex Project Brainuke persistence/volition features: `sensory_pool` SQLite table, `messageboard_threads` & `quarantine_posts` tables, and Volition Loop SSE (`[VOLITION_TRIGGER]`) autonomous messaging.
 
-V2.2.0: Training station for small gemma models to learn from gemma-4-26b-a4b. allow other models. location: .\System\tests\benchmarks\training station".
+V2.2.0: Training station for small gemma models to learn from gemma-4-26b-a4b. allow other models. location: "/benchmarks/training station".
 
 V2.3.0: Subagents / MCP Overhaul
    - Add back MCP support, allow porting with SerenityDev. Consider Subagents.
@@ -75,7 +47,7 @@ V2.3.0: Subagents / MCP Overhaul
    - Coding, tool calling subagent alignment
    - Stream subagent output to set dropdowns like the thinking one for each subagent.
 
-V2.4.0: Resolve broken turbo3_tcq, turbo2_tcq, and kv cache sizes q6_0 and q6_1; update llama. Mismatched KV cache (k4/v3, k8/v4).
+V2.4.0: Resolve broken turbo3_tcq, turbo2_tcq, and kv cache sizes q6_0 and q6_1; update llama. Mismatched KV cache/fa (k4/v3, k8/v4).
 
 V2.5.0: Either revamp or remove rgb support
 
@@ -91,27 +63,19 @@ V2.9.0: Lvl 2 search lookup optimization using keyword actuated lookup extractio
 - Verify features like scrolling and clicking
 
 Backburner:
-Figure out app version compatibility and distro targets.
-- Test Dynamic Parameter Auto-Adjustment (for Coding, Math, Creative, and Factual tasks; user config; Settings toggle).
-- Verify Real-Time Diffusion Visual Denoising & Time-Grounding.  
-- Test Overfill (off/respond/wrapup/autocont).
-- Test Wringer (t/s) telemetry, prefill/decode/overall metrics, speed outlier detection, speed highscore separation, speed/accuracy weighting, and comparison graph generation.
-- Test Debate Arena (Canvas LoadingSpinner, Speedy/Simmer pacing, and multi-round role alternation).
-- Updated the font options
-- llama latest merge / non-destructively update latest llama-cpp-python, keeping all custom fixes and features.
-- add ability to wait on tool calls.
-- Add more supported kv cache types, such as turbo3_tcq, turbo2_tcq, and consider a selector to reveal/hide certain types in settings.
+- Troubleshoot Serenity lvls on smaller models (Cecilia fine, Serenity needs refining).
+- App version compatibility & distro targets.
+- Test Dynamic Parameter Auto-Adjustment (Coding/Math/Creative/Factual; user config; Settings toggle).
+- Non-destructive merge/update to latest `llama-cpp-python` keeping custom fixes.
 - Latent space tracking/reasoning capture?
-- make all cleaned tags appear in error log.
+- Wringer reasoning strengths.
+- Tool calls do run, but I'm waiting a while for it to finish. when does, prompt massdumps.
+- Disableable hints such as "Pick me! I'm all-purpose!" says Serenity Prime. or "I'll help you find it by Serenity Lvl 2. or "Hmph" -Cecilia.
 
 TBD / Future Roadmap:
 - Fix UI scaling
-- Model Fetching Architecture: Design and implement Hugging Face / remote repository model fetcher with resumable chunks, sha256 checksums, and auto-routing to target model directories (S:/LLM / Models).
+- Model Fetching Architecture: Hugging Face / remote fetcher (resumable chunks, sha256, auto-routing to `S:/LLM`, `/Models`).
 - Avatar `serenity_frustrated`.
-- Figure out how to push updates easier to users
-  - Replace hardcoded font names with dynamic configuration.
-- Wringer.py: add semantic depth and other areas (excluding tricks and catches) benchmark test banks.
-	- Expand Lvls 6 and 7, add an optional persona alignment test
-	- Coding benchmarks
-   - [Human Decision Needed]: Decide whether lvl6/lvl7 test_bank items swap or stay as-is (current lvl6 Qs read Prime-like, lvl7 Qs read Cecilia-like) before expanding questions to ~10 each.
-
+- Easier user update distribution.
+- `Wringer.py`: semantic depth & coding test banks; expand Lvls 6 & 7 + optional persona alignment test; decide whether Lvl 6/7 `test_bank` items swap or stay as-is before expanding to ~10 each.
+overview scroll lock to lines of text and wait on tool calls settings.

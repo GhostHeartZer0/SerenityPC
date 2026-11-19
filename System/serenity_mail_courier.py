@@ -31,6 +31,7 @@ import hashlib
 import hmac
 import urllib.request
 import urllib.error
+import urllib.parse
 import ssl
 import contextlib
 from dataclasses import dataclass, field, asdict
@@ -331,7 +332,16 @@ class SerenityMailCrypto:
     PBKDF2_ITERATIONS = 250_000
     SALT_SIZE = 16
     NONCE_SIZE = 12
-    DEFAULT_BMB_PASSPHRASE = "SerenityBrainukeSharedThroneKey2025!"
+
+    @classmethod
+    def _resolve_passphrase(cls, passphrase: Optional[str]) -> str:
+        """Resolves explicit or environment-provided passphrase; fails closed if none supplied."""
+        if passphrase and isinstance(passphrase, str) and passphrase.strip():
+            return passphrase
+        env_secret = os.environ.get("SERENITY_BMB_PASSPHRASE", "").strip()
+        if env_secret:
+            return env_secret
+        raise ValueError("Passphrase is required for symmetric SMP/BMB encryption/decryption.")
 
     @classmethod
     def generate_identity_keypair(cls) -> Dict[str, str]:
@@ -419,7 +429,7 @@ class SerenityMailCrypto:
                 info=b"SERENITY_P2P_SMP_V1",
             )
             return hkdf.derive(shared_secret)
-        return hashlib.pbkdf2_hmac("sha256", priv_b + pub_b, salt, 10_000, dklen=32)
+        raise RuntimeError("cryptography library (X25519/HKDF) is required for ECDH key derivation.")
 
     @classmethod
     def derive_passphrase_key(cls, passphrase: str, salt: bytes) -> bytes:
@@ -455,7 +465,7 @@ class SerenityMailCrypto:
             key = cls.derive_ecdh_shared_key(own_x25519_priv_hex, peer_x25519_pub_hex, salt)
             kdf_mode = b"\x02"  # Mode 2: X25519 ECDH
         else:
-            secret = passphrase or cls.DEFAULT_BMB_PASSPHRASE
+            secret = cls._resolve_passphrase(passphrase)
             key = cls.derive_passphrase_key(secret, salt)
             kdf_mode = b"\x01"  # Mode 1: PBKDF2 Passphrase
 
@@ -495,7 +505,7 @@ class SerenityMailCrypto:
             raw_bytes = base64.b64decode(clean_b64)
 
         if not raw_bytes.startswith(cls.HEADER_MAGIC):
-            return cls.decrypt_legacy_bmb(clean_b64, passphrase or cls.DEFAULT_BMB_PASSPHRASE)
+            return cls.decrypt_legacy_bmb(clean_b64, cls._resolve_passphrase(passphrase))
 
         offset = len(cls.HEADER_MAGIC)
         kdf_mode = raw_bytes[offset : offset + 1]
@@ -511,7 +521,7 @@ class SerenityMailCrypto:
                 raise PermissionError("X25519 peer keys required to decrypt ECDH SMP packet.")
             key = cls.derive_ecdh_shared_key(own_x25519_priv_hex, peer_x25519_pub_hex, salt)
         else:
-            secret = passphrase or cls.DEFAULT_BMB_PASSPHRASE
+            secret = cls._resolve_passphrase(passphrase)
             key = cls.derive_passphrase_key(secret, salt)
 
         aad = cls.HEADER_MAGIC + kdf_mode + salt
@@ -530,11 +540,12 @@ class SerenityMailCrypto:
         turns: List[Dict[str, Any]],
         session_id: str = "session_pc",
         device_name: str = "SerenityPC",
-        passphrase: str = DEFAULT_BMB_PASSPHRASE,
+        passphrase: Optional[str] = None,
     ) -> str:
         """Exports dialogue turns in Project Brainuke (.bmb) format using PBKDF2-HMAC-SHA256 (250k iterations)."""
         if not (CRYPTO_AVAILABLE and AESGCM is not None):
             raise RuntimeError("cryptography (AESGCM) required for .bmb compatibility.")
+        secret = cls._resolve_passphrase(passphrase)
         root_obj = {
             "type": "brainuke_messageboard_packet",
             "session_id": session_id,
@@ -546,17 +557,18 @@ class SerenityMailCrypto:
         plain_bytes = json.dumps(root_obj, ensure_ascii=False).encode("utf-8")
         salt = os.urandom(cls.SALT_SIZE)
         iv = os.urandom(cls.NONCE_SIZE)
-        key = cls.derive_passphrase_key(passphrase, salt)
+        key = cls.derive_passphrase_key(secret, salt)
         ct = AESGCM(key).encrypt(iv, plain_bytes, cls.BMB_V2_MAGIC + salt)
         return base64.b64encode(cls.BMB_V2_MAGIC + salt + iv + ct).decode("ascii")
 
     @classmethod
     def decrypt_legacy_bmb(
-        cls, encrypted_b64: str, passphrase: str = DEFAULT_BMB_PASSPHRASE
+        cls, encrypted_b64: str, passphrase: Optional[str] = None
     ) -> Dict[str, Any]:
         """Decrypts Project Brainuke (.bmb) AES-GCM packets using PBKDF2-HMAC-SHA256 key derivation."""
         if not (CRYPTO_AVAILABLE and AESGCM is not None):
             raise RuntimeError("cryptography (AESGCM) required for .bmb decryption.")
+        secret = cls._resolve_passphrase(passphrase)
         raw = base64.b64decode(encrypted_b64.strip())
         if raw.startswith(cls.BMB_V2_MAGIC):
             if len(raw) <= 4 + cls.SALT_SIZE + cls.NONCE_SIZE:
@@ -564,13 +576,13 @@ class SerenityMailCrypto:
             salt = raw[4 : 4 + cls.SALT_SIZE]
             iv = raw[4 + cls.SALT_SIZE : 4 + cls.SALT_SIZE + cls.NONCE_SIZE]
             ct = raw[4 + cls.SALT_SIZE + cls.NONCE_SIZE :]
-            key = cls.derive_passphrase_key(passphrase, salt)
+            key = cls.derive_passphrase_key(secret, salt)
             plain_bytes = AESGCM(key).decrypt(iv, ct, cls.BMB_V2_MAGIC + salt)
         else:
             if len(raw) <= 12:
                 raise ValueError("Invalid .bmb payload size.")
             iv, ct = raw[:12], raw[12:]
-            key = cls.derive_passphrase_key(passphrase, b"SERENITY_BMB_V1_SALT")
+            key = cls.derive_passphrase_key(secret, b"SERENITY_BMB_V1_SALT")
             plain_bytes = AESGCM(key).decrypt(iv, ct, None)
         return json.loads(plain_bytes.decode("utf-8"))
 
@@ -702,8 +714,9 @@ class CrossStateP2PTransport:
         canonical = json.dumps(card, sort_keys=True, separators=(",", ":")).encode("utf-8")
         pub_b = bytes.fromhex(card["ed25519_pub"])
         sig_b = bytes.fromhex(sig_hex)
-        if CRYPTO_AVAILABLE and Ed25519PublicKey is not None and len(sig_b) == 64:
-            Ed25519PublicKey.from_public_bytes(pub_b).verify(sig_b, canonical)
+        if not (CRYPTO_AVAILABLE and Ed25519PublicKey is not None and len(pub_b) == 32 and len(sig_b) == 64):
+            raise ValueError("Invalid or unverifiable Ed25519 invite signature.")
+        Ed25519PublicKey.from_public_bytes(pub_b).verify(sig_b, canonical)
         expected_fp = hashlib.sha256(
             pub_b + bytes.fromhex(card["x25519_pub"])
         ).hexdigest()[:24]
@@ -728,9 +741,12 @@ class CrossStateP2PTransport:
         """
         if not endpoint_url:
             return False, "No live endpoint URL configured for peer."
-        if is_offline_mode() and not (
-            "127.0.0.1" in endpoint_url or "localhost" in endpoint_url
-        ):
+        parsed_ep = urllib.parse.urlparse(endpoint_url)
+        if parsed_ep.scheme not in ("http", "https"):
+            return False, "Unsupported peer endpoint URL scheme."
+        host_ep = (parsed_ep.hostname or "").lower()
+        is_local = host_ep in ("127.0.0.1", "localhost", "::1")
+        if is_offline_mode() and not is_local:
             return False, "Offline Mode active: external P2P transport blocked."
 
         target = endpoint_url.rstrip("/")
@@ -756,10 +772,10 @@ class CrossStateP2PTransport:
             headers["Authorization"] = f"Bearer {auth_token}"
 
         req = urllib.request.Request(target, data=rpc_body, headers=headers, method="POST")
-        ctx = ssl.create_default_context()
-        # Allow self-signed PQC/Brainuke RootCA leaf certs on direct peer connections
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ca_bundle = os.environ.get("SERENITY_P2P_CA_BUNDLE", "").strip()
+        ctx = ssl.create_default_context(
+            cafile=ca_bundle if ca_bundle and os.path.isfile(ca_bundle) else None
+        )
 
         try:
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
@@ -999,7 +1015,7 @@ class SerenityMailboxVault:
             display_name=card["name"],
             app_edition=card.get("edition", "SerenityPC-Legacy"),
             endpoint_url=card.get("endpoint", ""),
-            dead_drop_path=card.get("dead_drop", ""),
+            dead_drop_path="",  # Ignore untrusted dead_drop paths from external invites
             x25519_public_hex=card["x25519_pub"],
             ed25519_public_hex=card["ed25519_pub"],
             fingerprint=card["fp"],
@@ -1088,9 +1104,10 @@ class SerenityDevMCPClient:
             headers["Authorization"] = f"Bearer {self.mcp_token}"
 
         req = urllib.request.Request(self.base_url, data=body, headers=headers, method="POST")
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ca_bundle = os.environ.get("SERENITY_MCP_CA_BUNDLE", "").strip()
+        ctx = ssl.create_default_context(
+            cafile=ca_bundle if ca_bundle and os.path.isfile(ca_bundle) else None
+        )
 
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -1419,8 +1436,13 @@ class Level2CourierAgent:
             # Sign with local Ed25519 private key
             SerenityMailCrypto.sign_envelope(envelope, ident["ed25519_private_hex"])
 
-            # Encrypt with X25519 ECDH if peer public key is available, else passphrase
+            # Encrypt with X25519 ECDH if peer public key is available, else explicit shared passphrase
             use_ecdh = bool(peer.get("x25519_public_hex") and not peer.get("shared_passphrase"))
+            if not use_ecdh and not peer.get("shared_passphrase"):
+                return {
+                    "status": "error",
+                    "message": f"Peer '{peer['display_name']}' lacks X25519 public key or shared passphrase.",
+                }
             smp_b64 = SerenityMailCrypto.encrypt_smp(
                 envelope,
                 passphrase=peer.get("shared_passphrase") or None,
@@ -1479,13 +1501,24 @@ class Level2CourierAgent:
                 fp.write(smp_b64)
 
             if peer.get("dead_drop_path") and os.path.isdir(peer["dead_drop_path"]):
-                dd_file = os.path.join(peer["dead_drop_path"], smp_filename)
-                try:
-                    with open(dd_file, "w", encoding="utf-8") as fp:
-                        fp.write(smp_b64)
-                    transport_note += f" | Synced to Dead-Drop ({dd_file})"
-                except Exception:
-                    pass
+                dd_real = os.path.realpath(peer["dead_drop_path"])
+                allowed_dd_roots = [
+                    os.path.realpath(SerenityEnvResolver.get_writable_root(self.app)),
+                    os.path.realpath(self.mailbox.mailbox_dir),
+                ]
+                def _under_root(root_p: str, target_p: str) -> bool:
+                    try:
+                        return os.path.commonpath([root_p, target_p]) == root_p
+                    except ValueError:
+                        return False
+                if any(_under_root(r, dd_real) for r in allowed_dd_roots):
+                    dd_file = os.path.join(dd_real, smp_filename)
+                    try:
+                        with open(dd_file, "w", encoding="utf-8") as fp:
+                            fp.write(smp_b64)
+                        transport_note += f" | Synced to Dead-Drop ({dd_file})"
+                    except Exception:
+                        pass
 
             if not delivered_live:
                 with self.mailbox._get_connection() as conn:
@@ -1648,7 +1681,7 @@ class Level2CourierAgent:
             with self.mailbox._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT OR REPLACE INTO quarantine_sandbox (
+                    INSERT OR IGNORE INTO quarantine_sandbox (
                         packet_id, sender_id, sender_name, msg_type, subject,
                         content, raw_envelope_json, intent_label, risk_score,
                         hold_reason, status, quarantined_at
@@ -1734,6 +1767,15 @@ class Level2CourierAgent:
 
             if act == "admit":
                 env = InterSerenityEnvelope.from_json(row["raw_envelope_json"])
+                raw_target_lvl = int(env.recipient.get("target_lvl", 2))
+                cecilia_p2p_mode = (
+                    getattr(self.app, "config", {}).get("cecilia_p2p_mode", "quarantine_gate")
+                    if self.app and hasattr(self.app, "config")
+                    else "quarantine_gate"
+                )
+                if raw_target_lvl == 7 and cecilia_p2p_mode == "off":
+                    return {"status": "error", "message": "Cannot admit Level 7 packet while cecilia_p2p_mode is 'off'."}
+                effective_lvl = 2 if (raw_target_lvl == 7 and cecilia_p2p_mode == "quarantine_gate") else raw_target_lvl
                 cursor.execute("""
                     INSERT OR IGNORE INTO mailbox_messages (
                         packet_id, folder, msg_type, sender_id, sender_name,
@@ -1750,7 +1792,7 @@ class Level2CourierAgent:
                     row["content"],
                     env.payload.get("attachment_type", "none"),
                     json.dumps(env.payload.get("attachment", {})),
-                    int(env.recipient.get("target_lvl", 2)),
+                    effective_lvl,
                     env.mode,
                     now_ms,
                 ))
@@ -1820,15 +1862,29 @@ class Level2CourierAgent:
 
             if self.mcp_client.is_online():
                 try:
-                    mcp_res = self.mcp_client.call_rpc(
-                        "serenitydev/orchestrate",
-                        otl_snapshot,
+                    import urllib.request
+                    raw_base = getattr(self.mcp_client, "base_url", "http://127.0.0.1:8002/mcp")
+                    base_url = raw_base.rsplit("/mcp", 1)[0] if "/mcp" in raw_base else raw_base.rstrip("/")
+                    ask_payload = json.dumps({"prompt": f"/{cmd}: {prompt}", "session_id": f"serenitypc_{sub_id}"}).encode("utf-8")
+                    req = urllib.request.Request(
+                        f"{base_url}/ask",
+                        data=ask_payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
                     )
-                    output = mcp_res.get("result", mcp_res)
+                    try:
+                        with urllib.request.urlopen(req, timeout=30.0) as resp:
+                            output = json.loads(resp.read().decode("utf-8", errors="replace"))
+                    except Exception:
+                        mcp_res = self.mcp_client.call_rpc(
+                            "tools/call",
+                            {"name": cmd, "arguments": otl_snapshot},
+                        )
+                        output = mcp_res.get("result", mcp_res)
                     self._emit_subagent_event(
                         sub_id,
                         "stream",
-                        chunk=f"SerenityDev response received.\n",
+                        chunk="SerenityDev response received.\n",
                         level=3,
                     )
                     return {

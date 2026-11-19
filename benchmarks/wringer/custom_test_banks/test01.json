@@ -1,0 +1,330 @@
+{
+  "lvl1": [
+    {
+      "prompt": "In the context of source file properties used by language wrapping tools, what is the specific purpose of the property that identifies whether a source file represents an abstract class, and what is a key constraint regarding its applicability?",
+      "reference": "The property indicates if a source file represents an abstract class. Its applicability is constrained to languages that support the concept of abstract classes, and it is primarily utilized by tools that wrap classes into other languages."
+    },
+    {
+      "prompt": "In a CMake project, if the command `add_compile_definitions(VAR_NAME)` is executed within a specific `CMakeLists.txt` file, describe the two distinct locations (properties) where these definitions are applied and mention what type of syntax can be used as arguments for this command.",
+      "reference": "The definitions are added to the COMPILE_DEFINITIONS directory property for the current CMakeLists.txt file and to the COMPILE_DEFINITIONS target property for every target defined within that same file. Arguments may also utilize generator expressions using the $<...> syntax."
+    },
+    {
+      "prompt": "In a CMake project, if a developer uses the `add_compile_options` command in a top-level directory, how are these options applied to a target located in a subdirectory, and how does CMake handle potential duplicate options within the final compilation command line?",
+      "reference": "Options added via `add_compile_options` are applied to all targets in the current directory and all subdirectories. The final set of options for a target is constructed by accumulating options from the target itself and the usage requirements of its dependencies; duplicates are automatically de-duplicated to prevent repetition in the final command line."
+    },
+    {
+      "prompt": "In the context of defining custom commands for file generation, what is the specific rule regarding the use of the OUTPUT parameter when multiple independent targets might attempt to build in parallel, and what is the recommended architectural approach to avoid conflicts?",
+      "reference": "To avoid conflicts or race conditions where multiple parallel build instances might attempt to generate the same file, you should not list the same output in more than one independent target. Instead, you should use the add_custom_target() command to drive the command and make the other targets depend on that specific custom target."
+    },
+    {
+      "prompt": "In a build system configuration, what is the fundamental difference between using `add_custom_target` and `add_custom_command` regarding output files, and how does the `BYPRODUCTS` parameter in `add_custom_target` affect the build tool's behavior?",
+      "reference": "The fundamental difference is that `add_custom_target` creates a target that has no output file and is always considered out of date, whereas `add_custom_command` is used to generate a specific file with dependencies. The `BYPRODUCTS` parameter in `add_custom_target` allows you to specify files that the command is expected to produce; this tells build tools (like Ninja) to regenerate these files if they are missing and marks them with the GENERATED source file property."
+    },
+    {
+      "prompt": "Based on the provided documentation for the 'add_definitions' command, explain how the command handles flags that begin with '-D' or '/D' and what specific property they are automatically added to. Additionally, under what specific circumstance might a definition with a non-trivial value remain in its original flag format rather than being converted?",
+      "reference": "Flags beginning with -D or /D that look like preprocessor definitions are automatically added to the COMPILE_DEFINITIONS directory property for the current directory. Definitions with non-trivial values may be left in the set of flags instead of being converted to ensure backwards compatibility."
+    },
+    {
+      "prompt": "In CMake, if you use the `add_dependencies` command to make a target 'A' depend on target 'B', how does the behavior of this dependency guarantee differ when using the Ninja Generator compared to other generators, specifically regarding the timing of the dependency's completion?",
+      "reference": "When using the Ninja Generator, the guarantee is weaker: it only ensures that the custom commands associated with the dependency (target B) are finished before the source files of the dependent target (target A) begin compiling. This is designed to ensure generated sources are available, whereas other generators provide a stronger ordering guarantee."
+    },
+    {
+      "prompt": "In the context of C++ macro definitions, explain the behavior and the specific distinction between the status of a program that attempts to redefine a predefined macro name, specifically noting how the language standard's classification of this error changes in the transition to C++26.",
+      "reference": "Attempting to redefine a predefined macro name results in undefined behavior in versions prior to C++26. Starting with C++26, such a program is classified as ill-formed."
+    },
+    {
+      "prompt": "In the context of C++ preprocessing, explain how the behavior of the `__has_include` operator differs from a standard macro when used within conditional directives, and specify how the search scope for headers typically functions in a standard implementation.",
+      "reference": "Unlike standard macros, `__has_include` is treated as a defined macro by `#ifdef`, `#ifndef`, `#elifdef`, and `#elifndef` (as of C++23), but it cannot be used anywhere else. Regarding header search scope, typical implementations search only standard include directories for syntax, which implicitly include the standard C++ and standard C libraries, though these directories can often be controlled via compiler options."
+    },
+    {
+      "prompt": "According to the provided text, how does the behavior of the #line directive change regarding the specified lineno if the standard being used is C++26 compared to the standard prior to C++26, specifically when the decimal number is 0 or greater than 32767 (for pre-C++11) or 2147483647 (for C++11 and later)?",
+      "reference": "Prior to C++26, if the specified lineno is 0 or greater than 32767 (pre-C++11) or 2147483647 (since C++11), the behavior is undefined. Since C++26, the program is considered ill-formed in these cases."
+    },
+    {
+      "prompt": "According to the provided text, what is the relationship between the ISO C++ language standard and pragma directives, and how does the standard treat unrecognized pragmas?",
+      "reference": "The ISO C++ language standard does not require compilers to support any pragmas, and any pragma that is not recognized by a compiler is ignored."
+    },
+    {
+      "prompt": "In the context of C++ class definitions, explain the syntactic requirements for a 'pure-specifier' (= 0) and identify the specific error in the code snippet: 'virtual int b() = 0 {}'. Additionally, define the criteria that make a class an 'abstract class'.",
+      "reference": "A pure-specifier (= 0) must appear either immediately after the declarator or after an optional virt-specifier (such as 'override' or 'final'). The provided code snippet is erroneous because a pure-specifier cannot be followed by a function body '{}'. A class is considered an abstract class if it defines or inherits at least one function for which the final overrider is pure virtual."
+    },
+    {
+      "prompt": "In the context of C++ class member access rules, explain why the expression `e.n = 7;` in the provided code snippet results in a compilation error, and distinguish between the roles of 'interface' and 'implementation' as described in the text.",
+      "reference": "The expression `e.n = 7;` fails to compile because the member `n` is declared under the `private` access specifier, meaning it cannot be accessed from outside the class (e.g., from `main`). According to the text, access specifiers allow authors to separate the 'interface' (the public members accessible to users) from the 'implementation' (the private members intended for internal class use)."
+    },
+    {
+      "prompt": "In C++, when taking the address of an overloaded function to assign it to a specific target type, the selection of functions (set S) depends on the target type. Explain the difference in the allowed function types in set S when the target is a function pointer type versus when the target is a pointer-to-member-function type.",
+      "reference": "When the target is a function pointer type or a reference to a function type, the set S can include non-member functions, static member functions, and explicit object member functions (as of C++23). However, if the target is a pointer-to-member-function type, the set S is restricted to only include implicit object member functions."
+    },
+    {
+      "prompt": "In FastAPI, when using a dependency class (like 'checker') to provide values to a path operation function, what is the specific mechanism or method used by FastAPI to inspect the dependency for additional parameters or sub-dependencies and to ultimately pass the calculated value to the function?",
+      "reference": "FastAPI uses the dependency's `__call__` method to check for additional parameters/sub-dependencies and to pass the resulting value to the path operation function."
+    },
+    {
+      "prompt": "In the provided Python code snippet using FastAPI, explain the primary technical advantage of using `StreamingResponse` with an `AsyncIterable` when handling large binary files, and describe how the `stream_story` function implements this mechanism.",
+      "reference": "The primary advantage is memory efficiency; it allows streaming data in chunks as it is read, preventing the need to load the entire file into memory at once. The `stream_story` function implements this by iterating over the lines of the 'message' string using `splitlines()` and yielding each line one by one via the `yield` keyword, which creates an asynchronous generator compatible with `StreamingResponse`."
+    },
+    {
+      "prompt": "In the context of FastAPI dependency injection, if a dependency uses the `yield` keyword to manage a database session (e.g., `db = DBSession()`), describe the execution flow regarding error handling and resource cleanup when an exception occurs within a downstream path operation that depends on that database session.",
+      "reference": "When an exception occurs in a path operation or a downstream dependency, the execution flow returns to the generator dependency at the point of the `yield`. The code within the `finally` block of the dependency is guaranteed to execute, ensuring that resources like the database session are properly closed (e.g., `db.close()`) even if the request results in an error."
+    },
+    {
+      "prompt": "In FastAPI, when using the `Depends()` function to inject a dependency into a path operation function, how does the framework handle the parameters of the dependency itself if that dependency is a callable? Explain the mechanism and its implications for sub-dependencies.",
+      "reference": "When a callable is passed as a dependency, FastAPI performs dependency injection by analyzing the parameters of that callable. It processes those parameters using the same logic applied to path operation functions, which includes the ability to resolve and inject sub-dependencies recursively."
+    },
+    {
+      "prompt": "In a FastAPI application implementing an OAuth2 password flow, what is the technical difference between defining a parameter as `username: Annotated[str, Form()]` versus `username: str = Form()` in Python 3.10+, and why are both used in the context of form field requirements?",
+      "reference": "The difference is syntactic: `Annotated[str, Form()]` is the modern, recommended way to attach metadata to a type hint (introduced in PEP 593), whereas `username: str = Form()` uses a default argument to assign the FastAPI Form dependency. Both achieve the same functional result: they instruct FastAPI to extract the value from the request body as a form field rather than a query parameter or JSON body."
+    },
+    {
+      "prompt": "Based on the provided deployment notification, what is the automatic behavior of the CLI if the user is not currently authenticated, and what is the URL where the application will be hosted?",
+      "reference": "The CLI will automatically open the user's browser to complete the authentication process, and the application will be ready at https://myapp.fastapicloud.dev."
+    }
+  ],
+  "lvl2": [
+    {
+      "prompt": "Based on the provided text, explain why FastAPI's versioning currently follows the 0.x.x format and what specific implication this has for developers building production applications.",
+      "reference": "FastAPI uses the 0.x.x versioning format to reflect that development is moving quickly and that each new version could potentially introduce breaking changes. For developers building production applications, this means they must ensure the specific version they use is compatible with the rest of their existing code."
+    },
+    {
+      "prompt": "Explain the functional relationship between the <a> element's href attribute and keyboard accessibility, and describe the specific server-side mechanism triggered when the Attribution-Reporting-Eligible attribute is utilized.",
+      "reference": "The href attribute enables keyboard accessibility by allowing the <a> element to be activated via the Enter key when focused. When the Attribution-Reporting-Eligible attribute is used, it instructs the browser to send an 'Attribution-Reporting-Eligible' header, which triggers the server to respond with an 'Attribution-Reporting-Register-Source' header to register a navigation-based attribution source."
+    },
+    {
+      "prompt": "According to the provided documentation, what are the two specific requirements for using the <abbr> tag when an abbreviation or acronym is first introduced in a text, and what is the specific constraint regarding the use of the 'title' attribute?",
+      "reference": "When using the <abbr> tag for the first time, you must provide the full expansion of the term in plain text alongside the markup. If the 'title' attribute is used to provide the expansion instead, it must contain the full description and nothing else."
+    },
+    {
+      "prompt": "Explain the functional difference between the 'accept' attribute in an HTML file input element and actual file validation, and describe how a user might bypass the attribute's constraints.",
+      "reference": "The 'accept' attribute does not perform actual validation; instead, it provides hints to the browser to guide users toward selecting specific file types (e.g., using 'audio/*', 'video/*', or specific extensions). Because it is only a hint, users can often bypass these constraints by toggling options within their operating system's file chooser to allow any file type to be selected."
+    },
+    {
+      "prompt": "Based on the provided technical documentation for the HTML 'accesskey' attribute, identify the specific constraint regarding the character used for the attribute value and explain why the provided code snippet `<button accesskey=\"s\">Stress reliever</button>` would be considered valid according to that constraint.",
+      "reference": "The attribute value must consist of a single printable character. The provided code is valid because 's' is a single printable character."
+    },
+    {
+      "prompt": "Based on the provided documentation regarding deprecated features, what are the three primary reasons why a web feature might be labeled as deprecated, and what is the recommended action for developers using such features in their code?",
+      "reference": "A feature may be deprecated because it has been removed from web standards, is in the process of being dropped, or is being kept solely for compatibility purposes. Developers are advised to avoid using these features and to update existing code where possible."
+    },
+    {
+      "prompt": "Explain the technical difference between nesting an image within an <a> tag versus using an HTML image map, and describe the specific accessibility issue that arises when multiple images reference the same image map in Safari and Chromium-based browsers.",
+      "reference": "Nesting an image within an <a> tag creates a single hyperlink for the entire image, whereas an image map allows for multiple 'hotspots' within a single image that link to different resources. When multiple images reuse the same image map in Safari and Chromium-based browsers, keyboard navigation is broken because subsequent image instances using that map are skipped entirely."
+    },
+    {
+      "prompt": "Based on the provided text, explain the fundamental relationship between JavaScript and HTML, and identify the specific HTML element required to execute JavaScript code within a browser.",
+      "reference": "JavaScript requires an HTML webpage to function; it does not execute on its own within a browser. To call or run JavaScript code from within an HTML document, the <script> element must be used."
+    },
+    {
+      "prompt": "Explain why attempting to instantiate an `AbstractModuleSource` object using its constructor directly (e.g., `new AbstractModuleSource()`) results in a `TypeError`, and describe the correct mechanism for obtaining an instance of a module source object.",
+      "reference": "Attempting to instantiate `AbstractModuleSource` directly fails because it is an abstract class that is not exposed as a global property in the JavaScript environment; it is an 'intrinsic' class accessible only through prototype inspection. To obtain a module source object, one must use the `import source` statement, the `import.source()` method, or a specific module type API like `WebAssembly.Module()`."
+    },
+    {
+      "prompt": "Explain the dual functionality of the addition assignment (+=) operator in programming, specifying the two distinct operations it can perform depending on the operand types, and list five different runtime environments or browsers where this operator is supported.",
+      "reference": "The addition assignment (+=) operator performs two types of operations: numeric addition (for numbers) or string concatenation (for strings), assigning the result back to the left operand. Supported environments include browsers like Chrome, Firefox, and Safari, as well as runtimes like Node.js, Bun, or Deno."
+    },
+    {
+      "prompt": "Explain the fundamental difference between an `AggregateError` and a `SuppressedError` in JavaScript, and describe the specific scenario involving `Promise.any()` that would lead to the creation of an `AggregateError`.",
+      "reference": "The fundamental difference is that `AggregateError` is used to wrap a list of multiple, unrelated errors into a single object, whereas `SuppressedError` is used to represent an error that occurs specifically during the handling of another error. An `AggregateError` is thrown by `Promise.any()` when all of the promises passed to it are rejected."
+    },
+    {
+      "prompt": "Consider the following JavaScript code snippet:\n\n```javascript\ntry {\n throw AggregateError([new Error(\"First error\"), new Error(\"Second error\")], \"Multiple failures occurred\");\n} catch (err) {\n console.log(err.name, err.message, err.errors.length);\n}\n```\n\nBased on the technical specifications of the `AggregateError` constructor, what will be the exact output of the `console.log` statement?",
+      "reference": "AggregateError Multiple failures occurred 2"
+    },
+    {
+      "prompt": "In JavaScript, if an `AggregateError` is thrown containing a `Set` of error objects as its first argument, what property must be accessed to retrieve the collection of individual errors, and what will be the data type of that property?",
+      "reference": "The property to access is `errors`, and its data type will be an iterable (specifically an array-like collection of the error objects provided)."
+    },
+    {
+      "prompt": "Consider a JavaScript function defined as `function example(a, b) { console.log(arguments.length, example.length); }`. If this function is invoked as `example(1, 2, 3, 4)`, what will be the exact output logged to the console, and what is the fundamental difference between how `arguments.length` and `example.length` derive their values in this context?",
+      "reference": "The output will be '4 2'. The difference is that `arguments.length` returns the number of arguments actually passed to the function during the call (which is 4), whereas `example.length` returns the number of formal parameters declared in the function definition (which is 2)."
+    },
+    {
+      "prompt": "In the context of the Jinja templating engine, how are extensions integrated into the environment, and what specific functionality does the 'i18n' extension provide when used with tools like gettext?",
+      "reference": "Extensions are added to the Jinja environment at the time of its creation by passing a list of extension classes or import paths to the 'extensions' parameter of the Environment constructor. The 'i18n' extension enables the use of a 'trans' statement, which marks specific blocks of code as translatable and triggers a call to gettext."
+    },
+    {
+      "prompt": "Based on the provided documentation, identify the two primary components that make up a Jinja template and explain the functional difference between them during the rendering process.",
+      "reference": "A Jinja template consists of variables/expressions and tags. During rendering, variables and expressions are replaced with specific values, whereas tags are used to control the logic of the template."
+    },
+    {
+      "prompt": "In the context of the Jinja API, what is the primary purpose of the 'Environment' class, and how does its lifecycle typically function within a standard application implementation?",
+      "reference": "The Environment class serves as a central object used to store configuration and global objects, and it is responsible for loading templates from various locations (such as the file system). In most applications, a single Environment object is created during application initialization and reused to load templates, though multiple environments can be used simultaneously if different configurations are required."
+    },
+    {
+      "prompt": "Based on the provided legal disclaimer, identify the specific types of damages that the copyright holders and contributors are explicitly disclaiming liability for, and specify the legal theories under which these disclaimers apply.",
+      "reference": "The disclaimer covers direct, indirect, incidental, special, exemplary, or consequential damages (including loss of use, data, profits, or business interruption). These disclaimers apply regardless of the theory of liability, whether in contract, strict liability, or tort (including negligence)."
+    },
+    {
+      "prompt": "In the context of using Jinja2's `SandboxedEnvironment` to allow users to render custom templates, explain how the sandbox prevents a user from accessing sensitive internal attributes of a function object (such as `__code__`) and identify a potential resource exhaustion attack vector that the sandbox itself does not prevent.",
+      "reference": "The `SandboxedEnvironment` prevents access to sensitive attributes by intercepting attribute access and raising a `SecurityError` when an unsafe attribute (like `__code__`) is requested. However, the sandbox does not prevent resource exhaustion attacks where a small template is designed to generate a disproportionately large amount of output, potentially consuming excessive CPU or memory."
+    },
+    {
+      "prompt": "According to the provided text regarding Jinja's philosophy and technical requirements, what is the recommended approach for managing project dependencies, and what is the minimum supported Python version?",
+      "reference": "The recommended approach is to use a virtual environment to isolate project dependencies from the system and other projects. The minimum supported Python version is 3.7."
+    }
+  ],
+  "lvl3": [
+    {
+      "prompt": "Explain the primary functional difference between the default Jinja Environment and the `NativeEnvironment` when rendering templates, and provide an example of how `NativeEnvironment` handles a template containing a list comprehension-style loop compared to the default behavior.",
+      "reference": "The primary difference is that the default Environment renders templates into strings, whereas `NativeEnvironment` renders templates into native Python types (such as integers, lists, etc.). For example, when using `NativeEnvironment` to render a template like '[{% for item in data %}{{ item + 1 }},{% endfor %}]' with data=[0, 1, 2], it will produce a Python list object [1, 2, 3], whereas the default environment would produce a string '[1, 2, 3, ]'."
+    },
+    {
+      "prompt": "When migrating an Android dependency from a pure Android project to a Kotlin Multiplatform (KMP) module, what is the recommended way to declare it to ensure it is scoped correctly to the Android source set, and how should you handle a dependency that was previously declared using a configuration like 'debugImplementation'?",
+      "reference": "To ensure correct scoping, Android dependencies should be added to a specific Android source set within the shared directory's build.gradle(.kts) file. If a dependency used a non-trivial configuration name in the original project (such as 'debugImplementation'), it should be moved to a source set named 'androidDebug' to maintain the same configuration scope."
+    },
+    {
+      "prompt": "In a Kotlin Multiplatform project, if you want to include a library that is shared across all target platforms, where specifically within the build.gradle(.kts) file should the dependency be declared, and what is the standard configuration block structure required to achieve this?",
+      "reference": "To include a library shared across all target platforms, the dependency should be added within the 'dependencies' block inside the 'commonMain' source set, which is nested under the 'kotlin' and 'sourceSets' blocks in the build.gradle(.kts) file."
+    },
+    {
+      "prompt": "In a Kotlin Multiplatform Mobile project, what are the specific requirements for using a Swift-based library within the iOS source sets, and what is the recommended method for managing iOS dependencies?",
+      "reference": "To use a Swift-based library, its APIs must be exported to Objective-C using the @objc attribute, as pure Swift dependencies are not yet supported. The recommended method for managing iOS dependencies is using CocoaPods."
+    },
+    {
+      "prompt": "Based on the provided text, identify the specific date range during which Advent of Code puzzles are published and list three specific Kotlin-related programming techniques or concepts mentioned that can be used to solve these puzzles.",
+      "reference": "Puzzles are published from December 1 to December 25. Three Kotlin techniques mentioned include: string utility functions, regular expressions, operations on collections, the 'let' function, imperative vs. functional styles, working with pairs, the 'reduce()' function, or fixing integer overflows."
+    },
+    {
+      "prompt": "In the context of defining a custom annotation, explain the functional difference between using @Target and @Retention, and describe the specific purpose of applying @MustBeDocumented to an annotation.",
+      "reference": "@Target defines the types of elements (e.g., classes, methods, properties) that can be annotated, whereas @Retention determines if the annotation is stored in class files and remains visible via reflection at runtime. @MustBeDocumented ensures the annotation is included in the generated public API documentation."
+    },
+    {
+      "prompt": "In a Kotlin/Native target configuration within a Kotlin Multiplatform project, explain why a developer might find that their project produces a *.klib artifact but fails to produce a standalone executable or a shared library, and identify the specific mechanism used to resolve this.",
+      "reference": "By default, the kotlin-multiplatform plugin only produces a *.klib library artifact and a debug test executable; it does not create production binaries automatically. To produce final native binaries like executables or shared libraries, the developer must use the 'binaries' property of the native target to declare and configure them."
+    },
+    {
+      "prompt": "In a Kotlin Multiplatform project, if you want to ensure that all compiler warnings are treated as errors across every target and every compilation (including production, unit tests, and any custom compilations like integration tests), how should you configure the `compilerOptions` within the `kotlin` block?",
+      "reference": "You should iterate through all targets and all compilations within the kotlin block and set `allWarningsAsErrors` to true: \n\nkotlin {\n targets.all {\n compilations.all {\n compilerOptions.configure {\n allWarningsAsErrors.set(true)\n }\n }\n }\n}"
+    },
+    {
+      "prompt": "In LaTeX mathematical typesetting, how does the rendering of the expression A_1*A_2*A_3*A_4 change when a line break is introduced specifically between the second and third terms compared to when no line break occurs?",
+      "reference": "If no line break occurs, LaTeX renders the expression as a single continuous string: A_1 A_2 A_3 A_4. If a line break occurs between the two middle terms, LaTeX renders the first line as A_1 A_2 imes and the subsequent line as A_3 A_4."
+    },
+    {
+      "prompt": "In LaTeX, what is the specific function of the \\- command within a word, and how does its behavior differ from LaTeX's default hyphenation algorithm?",
+      "reference": "The \\- command explicitly tells LaTeX that a word may be hyphenated at that specific point. While LaTeX's default algorithm automatically finds most correct hyphenation points, the \\- command restricts hyphenation to only the points where the command is inserted, overriding the default behavior for exceptional cases."
+    },
+    {
+      "prompt": "In LaTeX, how does the command \\@. function to control sentence-ending spacing, and why is it specifically necessary when a period follows a capital letter?",
+      "reference": "The \\@. command is used to explicitly tell LaTeX that a period ends a sentence. This is necessary because LaTeX's default logic assumes a period following a capital letter is part of an abbreviation rather than a sentence terminator. By using \\@., the user ensures that LaTeX applies the increased spacing associated with sentence-ending punctuation (controlled by \\spacefactor) rather than treating it as an abbreviation."
+    },
+    {
+      "prompt": "In LaTeX, the internal command \\@dottedtocline is used to format entries in the table of contents, list of figures, or list of tables. Based on the provided documentation, if the command is called with only three explicit arguments\u2014such as \\@dottedtocline{1}{1.5em}{2.3em}\u2014how does the command retrieve the actual text of the entry and its corresponding page number?",
+      "reference": "The command retrieves the final text and pagenumber arguments by calling the \\contentsline command."
+    },
+    {
+      "prompt": "In LaTeX, why can't a command name directly include an asterisk (e.g., \\section*) to create a starred version of itself, and what is the standard technical mechanism used to implement this functionality for commands?",
+      "reference": "A command name cannot include an asterisk because the asterisk is not considered a letter in LaTeX command syntax. To implement starred versions, a single user-called command (e.g., \\mycmd) is defined to 'peek ahead' at the next character. If a star is detected, it expands to a specific internal command designed for starred behavior (e.g., \\mycmd@star); otherwise, it expands to a version for non-starred behavior (e.g., \\mycmd@nostar). These internal commands often use the '@' character and must be defined within a \\makeatletter block."
+    },
+    {
+      "prompt": "In LaTeX, when redefining a sectioning command like \\section using the \\@startsection macro, what is the specific structural requirement regarding the placement of the \\@startsection command within the \\renewcommand definition to ensure the command maintains its standard calling form (such as the optional star version)?",
+      "reference": "The \\@startsection command must be placed last in the definition of the redefined command."
+    },
+    {
+      "prompt": "Based on the provided text, explain the fundamental difference between the intended purpose of HTML and Markdown, and identify the primary stylistic inspiration for Markdown's syntax.",
+      "reference": "The fundamental difference is that HTML is a publishing format, whereas Markdown is a writing format designed to be easy to read, write, and edit prose. The primary inspiration for Markdown's syntax is the format of plain text email."
+    },
+    {
+      "prompt": "In PowerShell, what is the specific term used to describe the 'hidden' properties and methods added to objects upon creation, and which parameter must be used with the Get-Member cmdlet to reveal them?",
+      "reference": "These hidden members are known as 'intrinsic members', and they can be viewed using the -Force parameter of the Get-Member cmdlet."
+    },
+    {
+      "prompt": "In the context of PowerShell error handling, explain the fundamental difference between non-terminating and statement-terminating errors, and identify which mechanism\u2014error action preferences or try/catch/trap blocks\u2014is primarily used to intercept and handle these errors to prevent script interruption.",
+      "reference": "Non-terminating errors allow the script to continue executing the subsequent lines of code, whereas statement-terminating errors immediately halt the execution of the current statement. To intercept and handle these errors to prevent interruption, one uses error action preferences (like $ErrorActionPreference) to change the error's behavior or try/catch/trap blocks to implement structured exception handling."
+    },
+    {
+      "prompt": "In PowerShell, what is the relationship between the Alias provider and the Alias: drive, and how can a user navigate to that drive to manage aliases?",
+      "reference": "The Alias provider exposes its data store through the Alias: drive. To manage aliases by changing your location to that drive, you use the 'Set-Location' (or 'cd') command targeting the Alias: drive."
+    },
+    {
+      "prompt": "In PowerShell, if you execute the command 'New-Alias -Name gas -Value Get-AuthenticodeSignature', what is the functional difference between using the term 'gas' and 'Get-AuthenticodeSignature' in subsequent commands, and name two built-in aliases that serve as alternatives to the 'Get-ChildItem' cmdlet.",
+      "reference": "There is no functional difference; 'gas' acts as an alternate name or nickname that can be used instead of the original cmdlet name. Two built-in aliases for 'Get-ChildItem' are 'ls' and 'dir'."
+    },
+    {
+      "prompt": "In the context of PowerShell's support for ANSI escape sequences, explain how the 'base members' function regarding output rendering and describe the mechanism that allows a user to modify the visual representation of a specific text style, such as 'bold'.",
+      "reference": "The base members return strings of ANSI escape sequences that are mapped to their specific names. To modify a visual style, such as changing 'bold' to 'underlined', a user can set the value of the corresponding property to a different ANSI escape sequence."
+    }
+  ],
+  "lvl4": [
+    {
+      "prompt": "In PowerShell, if you evaluate the expression '\"A\" + 2', what is the resulting value, and what specific rule determines how the expression is evaluated?",
+      "reference": "The resulting value is \"A2\". The evaluation method is determined by the type of the leftmost object in the expression, which in this case is a string."
+    },
+    {
+      "prompt": "In PowerShell, if you initialize an array using the syntax `$myArray = 5..8`, what is the specific data type of this array by default, and which method would you call to programmatically verify this type?",
+      "reference": "The array is an object array (System.Object[]) by default, and you would use the GetType() method to verify it."
+    },
+    {
+      "prompt": "In Python, if an object's class does not define a __bool__() method, under what specific condition will the object be evaluated as False when tested for its truth value?",
+      "reference": "An object is considered False if its class defines a __len__() method that returns zero when called with the object."
+    },
+    {
+      "prompt": "According to the documentation, what is the recommended way to use the Cmd class, and what role does the 'completekey' argument play in its functionality?",
+      "reference": "The Cmd class should not be instantiated directly; instead, it should be used as a superclass for a custom interpreter class to inherit its methods and encapsulate action methods. The 'completekey' argument specifies the readline name of the completion key (defaulting to 'Tab'); if it is not set to None and readline is available, command completion is performed automatically."
+    },
+    {
+      "prompt": "In the Python `curses.ascii` module, how are arguments handled when a single-character string is passed to a membership testing function instead of an integer, and what is the underlying mechanism used for this conversion?",
+      "reference": "When a single-character string is passed, it is first converted to its corresponding integer value using the built-in `ord()` function before being processed."
+    },
+    {
+      "prompt": "In the process of parsing a Python program, what specific error is raised by the lexical analyzer if it fails to decode the program text into source characters, and what is the default encoding used for this decoding process?",
+      "reference": "A SyntaxError is raised if the text cannot be decoded, and the default encoding used is UTF-8."
+    },
+    {
+      "prompt": "In the context of the module described, explain how the module handles filenames starting with a period (e.g., '.hidden_file') and clarify whether the filename separator (e.g., '/') is treated as a special character during pattern matching.",
+      "reference": "Filenames starting with a period are not treated as special; they are matched by the '*' and '?' patterns. The filename separator (such as '/' on Unix) is not considered a special character by this module."
+    },
+    {
+      "prompt": "In Python's string formatting implementation, what is the relationship between the built-in str.format() method and the Formatter class in the string module, and which specific method does the primary API method call to perform the actual formatting?",
+      "reference": "The built-in str.format() method is a wrapper that calls the vformat() method. The Formatter class in the string module allows for custom formatting behaviors by using the same underlying implementation as the built-in format() method."
+    },
+    {
+      "prompt": "In the context of the Python `struct` module, explain the fundamental difference in how memory alignment and padding are handled when using 'native mode' versus when communicating with external data sources. Additionally, identify the mechanism used to allow various object types to be used as buffers to avoid unnecessary copying.",
+      "reference": "In 'native mode' (the default when no prefix character is used), the module automatically includes pad bytes to maintain proper alignment based on the platform and compiler's C implementation. Conversely, when communicating with external sources, the programmer is responsible for manually defining byte ordering and padding. To avoid unnecessary copying, the module uses the 'Buffer Protocol', which allows objects like bytes and bytearray to be read or filled directly."
+    },
+    {
+      "prompt": "Consider a React application structure where a Server Component imports a component named `RichTextEditor` from a file that contains the `'use client'` directive at the top. Within the `RichTextEditor` file, the component uses two other components: `Button` and `formatDate`. Based on the provided technical rules, determine whether `Button` and `formatDate` are considered Client Components or Server Components, and explain the reasoning regarding their evaluation context.",
+      "reference": "Both `Button` and `formatDate` are considered Client Components. According to the rules, if a module contains a 'use client' directive, any usage of that component is guaranteed to be a Client Component. Furthermore, dependencies of a Client Component (like `Button` and `formatDate`) are evaluated on the client regardless of whether they contain their own 'use client' directive, as they become transitive dependencies of a module that contains the directive."
+    },
+    {
+      "prompt": "In the context of Next.js Server Functions, identify the three specific syntactic and structural constraints regarding the placement and formatting of the 'use server' directive as described in the documentation. Additionally, explain the behavioral difference between applying the directive to an individual function versus applying it to an entire module.",
+      "reference": "1. Syntactic/Structural Constraints: (a) It must be at the very beginning of the function or module (above any other code, including imports); (b) It must be written using single or double quotes (not backticks); (c) Comments are allowed above the directive. 2. Behavioral Difference: Applying it to an individual function marks only that specific function as a Server Function, whereas applying it to the top of a file marks all exports within that file as Server Functions that can be used anywhere, including in client code."
+    },
+    {
+      "prompt": "Explain the dual mechanism by which the `<Activity>` component handles a transition to the 'hidden' mode. Specifically, describe what happens to the visual representation of its children in the DOM and what happens to their lifecycle/side effects. Additionally, explain why a component that returns only a raw string (e.g., `() => \"Hello\"`) behaves differently when wrapped in a hidden `<Activity>` compared to a component that returns a DOM element.",
+      "reference": "When an `<Activity>` mode is set to 'hidden', it performs two actions: 1) It visually hides children using the CSS `display: none` property, and 2) It destroys their Effects, which cleans up any active subscriptions. A component returning only text will not render anything at all when hidden, because there is no corresponding DOM element to which the `display: none` property can be applied."
+    },
+    {
+      "prompt": "In the context of the provided documentation, explain the primary difference between passing a URL versus passing a function to the `action` prop of a form. Additionally, describe what happens to uncontrolled field elements within the form once a passed function successfully completes its execution.",
+      "reference": "When a URL is passed to the `action` prop, the form behaves like a conventional HTML form. When a function is passed, the form handles submission via a Transition, and the function receives the form data as its single argument. Once the function execution succeeds, all uncontrolled field elements in the form are automatically reset."
+    },
+    {
+      "prompt": "In React, you need to group a list of elements together without adding an extra node to the DOM, but you also need to assign a unique 'key' prop to that group for list rendering purposes. Explain why you cannot use the shorthand syntax for this specific requirement and what the correct implementation entails.",
+      "reference": "You cannot use the shorthand syntax (<>...</>) because it does not support passing props like 'key'. To include a key, you must explicitly import 'Fragment' from 'react' and use the full <Fragment key={yourKey}>...</Fragment> syntax."
+    },
+    {
+      "prompt": "In a React application, a developer is implementing a checkbox component. They attempt to set the initial checked state using the `value` prop and then later try to switch the component from an uncontrolled state to a controlled state by passing a state variable to the `value` prop. Based on the technical constraints of React inputs, identify the two specific errors in this implementation and explain the required fix for each.",
+      "reference": "The implementation contains two errors: 1) Checkboxes must use the `checked` or `defaultChecked` prop to manage their state, as the `value` prop is incorrect for checkboxes. 2) An input cannot switch between being controlled and uncontrolled during its lifetime; once an input is controlled, it must remain controlled. To fix this, use the `checked` prop and ensure the component remains controlled by always providing a state-driven value and an `onChange` handler that synchronously updates that state."
+    },
+    {
+      "prompt": "In a React application, if a developer renders a <link> component deep within a nested component tree (for example, inside a specific page layout component rather than at the root), where will the resulting DOM element be placed, and why is this behavior beneficial for component design?",
+      "reference": "React will always place the <link> DOM element within the document's <head>, regardless of its position in the React component tree. This is beneficial because it allows components to remain composable and self-contained, enabling a specific page component to manage its own metadata (like stylesheets or canonical URLs) while ensuring the elements are placed in the only valid DOM location for <link> tags."
+    },
+    {
+      "prompt": "Based on the provided text, what is the relationship between basic JavaScript values and the structure of TypeScript types, and where can these types be utilized within a codebase beyond simple type annotations?",
+      "reference": "Basic JavaScript values serve as the core building blocks for more complex TypeScript types. These types can be used in many places beyond just type annotations, specifically in locations where they can be referred to in order to form new constructs."
+    },
+    {
+      "prompt": "Under what specific conditions will a handwritten triple-slash directive be included in the resulting output file when using the TypeScript compiler, and what is the rule regarding their placement within a source file to ensure they are recognized as directives rather than regular comments?",
+      "reference": "A handwritten triple-slash directive is only emitted to output files if it is marked with the 'preserve=\"true\"' attribute. To be recognized as a directive, it must be placed at the top of the file, preceded only by comments (single-line, multi-line, or other triple-slash directives); if placed after any statement or declaration, it is treated as a regular single-line comment."
+    },
+    {
+      "prompt": "When publishing a JavaScript package to npm that includes bundled declaration files, what specific configuration must be added to the package.json file to ensure consumers can locate the types, and what is the required property name for this configuration?",
+      "reference": "You must add a 'types' property to the package.json file and set its value to point to the path of your bundled declaration file."
+    },
+    {
+      "prompt": "Based on the provided text, identify the primary benefits of using modules in TypeScript and state the specific requirement regarding a module loader or runtime environment for modules to function.",
+      "reference": "The primary benefits of using modules are better code reuse, stronger isolation, and better tooling support for bundling. For modules to function, they require a dependency on a module loader (such as CommonJs/Require.js) or a runtime that supports ES Modules."
+    }
+  ]
+}

@@ -307,15 +307,19 @@ class TestUserProfilesAndStatusBar(unittest.TestCase):
         self.assertTrue(app.get_user_dir(MagicMock()).endswith(os.path.join("Users", "Default")))
         self.assertTrue(app.get_user_history_dir(MagicMock()).endswith(os.path.join("History", "Default")))
 
-        # 3. Simulate an existing mock folder on disk
+        # 3. Simulate an existing mock folder on disk alongside a legitimate 'Mockingbird' folder
         fake_mock_dir = os.path.join(app.dirs["Users"], "MagicMock_Profile_1")
+        real_mockingbird_dir = os.path.join(app.dirs["Users"], "Mockingbird")
         os.makedirs(fake_mock_dir, exist_ok=True)
+        os.makedirs(real_mockingbird_dir, exist_ok=True)
         self.assertTrue(os.path.exists(fake_mock_dir))
 
-        # 4. list_user_profiles must prune mock folder and never include it
+        # 4. list_user_profiles must filter mock names without destructively deleting folders on disk
         profiles = app.list_user_profiles()
         self.assertNotIn("MagicMock_Profile_1", profiles)
-        self.assertFalse(os.path.exists(fake_mock_dir))
+        self.assertIn("Mockingbird", profiles)
+        self.assertTrue(os.path.exists(fake_mock_dir))
+        self.assertTrue(os.path.exists(real_mockingbird_dir))
 
 if __name__ == "__main__":
     unittest.main()

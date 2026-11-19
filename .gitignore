@@ -49,6 +49,9 @@ History/
 Users/
 crash_*.txt
 *.log
+.cuda_cache/
+unsloth_compiled_cache/
+Media/Generated/
 
 # ==============================================================================
 # Local Configs, Secrets & State
@@ -61,6 +64,11 @@ crash_*.txt
 System/config.json
 System/rgb_state.json
 System/vault/
+System/vault_state.json
+System/rlhf_logs.json
+System/dmn_backbone.json
+System/.pyre_configuration
+*.p2p.bak
 
 # ==============================================================================
 # Heavy Model Weights & External Binaries
